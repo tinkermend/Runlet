@@ -76,5 +76,11 @@ class AuthState(BaseModel, table=True):
     token_fingerprint: str | None = Field(default=None, max_length=255)
     auth_mode: str = Field(max_length=32)
     is_valid: bool = Field(default=False)
-    validated_at: datetime | None = Field(default=None)
-    expires_at: datetime | None = Field(default=None)
+    validated_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    expires_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )

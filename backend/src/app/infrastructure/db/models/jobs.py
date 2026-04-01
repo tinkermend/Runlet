@@ -33,8 +33,14 @@ class QueuedJob(BaseModel, table=True):
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
     )
-    started_at: datetime | None = Field(default=None)
-    finished_at: datetime | None = Field(default=None)
+    started_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    finished_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
     failure_message: str | None = Field(
         default=None,
         sa_column=sa.Column(sa.Text(), nullable=True),

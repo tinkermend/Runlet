@@ -100,3 +100,18 @@ def test_initial_schema_matches_sqlmodel_metadata(db_engine):
         diffs = compare_metadata(context, BaseModel.metadata)
 
     assert diffs == []
+
+
+def test_runtime_datetime_columns_are_timezone_aware_in_metadata():
+    runtime_columns = [
+        BaseModel.metadata.tables["queued_jobs"].c["created_at"],
+        BaseModel.metadata.tables["queued_jobs"].c["started_at"],
+        BaseModel.metadata.tables["queued_jobs"].c["finished_at"],
+        BaseModel.metadata.tables["auth_states"].c["validated_at"],
+        BaseModel.metadata.tables["auth_states"].c["expires_at"],
+        BaseModel.metadata.tables["crawl_snapshots"].c["started_at"],
+        BaseModel.metadata.tables["crawl_snapshots"].c["finished_at"],
+        BaseModel.metadata.tables["pages"].c["crawled_at"],
+    ]
+
+    assert all(column.type.timezone is True for column in runtime_columns)

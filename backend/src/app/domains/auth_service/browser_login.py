@@ -24,6 +24,9 @@ class BrowserLoginAdapter(Protocol):
 
 
 class PlaywrightBrowserLoginAdapter:
+    _POST_LOGIN_URL_TIMEOUT_MS = 10_000
+    _POST_LOGIN_SETTLE_MS = 500
+
     async def login(
         self,
         *,
@@ -44,6 +47,7 @@ class PlaywrightBrowserLoginAdapter:
             )
 
         try:
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
             from playwright.async_api import async_playwright
         except ModuleNotFoundError as exc:  # pragma: no cover - exercised only with Playwright installed
             raise BrowserLoginFailure("playwright is not installed", retryable=False) from exc
@@ -57,7 +61,16 @@ class PlaywrightBrowserLoginAdapter:
                     await page.fill(str(selectors["username"]), username)
                     await page.fill(str(selectors["password"]), password)
                     await page.click(str(selectors["submit"]))
-                    await page.wait_for_load_state("networkidle")
+                    try:
+                        await page.wait_for_url(
+                            lambda url: url != login_url,
+                            timeout=self._POST_LOGIN_URL_TIMEOUT_MS,
+                        )
+                    except PlaywrightTimeoutError:
+                        # Some pages keep background requests alive after login or
+                        # update auth state in-place without reaching network idle.
+                        pass
+                    await page.wait_for_timeout(self._POST_LOGIN_SETTLE_MS)
                     storage_state = await page.context.storage_state()
                 finally:
                     await browser.close()

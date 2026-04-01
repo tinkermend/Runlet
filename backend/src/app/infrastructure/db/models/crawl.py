@@ -27,8 +27,14 @@ class CrawlSnapshot(BaseModel, table=True):
     quality_score: float | None = Field(default=None)
     degraded: bool = Field(default=False)
     structure_hash: str | None = Field(default=None, max_length=255)
-    started_at: datetime = Field(default_factory=utcnow)
-    finished_at: datetime | None = Field(default=None)
+    started_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+    )
+    finished_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
 
 
 class Page(BaseModel, table=True):
@@ -47,7 +53,10 @@ class Page(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
     )
-    crawled_at: datetime = Field(default_factory=utcnow)
+    crawled_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+    )
 
 
 class MenuNode(BaseModel, table=True):

@@ -1,5 +1,7 @@
 ## 2026-04-01
 
+- 修正 auth refresh 浏览器登录等待策略：提交表单后改为优先等待离开登录页并短暂稳定化，不再依赖 `networkidle`，避免 dpm 这类持续后台请求页面被误判为超时。
+- 修正运行时时区字段的 SQLModel metadata 定义，显式将 `queued_jobs`、`auth_states`、`crawl_snapshots`、`pages` 的时间列声明为 timezone-aware，并补充对应 schema 回归测试。
 - 收敛业务查询与基础测试中的数据库导入风格，优先使用 `sqlmodel` 再导出能力；迁移与底层列类型定义继续保留 SQLAlchemy/Alembic。
 - 修正 backend 真实异步数据库路径的 session 工厂，显式返回 `sqlmodel` 异步会话，避免运行时落到无 `.exec()` 的 SQLAlchemy `AsyncSession`。
 - 修复 `backend/alembic.ini` 的 logger 配置错误，恢复初始 schema 迁移与 Alembic 测试可执行性，并补齐异步会话所需的 `greenlet` 及 PostgreSQL 迁移所需同步驱动依赖声明。
