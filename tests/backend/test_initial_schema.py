@@ -2,8 +2,13 @@ from pathlib import Path
 
 import pytest
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
+
+from app.infrastructure.db.base import BaseModel
+from app.infrastructure.db.models import assets, crawl, execution, jobs, systems  # noqa: F401
 
 
 @pytest.fixture
@@ -29,7 +34,21 @@ def db_engine(tmp_path):
 def test_initial_schema_exposes_core_tables(db_engine):
     inspector = inspect(db_engine)
     table_names = set(inspector.get_table_names())
-    assert {"systems", "page_assets", "page_checks", "execution_requests", "queued_jobs"} <= table_names
+    assert table_names == {
+        "alembic_version",
+        "auth_states",
+        "crawl_snapshots",
+        "execution_plans",
+        "execution_requests",
+        "execution_runs",
+        "intent_aliases",
+        "page_assets",
+        "page_checks",
+        "pages",
+        "queued_jobs",
+        "system_credentials",
+        "systems",
+    }
 
 
 def test_initial_schema_exposes_core_columns(db_engine):
@@ -48,3 +67,11 @@ def test_initial_schema_exposes_core_columns(db_engine):
 
     queued_job_columns = {column["name"] for column in inspector.get_columns("queued_jobs")}
     assert {"job_type", "payload", "status"} <= queued_job_columns
+
+
+def test_initial_schema_matches_sqlmodel_metadata(db_engine):
+    with db_engine.connect() as connection:
+        context = MigrationContext.configure(connection)
+        diffs = compare_metadata(context, BaseModel.metadata)
+
+    assert diffs == []

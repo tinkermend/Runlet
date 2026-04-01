@@ -33,8 +33,8 @@ class SystemCredential(BaseModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
     login_url: str = Field(max_length=512)
-    login_username_encrypted: str = Field()
-    login_password_encrypted: str = Field()
+    login_username_encrypted: str = Field(sa_column=sa.Column(sa.Text(), nullable=False))
+    login_password_encrypted: str = Field(sa_column=sa.Column(sa.Text(), nullable=False))
     login_auth_type: str = Field(max_length=32)
     login_selectors: dict[str, object] | None = Field(
         default=None,

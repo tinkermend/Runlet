@@ -39,7 +39,10 @@ class Page(BaseModel, table=True):
     snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id", index=True)
     route_path: str = Field(max_length=512)
     page_title: str | None = Field(default=None, max_length=255)
-    page_summary: str | None = Field(default=None)
+    page_summary: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
     keywords: dict[str, object] | None = Field(
         default=None,
         sa_column=sa.Column(json_type, nullable=True),

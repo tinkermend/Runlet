@@ -39,7 +39,6 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("base_url", sa.String(length=512), nullable=False),
         sa.Column("framework_type", sa.String(length=32), nullable=False),
-        sa.UniqueConstraint("code"),
     )
     op.create_index("ix_systems_code", "systems", ["code"], unique=True)
 
