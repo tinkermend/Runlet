@@ -45,16 +45,15 @@ class AuthService:
                 message="system not found",
             )
 
-        credentials = await self._load_credentials(system_id=system_id)
-        if credentials is None:
-            return AuthRefreshResult(
-                system_id=system_id,
-                status="failed",
-                message="system credentials not found",
-            )
-
-        decrypted = self._decrypt_credentials(credentials)
         try:
+            credentials = await self._load_credentials(system_id=system_id)
+            if credentials is None:
+                return AuthRefreshResult(
+                    system_id=system_id,
+                    status="failed",
+                    message="system credentials not found",
+                )
+            decrypted = self._decrypt_credentials(credentials)
             login_result = await self.browser_login.login(
                 login_url=decrypted.login_url,
                 username=decrypted.username,
@@ -171,27 +170,60 @@ class AuthService:
         return min(timestamps) if timestamps else None
 
     def _fingerprint(self, storage_state: dict[str, object]) -> str:
-        payload = json.dumps(storage_state, sort_keys=True, separators=(",", ":"))
+        try:
+            payload = json.dumps(storage_state, sort_keys=True, separators=(",", ":"))
+        except TypeError as exc:
+            raise ValueError("captured auth state must be JSON serializable") from exc
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _is_storage_state_valid(self, storage_state: dict[str, object]) -> bool:
-        cookies = storage_state.get("cookies")
-        origins = storage_state.get("origins")
-        return bool(cookies) or bool(origins)
+        cookies = cast(list[dict[str, object]], storage_state.get("cookies", []))
+        if any(
+            isinstance(cookie.get("name"), str)
+            and cookie.get("name")
+            and isinstance(cookie.get("value"), str)
+            for cookie in cookies
+        ):
+            return True
+
+        origins = cast(list[dict[str, object]], storage_state.get("origins", []))
+        for item in origins:
+            origin = item.get("origin")
+            if not isinstance(origin, str) or not origin:
+                continue
+            local_items = cast(list[dict[str, object]], item.get("localStorage", []))
+            if any(
+                isinstance(entry.get("name"), str)
+                and entry.get("name")
+                and "value" in entry
+                for entry in local_items
+            ):
+                return True
+        return False
 
     async def _load_credentials(self, *, system_id: UUID) -> SystemCredential | None:
         statement = (
             select(SystemCredential)
             .where(SystemCredential.system_id == system_id)
-            .order_by(SystemCredential.id.desc())
         )
-        return await self._exec_first(statement)
+        credentials = await self._exec_all(statement)
+        if not credentials:
+            return None
+        if len(credentials) > 1:
+            raise ValueError("multiple system credentials found")
+        return credentials[0]
 
     async def _exec_first(self, statement):
         if isinstance(self.session, AsyncSession):
             result = await self.session.execute(statement)
             return result.scalars().first()
         return self.session.exec(statement).first()
+
+    async def _exec_all(self, statement):
+        if isinstance(self.session, AsyncSession):
+            result = await self.session.execute(statement)
+            return list(result.scalars().all())
+        return list(self.session.exec(statement).all())
 
     async def _get(self, model, value):
         if isinstance(self.session, AsyncSession):

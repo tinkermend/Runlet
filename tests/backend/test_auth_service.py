@@ -136,6 +136,58 @@ class FailingBrowserLoginAdapter:
         raise BrowserLoginFailure("login failed", retryable=False)
 
 
+class RetryableFailingBrowserLoginAdapter:
+    async def login(
+        self,
+        *,
+        login_url: str,
+        username: str,
+        password: str,
+        auth_type: str,
+        selectors: dict[str, object] | None,
+    ) -> BrowserLoginResult:
+        raise BrowserLoginFailure("temporary login failure", retryable=True)
+
+
+class InvalidStorageStateBrowserLoginAdapter:
+    async def login(
+        self,
+        *,
+        login_url: str,
+        username: str,
+        password: str,
+        auth_type: str,
+        selectors: dict[str, object] | None,
+    ) -> BrowserLoginResult:
+        return BrowserLoginResult(
+            storage_state={
+                "cookies": [{"name": "csrf"}],
+                "origins": [{"origin": "https://erp.example.com", "localStorage": []}],
+            },
+            auth_mode="storage_state",
+        )
+
+
+class NonSerializableStorageStateBrowserLoginAdapter:
+    async def login(
+        self,
+        *,
+        login_url: str,
+        username: str,
+        password: str,
+        auth_type: str,
+        selectors: dict[str, object] | None,
+    ) -> BrowserLoginResult:
+        return BrowserLoginResult(
+            storage_state={
+                "cookies": [{"name": "sid", "value": "abc123"}],
+                "origins": [{"origin": "https://erp.example.com", "localStorage": []}],
+                "opaque": set(["not-json"]),
+            },
+            auth_mode="storage_state",
+        )
+
+
 @pytest.mark.anyio
 async def test_refresh_auth_state_persists_valid_state(
     db_session,
@@ -193,4 +245,95 @@ async def test_refresh_auth_state_marks_failure_when_login_fails(
 
     assert result.status == "failed"
     assert result.auth_state_id is None
+    assert db_session.exec(select(AuthState)).all() == []
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_marks_retryable_failure_when_login_is_transient(
+    db_session,
+    seeded_system_credentials,
+):
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=RetryableFailingBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "retryable_failed"
+    assert result.auth_state_id is None
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_rejects_storage_state_without_real_auth_signals(
+    db_session,
+    seeded_system_credentials,
+):
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=InvalidStorageStateBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "failed"
+    assert result.message == "captured auth state is empty"
+    assert db_session.exec(select(AuthState)).all() == []
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_fails_when_multiple_credentials_exist(
+    db_session,
+    seeded_system_credentials,
+):
+    duplicate = SystemCredential(
+        system_id=seeded_system_credentials.system_id,
+        login_url=seeded_system_credentials.login_url,
+        login_username_encrypted="enc:second-user",
+        login_password_encrypted="enc:second-password",
+        login_auth_type="form",
+        login_selectors=seeded_system_credentials.login_selectors,
+        secret_ref=seeded_system_credentials.secret_ref,
+    )
+    db_session.add(duplicate)
+    db_session.commit()
+
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=SuccessfulBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "failed"
+    assert result.message == "multiple system credentials found"
+    assert db_session.exec(select(AuthState)).all() == []
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_fails_when_storage_state_is_not_json_serializable(
+    db_session,
+    seeded_system_credentials,
+):
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=NonSerializableStorageStateBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "failed"
+    assert result.message == "captured auth state must be JSON serializable"
     assert db_session.exec(select(AuthState)).all() == []
