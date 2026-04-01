@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-playwright-platform-cli"
+version = "0.1.0"
+description = "CLI entrypoints for the AI Playwright execution platform."
+requires-python = ">=3.12"
+dependencies = [
+  "typer>=0.12",
+]
+
+[project.scripts]
+openweb = "openweb_cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
