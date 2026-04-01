@@ -11,7 +11,7 @@ from app.main import create_app
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
-from app.infrastructure.db.models.systems import System
+from app.infrastructure.db.models.systems import System, SystemCredential
 from app.shared.enums import AssetStatus
 
 
@@ -102,6 +102,27 @@ def seeded_snapshot(db_session: Session, seeded_system: System) -> CrawlSnapshot
     db_session.commit()
     db_session.refresh(snapshot)
     return snapshot
+
+
+@pytest.fixture
+def seeded_system_credentials(db_session: Session, seeded_system: System) -> SystemCredential:
+    credential = SystemCredential(
+        system_id=seeded_system.id,
+        login_url=f"{seeded_system.base_url}/login",
+        login_username_encrypted="enc:erp-user",
+        login_password_encrypted="enc:erp-password",
+        login_auth_type="form",
+        login_selectors={
+            "username": "#username",
+            "password": "#password",
+            "submit": "button[type=submit]",
+        },
+        secret_ref="local/test",
+    )
+    db_session.add(credential)
+    db_session.commit()
+    db_session.refresh(credential)
+    return credential
 
 
 @pytest.fixture

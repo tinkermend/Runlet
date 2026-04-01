@@ -1,9 +1,14 @@
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
+from sqlmodel import select
 
+from app.domains.auth_service.browser_login import BrowserLoginFailure
+from app.domains.auth_service.schemas import BrowserLoginResult
+from app.domains.auth_service.service import AuthService
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.systems import AuthState, SystemCredential
@@ -74,3 +79,118 @@ def test_auth_and_crawl_migration_exposes_runtime_fields(tmp_path):
         assert {"status", "created_at", "started_at", "finished_at", "failure_message"} <= queued_job_columns
     finally:
         engine.dispose()
+
+
+class PrefixDecryptor:
+    def decrypt(self, value: str, *, secret_ref: str | None = None) -> str:
+        assert secret_ref == "local/test"
+        return value.removeprefix("enc:")
+
+
+class SuccessfulBrowserLoginAdapter:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def login(
+        self,
+        *,
+        login_url: str,
+        username: str,
+        password: str,
+        auth_type: str,
+        selectors: dict[str, object] | None,
+    ) -> BrowserLoginResult:
+        self.calls.append(
+            {
+                "login_url": login_url,
+                "username": username,
+                "password": password,
+                "auth_type": auth_type,
+                "selectors": selectors,
+            }
+        )
+        return BrowserLoginResult(
+            storage_state={
+                "cookies": [{"name": "sid", "value": "abc123"}],
+                "origins": [
+                    {
+                        "origin": "https://erp.example.com",
+                        "localStorage": [{"name": "token", "value": "xyz"}],
+                    }
+                ],
+            },
+            auth_mode="storage_state",
+        )
+
+
+class FailingBrowserLoginAdapter:
+    async def login(
+        self,
+        *,
+        login_url: str,
+        username: str,
+        password: str,
+        auth_type: str,
+        selectors: dict[str, object] | None,
+    ) -> BrowserLoginResult:
+        raise BrowserLoginFailure("login failed", retryable=False)
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_persists_valid_state(
+    db_session,
+    seeded_system_credentials,
+):
+    adapter = SuccessfulBrowserLoginAdapter()
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=adapter,
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "success"
+    assert result.auth_state_id is not None
+    assert adapter.calls == [
+        {
+            "login_url": "https://erp.example.com/login",
+            "username": "erp-user",
+            "password": "erp-password",
+            "auth_type": "form",
+            "selectors": {
+                "username": "#username",
+                "password": "#password",
+                "submit": "button[type=submit]",
+            },
+        }
+    ]
+
+    persisted_state = db_session.exec(select(AuthState)).one()
+    assert persisted_state.id == result.auth_state_id
+    assert persisted_state.system_id == seeded_system_credentials.system_id
+    assert persisted_state.status == "valid"
+    assert persisted_state.is_valid is True
+    assert persisted_state.storage_state["cookies"][0]["name"] == "sid"
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_marks_failure_when_login_fails(
+    db_session,
+    seeded_system_credentials,
+):
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=FailingBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "failed"
+    assert result.auth_state_id is None
+    assert db_session.exec(select(AuthState)).all() == []
