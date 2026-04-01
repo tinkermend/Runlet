@@ -1,24 +1,29 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import AsyncIterator
 
-from sqlmodel import Session, create_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.config.settings import settings
 
 
-def to_sync_database_url(database_url: str) -> str:
-    if database_url.startswith("postgresql+asyncpg://"):
-        return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-    return database_url
+def create_db_engine(database_url: str | None = None) -> AsyncEngine:
+    return create_async_engine(database_url or settings.database_url, pool_pre_ping=True)
 
 
-def create_db_engine(database_url: str | None = None):
-    resolved_url = to_sync_database_url(database_url or settings.database_url)
-    return create_engine(resolved_url, pool_pre_ping=True)
+def create_session_factory(
+    database_url: str | None = None,
+) -> async_sessionmaker[AsyncSession]:
+    engine = create_db_engine(database_url)
+    return async_sessionmaker(engine, expire_on_commit=False)
 
 
-def get_session() -> Generator[Session, None, None]:
-    engine = create_db_engine()
-    with Session(engine) as session:
+async def get_session() -> AsyncIterator[AsyncSession]:
+    session_factory = create_session_factory()
+    async with session_factory() as session:
         yield session

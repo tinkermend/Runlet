@@ -30,3 +30,21 @@ def test_initial_schema_exposes_core_tables(db_engine):
     inspector = inspect(db_engine)
     table_names = set(inspector.get_table_names())
     assert {"systems", "page_assets", "page_checks", "execution_requests", "queued_jobs"} <= table_names
+
+
+def test_initial_schema_exposes_core_columns(db_engine):
+    inspector = inspect(db_engine)
+
+    systems_columns = {column["name"] for column in inspector.get_columns("systems")}
+    assert {"code", "name", "base_url", "framework_type"} <= systems_columns
+
+    page_assets_columns = {column["name"] for column in inspector.get_columns("page_assets")}
+    assert {"system_id", "page_id", "asset_key", "asset_version", "status"} <= page_assets_columns
+
+    execution_request_columns = {
+        column["name"] for column in inspector.get_columns("execution_requests")
+    }
+    assert {"request_source", "system_hint", "page_hint", "check_goal"} <= execution_request_columns
+
+    queued_job_columns = {column["name"] for column in inspector.get_columns("queued_jobs")}
+    assert {"job_type", "payload", "status"} <= queued_job_columns

@@ -6,3 +6,4 @@
 - 新增数据库基础设施：`SQLModel` 基础元数据、数据库会话工厂、共享 `AssetStatus` 枚举与分域模型骨架。
 - 新增 Alembic 基础配置与初始平台 schema 迁移，覆盖事实层/资产层/执行层 MVP 表（含 `systems`、`page_assets`、`page_checks`、`execution_requests`、`queued_jobs`）。
 - 新增初始 schema 冒烟测试，验证迁移后核心表可见。
+- 对齐 foundation 计划中的核心字段语义，修正 `systems`、`page_assets`、`execution_requests`、`queued_jobs` 的列定义与初始迁移。

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from app.infrastructure.db.base import BaseModel
@@ -11,32 +14,58 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+
+
 class System(BaseModel, table=True):
     __tablename__ = "systems"
 
-    id: int | None = Field(default=None, primary_key=True)
-    slug: str = Field(max_length=128, unique=True, nullable=False)
-    name: str = Field(max_length=255, nullable=False)
-    description: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    code: str = Field(index=True, unique=True, max_length=64)
+    name: str = Field(max_length=255)
+    base_url: str = Field(max_length=512)
+    framework_type: str = Field(max_length=32)
 
 
 class SystemCredential(BaseModel, table=True):
     __tablename__ = "system_credentials"
 
-    id: int | None = Field(default=None, primary_key=True)
-    system_id: int = Field(foreign_key="systems.id", nullable=False)
-    credential_key: str = Field(max_length=128, nullable=False)
-    encrypted_payload: str = Field(nullable=False)
-    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    system_id: UUID = Field(foreign_key="systems.id", index=True)
+    login_url: str = Field(max_length=512)
+    login_username_encrypted: str = Field()
+    login_password_encrypted: str = Field()
+    login_auth_type: str = Field(max_length=32)
+    login_selectors: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    secret_ref: str | None = Field(default=None, max_length=255)
 
 
 class AuthState(BaseModel, table=True):
     __tablename__ = "auth_states"
 
-    id: int | None = Field(default=None, primary_key=True)
-    system_id: int = Field(foreign_key="systems.id", nullable=False)
-    state: str = Field(max_length=64, nullable=False)
-    storage_ref: str | None = Field(default=None)
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    system_id: UUID = Field(foreign_key="systems.id", index=True)
+    storage_state: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    cookies: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    local_storage: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    session_storage: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    token_fingerprint: str | None = Field(default=None, max_length=255)
+    auth_mode: str = Field(max_length=32)
+    is_valid: bool = Field(default=False)
+    validated_at: datetime | None = Field(default=None)
     expires_at: datetime | None = Field(default=None)
-    created_at: datetime = Field(default_factory=utcnow, nullable=False)
