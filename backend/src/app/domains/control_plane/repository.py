@@ -15,7 +15,7 @@ from app.domains.control_plane.schemas import (
     PageAssetChecksList,
 )
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
-from app.infrastructure.db.models.crawl import Page
+from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.systems import System
@@ -30,6 +30,14 @@ class PageCheckRunTarget:
 
 
 class ControlPlaneRepository(Protocol):
+    async def get_system_by_id(self, *, system_id: UUID) -> System | None: ...
+
+    async def get_snapshot_by_id(
+        self,
+        *,
+        snapshot_id: UUID,
+    ) -> CrawlSnapshot | None: ...
+
     async def resolve_system(self, *, system_hint: str) -> System | None: ...
 
     async def resolve_page_asset_and_check(
@@ -97,6 +105,21 @@ class SqlControlPlaneRepository:
             result = await self.session.exec(statement)
             return result.all()
         return self.session.exec(statement).all()
+
+    async def _get(self, model, identifier):
+        if isinstance(self.session, AsyncSession):
+            return await self.session.get(model, identifier)
+        return self.session.get(model, identifier)
+
+    async def get_system_by_id(self, *, system_id: UUID) -> System | None:
+        return await self._get(System, system_id)
+
+    async def get_snapshot_by_id(
+        self,
+        *,
+        snapshot_id: UUID,
+    ) -> CrawlSnapshot | None:
+        return await self._get(CrawlSnapshot, snapshot_id)
 
     async def resolve_system(self, *, system_hint: str) -> System | None:
         normalized_hint = system_hint.strip().lower()
@@ -272,15 +295,9 @@ class SqlControlPlaneRepository:
         *,
         page_asset_id: UUID,
     ) -> PageAssetChecksList | None:
-        if isinstance(self.session, AsyncSession):
-            page_asset = await self.session.get(PageAsset, page_asset_id)
-        else:
-            page_asset = self.session.get(PageAsset, page_asset_id)
+        page_asset = await self._get(PageAsset, page_asset_id)
         if page_asset is None:
             return None
-
-        if page_asset.status != AssetStatus.READY:
-            return PageAssetChecksList(page_asset_id=page_asset.id, checks=[])
 
         statement = (
             select(PageCheck)

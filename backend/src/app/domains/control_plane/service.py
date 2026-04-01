@@ -4,12 +4,22 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
-from app.domains.control_plane.job_types import RUN_CHECK_JOB_TYPE
+from app.domains.control_plane.job_types import (
+    ASSET_COMPILE_JOB_TYPE,
+    AUTH_REFRESH_JOB_TYPE,
+    CRAWL_JOB_TYPE,
+    RUN_CHECK_JOB_TYPE,
+)
 from app.domains.control_plane.repository import ControlPlaneRepository
 from app.domains.control_plane.schemas import (
+    AuthRefreshAccepted,
     CheckRequestAccepted,
     CheckRequestStatus,
+    CompileAssetsAccepted,
+    CompileAssetsRequest,
     CreateCheckRequest,
+    CrawlAccepted,
+    CrawlTriggerRequest,
     PageAssetChecksList,
     RunPageCheck,
 )
@@ -114,6 +124,57 @@ class ControlPlaneService:
             raise HTTPException(status_code=404, detail="page asset not found")
         return page_asset_checks
 
+    async def refresh_auth(self, *, system_id: UUID) -> AuthRefreshAccepted:
+        system = await self.repository.get_system_by_id(system_id=system_id)
+        if system is None:
+            raise HTTPException(status_code=404, detail="system not found")
+
+        await self._enqueue_job(
+            job_type=AUTH_REFRESH_JOB_TYPE,
+            payload={"system_id": str(system.id)},
+        )
+        return AuthRefreshAccepted(system_id=system.id)
+
+    async def trigger_crawl(
+        self,
+        *,
+        system_id: UUID,
+        payload: CrawlTriggerRequest,
+    ) -> CrawlAccepted:
+        system = await self.repository.get_system_by_id(system_id=system_id)
+        if system is None:
+            raise HTTPException(status_code=404, detail="system not found")
+
+        await self._enqueue_job(
+            job_type=CRAWL_JOB_TYPE,
+            payload={
+                "system_id": str(system.id),
+                "crawl_scope": payload.crawl_scope,
+                "framework_hint": payload.framework_hint,
+                "max_pages": payload.max_pages,
+            },
+        )
+        return CrawlAccepted(system_id=system.id)
+
+    async def compile_assets(
+        self,
+        *,
+        snapshot_id: UUID,
+        payload: CompileAssetsRequest,
+    ) -> CompileAssetsAccepted:
+        snapshot = await self.repository.get_snapshot_by_id(snapshot_id=snapshot_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="snapshot not found")
+
+        await self._enqueue_job(
+            job_type=ASSET_COMPILE_JOB_TYPE,
+            payload={
+                "snapshot_id": str(snapshot.id),
+                "compile_scope": payload.compile_scope,
+            },
+        )
+        return CompileAssetsAccepted(snapshot_id=snapshot.id)
+
     async def _accept_check_request(
         self,
         *,
@@ -159,3 +220,11 @@ class ControlPlaneService:
             auth_policy=DEFAULT_AUTH_POLICY,
             job_id=job_id,
         )
+
+    async def _enqueue_job(self, *, job_type: str, payload: dict[str, object]) -> None:
+        try:
+            await self.dispatcher.enqueue(job_type=job_type, payload=payload)
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise

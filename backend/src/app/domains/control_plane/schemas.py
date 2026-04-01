@@ -85,3 +85,42 @@ class PageAssetCheckItem(BaseModel):
 class PageAssetChecksList(BaseModel):
     page_asset_id: UUID
     checks: list[PageAssetCheckItem]
+
+
+class AuthRefreshAccepted(BaseModel):
+    system_id: UUID
+    status: str = "accepted"
+    job_type: str = "auth_refresh"
+
+
+class CrawlTriggerRequest(BaseModel):
+    crawl_scope: str = "full"
+    framework_hint: str = "auto"
+    max_pages: int = 50
+
+    @field_validator("crawl_scope", "framework_hint", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+
+class CrawlAccepted(BaseModel):
+    system_id: UUID
+    status: str = "accepted"
+    job_type: str = "crawl"
+    snapshot_pending: bool = True
+
+
+class CompileAssetsRequest(BaseModel):
+    compile_scope: str = "impacted_pages_only"
+
+    @field_validator("compile_scope", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+
+class CompileAssetsAccepted(BaseModel):
+    snapshot_id: UUID
+    status: str = "accepted"
+    job_type: str = "asset_compile"
