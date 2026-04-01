@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
@@ -7,13 +8,25 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.domains.control_plane.schemas import CheckRequestStatus, CreateCheckRequest
-from app.shared.enums import AssetStatus
+from app.domains.control_plane.schemas import (
+    CheckRequestStatus,
+    CreateCheckRequest,
+    PageAssetCheckItem,
+    PageAssetChecksList,
+)
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.systems import System
+from app.shared.enums import AssetStatus
+
+
+@dataclass(frozen=True)
+class PageCheckRunTarget:
+    system: System
+    page_asset: PageAsset
+    page_check: PageCheck
 
 
 class ControlPlaneRepository(Protocol):
@@ -51,6 +64,18 @@ class ControlPlaneRepository(Protocol):
         *,
         request_id: UUID,
     ) -> CheckRequestStatus | None: ...
+
+    async def get_page_check_run_target(
+        self,
+        *,
+        page_check_id: UUID,
+    ) -> PageCheckRunTarget | None: ...
+
+    async def get_page_asset_checks(
+        self,
+        *,
+        page_asset_id: UUID,
+    ) -> PageAssetChecksList | None: ...
 
     async def commit(self) -> None: ...
 
@@ -218,6 +243,64 @@ class SqlControlPlaneRepository:
             execution_track=plan.execution_track if plan else None,
             auth_policy=plan.auth_policy if plan else None,
             status=queued_job.status if queued_job else "accepted",
+        )
+
+    async def get_page_check_run_target(
+        self,
+        *,
+        page_check_id: UUID,
+    ) -> PageCheckRunTarget | None:
+        statement = (
+            select(PageCheck, PageAsset, System)
+            .join(PageAsset, PageAsset.id == PageCheck.page_asset_id)
+            .join(System, System.id == PageAsset.system_id)
+            .where(PageCheck.id == page_check_id)
+            .where(PageAsset.status == AssetStatus.READY)
+        )
+        row = await self._exec_first(statement)
+        if row is None:
+            return None
+        page_check, page_asset, system = row
+        return PageCheckRunTarget(
+            system=system,
+            page_asset=page_asset,
+            page_check=page_check,
+        )
+
+    async def get_page_asset_checks(
+        self,
+        *,
+        page_asset_id: UUID,
+    ) -> PageAssetChecksList | None:
+        if isinstance(self.session, AsyncSession):
+            page_asset = await self.session.get(PageAsset, page_asset_id)
+        else:
+            page_asset = self.session.get(PageAsset, page_asset_id)
+        if page_asset is None:
+            return None
+
+        if page_asset.status != AssetStatus.READY:
+            return PageAssetChecksList(page_asset_id=page_asset.id, checks=[])
+
+        statement = (
+            select(PageCheck)
+            .where(PageCheck.page_asset_id == page_asset_id)
+            .order_by(PageCheck.id)
+        )
+        checks = await self._exec_all(statement)
+        return PageAssetChecksList(
+            page_asset_id=page_asset.id,
+            checks=[
+                PageAssetCheckItem(
+                    id=check.id,
+                    page_asset_id=check.page_asset_id,
+                    check_code=check.check_code,
+                    goal=check.goal,
+                    module_plan_id=check.module_plan_id,
+                    status=page_asset.status.value,
+                )
+                for check in checks
+            ],
         )
 
     async def commit(self) -> None:

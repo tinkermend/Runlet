@@ -5,6 +5,20 @@ from uuid import UUID
 from pydantic import BaseModel, field_validator
 
 
+def _validate_required_text(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("value must not be empty")
+    return normalized
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 class CreateCheckRequest(BaseModel):
     system_hint: str
     page_hint: str | None = None
@@ -16,26 +30,28 @@ class CreateCheckRequest(BaseModel):
     @field_validator("system_hint", "check_goal", mode="before")
     @classmethod
     def validate_required_text(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("value must not be empty")
-        return normalized
+        return _validate_required_text(value)
 
     @field_validator("page_hint", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
+        return _normalize_optional_text(value)
 
     @field_validator("strictness", "request_source", mode="before")
     @classmethod
     def normalize_text(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("value must not be empty")
-        return normalized
+        return _validate_required_text(value)
+
+
+class RunPageCheck(BaseModel):
+    strictness: str = "balanced"
+    time_budget_ms: int = 20_000
+    triggered_by: str = "manual"
+
+    @field_validator("strictness", "triggered_by", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _validate_required_text(value)
 
 
 class CheckRequestAccepted(BaseModel):
@@ -55,3 +71,17 @@ class CheckRequestStatus(BaseModel):
     execution_track: str | None = None
     auth_policy: str | None = None
     status: str = "accepted"
+
+
+class PageAssetCheckItem(BaseModel):
+    id: UUID
+    page_asset_id: UUID
+    check_code: str
+    goal: str
+    module_plan_id: UUID | None = None
+    status: str
+
+
+class PageAssetChecksList(BaseModel):
+    page_asset_id: UUID
+    checks: list[PageAssetCheckItem]

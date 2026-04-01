@@ -13,3 +13,4 @@
 - 修正 control-plane 作业受理的一致性与解析策略，改为单事务提交，并优先选择 `READY` 且高置信度的资产命中结果。
 - 对齐 check-request API 的生产依赖 wiring，并补充状态查询对真实 `QueuedJob.status` 与缺失请求 `404` 的覆盖。
 - 新增 check-request control-plane API，暴露检查请求创建与状态查询端点，并补充对应的 FastAPI 集成测试。
+- 新增 page-check run 与 page-asset check listing API，复用 control-plane service/repository 受理直跑任务与 READY 资产下的检查列表查询。
