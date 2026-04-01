@@ -114,7 +114,7 @@ project-root/
 
 ## 技术栈
 
-- Backend: FastAPI + Pydantic v2 + SQLAlchemy / SQLModel
+- Backend: FastAPI + Pydantic v2 + SQLModel + UV
 - DB: PostgreSQL
 - Cache / Lock: Redis
 - Browser Runtime: Playwright Python
