@@ -1,5 +1,4 @@
-from sqlalchemy import MetaData
-from sqlmodel import SQLModel
+from sqlmodel import MetaData, SQLModel
 
 
 NAMING_CONVENTION = {

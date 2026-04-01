@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.domains.control_plane.schemas import (

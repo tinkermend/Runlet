@@ -5,7 +5,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine, inspect
+from sqlmodel import create_engine, inspect
 
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import assets, crawl, execution, jobs, systems  # noqa: F401
