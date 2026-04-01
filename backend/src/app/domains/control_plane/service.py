@@ -48,24 +48,29 @@ class ControlPlaneService:
         execution_track = "precompiled" if page_check is not None else "realtime"
 
         request = await self.repository.create_execution_request(payload=payload)
-        plan = await self.repository.create_execution_plan(
-            execution_request_id=request.id,
-            resolved_system_id=system.id if system else None,
-            resolved_page_asset_id=page_asset.id if page_asset else None,
-            resolved_page_check_id=page_check.id if page_check else None,
-            execution_track=execution_track,
-            auth_policy=DEFAULT_AUTH_POLICY,
-            module_plan_id=page_check.module_plan_id if page_check else None,
-        )
-        job_id = await self.dispatcher.enqueue(
-            job_type=RUN_CHECK_JOB_TYPE,
-            payload={
-                "execution_plan_id": str(plan.id),
-                "execution_request_id": str(request.id),
-                "page_check_id": str(page_check.id) if page_check else None,
-                "execution_track": execution_track,
-            },
-        )
+        try:
+            plan = await self.repository.create_execution_plan(
+                execution_request_id=request.id,
+                resolved_system_id=system.id if system else None,
+                resolved_page_asset_id=page_asset.id if page_asset else None,
+                resolved_page_check_id=page_check.id if page_check else None,
+                execution_track=execution_track,
+                auth_policy=DEFAULT_AUTH_POLICY,
+                module_plan_id=page_check.module_plan_id if page_check else None,
+            )
+            job_id = await self.dispatcher.enqueue(
+                job_type=RUN_CHECK_JOB_TYPE,
+                payload={
+                    "execution_plan_id": str(plan.id),
+                    "execution_request_id": str(request.id),
+                    "page_check_id": str(page_check.id) if page_check else None,
+                    "execution_track": execution_track,
+                },
+            )
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
 
         return CheckRequestAccepted(
             request_id=request.id,

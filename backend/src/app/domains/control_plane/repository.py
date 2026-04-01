@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.domains.control_plane.schemas import CreateCheckRequest
+from app.shared.enums import AssetStatus
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
@@ -20,6 +21,7 @@ class ControlPlaneRepository(Protocol):
         self,
         *,
         system_id: UUID | None,
+        system_hint: str,
         page_hint: str | None,
         check_goal: str,
     ) -> tuple[PageAsset | None, PageCheck | None]: ...
@@ -41,6 +43,10 @@ class ControlPlaneRepository(Protocol):
         auth_policy: str,
         module_plan_id: UUID | None,
     ) -> ExecutionPlan: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
 
 
 class SqlControlPlaneRepository:
@@ -71,12 +77,14 @@ class SqlControlPlaneRepository:
             asset_statement = (
                 select(PageAsset)
                 .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
+                .where(PageAsset.status == AssetStatus.READY)
                 .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
                 .where(func.lower(IntentAlias.check_alias) == normalized_goal)
                 .where(
                     (func.lower(IntentAlias.page_alias) == normalized_page_hint)
                     | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
                 )
+                .order_by(IntentAlias.confidence.desc(), PageAsset.asset_version.desc())
             )
             if system_id is not None:
                 asset_statement = asset_statement.where(PageAsset.system_id == system_id)
@@ -86,7 +94,7 @@ class SqlControlPlaneRepository:
                 check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
                     (func.lower(PageCheck.goal) == normalized_goal)
                     | (func.lower(PageCheck.check_code) == normalized_goal)
-                )
+                ).order_by(PageCheck.id)
                 page_check = self.session.exec(check_statement).first()
                 return page_asset, page_check
 
@@ -98,11 +106,13 @@ class SqlControlPlaneRepository:
             select(PageAsset)
             .join(Page, Page.id == PageAsset.page_id)
             .where(PageAsset.system_id == system_id)
+            .where(PageAsset.status == AssetStatus.READY)
             .where(
                 (func.lower(Page.page_title) == normalized_page_hint)
                 | (func.lower(Page.route_path) == normalized_page_hint)
                 | (func.lower(PageAsset.asset_key) == normalized_page_hint)
             )
+            .order_by(PageAsset.asset_version.desc(), PageAsset.id)
         )
         page_asset = self.session.exec(asset_statement).first()
         if page_asset is None:
@@ -111,7 +121,7 @@ class SqlControlPlaneRepository:
         check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
             (func.lower(PageCheck.goal) == normalized_goal)
             | (func.lower(PageCheck.check_code) == normalized_goal)
-        )
+        ).order_by(PageCheck.id)
         page_check = self.session.exec(check_statement).first()
         return page_asset, page_check
 
@@ -122,8 +132,7 @@ class SqlControlPlaneRepository:
     ) -> ExecutionRequest:
         request = ExecutionRequest(**payload.model_dump())
         self.session.add(request)
-        self.session.commit()
-        self.session.refresh(request)
+        self.session.flush()
         return request
 
     async def create_execution_plan(
@@ -147,6 +156,11 @@ class SqlControlPlaneRepository:
             module_plan_id=module_plan_id,
         )
         self.session.add(plan)
-        self.session.commit()
-        self.session.refresh(plan)
+        self.session.flush()
         return plan
+
+    async def commit(self) -> None:
+        self.session.commit()
+
+    async def rollback(self) -> None:
+        self.session.rollback()

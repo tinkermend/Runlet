@@ -19,6 +19,5 @@ class SqlQueueDispatcher:
     async def enqueue(self, *, job_type: str, payload: dict[str, Any]) -> UUID:
         job = QueuedJob(job_type=job_type, payload=payload)
         self.session.add(job)
-        self.session.commit()
-        self.session.refresh(job)
+        self.session.flush()
         return job.id
