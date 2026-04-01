@@ -11,8 +11,8 @@ from app.main import create_app
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
-from app.infrastructure.db.models.systems import System, SystemCredential
-from app.shared.enums import AssetStatus
+from app.infrastructure.db.models.systems import AuthState, System, SystemCredential
+from app.shared.enums import AssetStatus, AuthStateStatus
 
 
 @pytest.fixture
@@ -123,6 +123,31 @@ def seeded_system_credentials(db_session: Session, seeded_system: System) -> Sys
     db_session.commit()
     db_session.refresh(credential)
     return credential
+
+
+@pytest.fixture
+def seeded_auth_state(db_session: Session, seeded_system: System) -> AuthState:
+    auth_state = AuthState(
+        system_id=seeded_system.id,
+        status=AuthStateStatus.VALID.value,
+        storage_state={
+            "cookies": [{"name": "sid", "value": "abc123"}],
+            "origins": [
+                {
+                    "origin": seeded_system.base_url,
+                    "localStorage": [{"name": "token", "value": "xyz"}],
+                }
+            ],
+        },
+        cookies={"items": [{"name": "sid", "value": "abc123"}]},
+        local_storage={seeded_system.base_url: {"token": "xyz"}},
+        auth_mode="storage_state",
+        is_valid=True,
+    )
+    db_session.add(auth_state)
+    db_session.commit()
+    db_session.refresh(auth_state)
+    return auth_state
 
 
 @pytest.fixture
