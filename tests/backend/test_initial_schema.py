@@ -71,7 +71,10 @@ def test_initial_schema_exposes_core_columns(db_engine):
 
 def test_initial_schema_matches_sqlmodel_metadata(db_engine):
     with db_engine.connect() as connection:
-        context = MigrationContext.configure(connection)
+        context = MigrationContext.configure(
+            connection,
+            opts={"compare_server_default": True},
+        )
         diffs = compare_metadata(context, BaseModel.metadata)
 
     assert diffs == []

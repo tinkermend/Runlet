@@ -66,7 +66,7 @@ def upgrade() -> None:
         sa.Column("session_storage", json_type, nullable=True),
         sa.Column("token_fingerprint", sa.String(length=255), nullable=True),
         sa.Column("auth_mode", sa.String(length=32), nullable=False),
-        sa.Column("is_valid", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("is_valid", sa.Boolean(), nullable=False),
         sa.Column("validated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["system_id"], ["systems.id"]),
@@ -80,7 +80,7 @@ def upgrade() -> None:
         sa.Column("crawl_type", sa.String(length=32), nullable=False),
         sa.Column("framework_detected", sa.String(length=32), nullable=True),
         sa.Column("quality_score", sa.Float(), nullable=True),
-        sa.Column("degraded", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("degraded", sa.Boolean(), nullable=False),
         sa.Column("structure_hash", sa.String(length=255), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
@@ -111,7 +111,7 @@ def upgrade() -> None:
         sa.Column("page_id", sa.Uuid(), nullable=False),
         sa.Column("asset_key", sa.String(length=255), nullable=False),
         sa.Column("asset_version", sa.String(length=64), nullable=False),
-        sa.Column("status", asset_status, nullable=False, server_default="draft"),
+        sa.Column("status", asset_status, nullable=False),
         sa.Column("compiled_from_snapshot_id", sa.Uuid(), nullable=True),
         sa.Column("last_verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["system_id"], ["systems.id"]),
@@ -145,7 +145,7 @@ def upgrade() -> None:
         sa.Column("check_alias", sa.String(length=64), nullable=False),
         sa.Column("route_hint", sa.String(length=512), nullable=True),
         sa.Column("asset_key", sa.String(length=255), nullable=False),
-        sa.Column("confidence", sa.Float(), nullable=False, server_default="1.0"),
+        sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("source", sa.String(length=64), nullable=False),
     )
 
@@ -156,8 +156,8 @@ def upgrade() -> None:
         sa.Column("system_hint", sa.String(length=255), nullable=False),
         sa.Column("page_hint", sa.String(length=255), nullable=True),
         sa.Column("check_goal", sa.String(length=64), nullable=False),
-        sa.Column("strictness", sa.String(length=32), nullable=False, server_default="balanced"),
-        sa.Column("time_budget_ms", sa.Integer(), nullable=False, server_default="20000"),
+        sa.Column("strictness", sa.String(length=32), nullable=False),
+        sa.Column("time_budget_ms", sa.Integer(), nullable=False),
     )
 
     op.create_table(
@@ -219,7 +219,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), primary_key=True),
         sa.Column("job_type", sa.String(length=64), nullable=False),
         sa.Column("payload", json_type, nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default="accepted"),
+        sa.Column("status", sa.String(length=32), nullable=False),
     )
     op.create_index("ix_queued_jobs_job_type", "queued_jobs", ["job_type"], unique=False)
 
