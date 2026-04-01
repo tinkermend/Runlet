@@ -14,7 +14,9 @@ dependencies = [
   "pydantic-settings>=2.3",
   "sqlmodel>=0.0.22",
   "sqlalchemy>=2.0",
+  "greenlet>=3.1",
   "asyncpg>=0.29",
+  "psycopg[binary]>=3.2",
   "redis>=5.0",
   "alembic>=1.13",
 ]

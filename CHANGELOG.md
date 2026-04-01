@@ -1,5 +1,7 @@
 ## 2026-04-01
 
+- 修正 backend 真实异步数据库路径的 session 工厂，显式返回 `sqlmodel` 异步会话，避免运行时落到无 `.exec()` 的 SQLAlchemy `AsyncSession`。
+- 修复 `backend/alembic.ini` 的 logger 配置错误，恢复初始 schema 迁移与 Alembic 测试可执行性，并补齐异步会话所需的 `greenlet` 及 PostgreSQL 迁移所需同步驱动依赖声明。
 - 补充第一阶段 foundation 完成总结文档，记录 MVP 交付范围、验证结果、遗留边界与下一阶段建议。
 - 新增 AI Playwright 执行平台 foundation 计划落地总结，明确当前仓库已具备 backend MVP 启动、迁移、控制面 API 与队列受理基础。
 - 完成核心 schema 与 control-plane API 基线，包括结构化检查请求、page-check 直跑、page-asset checks 列表、认证刷新、采集触发与快照资产编译受理接口。

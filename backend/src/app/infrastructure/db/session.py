@@ -29,11 +29,16 @@ def create_session_factory(
     global _default_session_factory
 
     if database_url is not None:
-        return async_sessionmaker(create_db_engine(database_url), expire_on_commit=False)
+        return async_sessionmaker(
+            create_db_engine(database_url),
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
 
     if _default_session_factory is None:
         _default_session_factory = async_sessionmaker(
             create_db_engine(),
+            class_=AsyncSession,
             expire_on_commit=False,
         )
     return _default_session_factory
