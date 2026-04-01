@@ -19,6 +19,20 @@ def test_post_check_requests_returns_accepted(client, seeded_asset):
     assert response.status_code == 202
     assert response.json()["execution_track"] == "precompiled"
 
+
+def test_post_check_requests_rejects_non_positive_time_budget(client, db_session):
+    response = client.post(
+        "/api/v1/check-requests",
+        json={
+            "system_hint": "ERP",
+            "check_goal": "table_render",
+            "time_budget_ms": 0,
+        },
+    )
+
+    assert response.status_code == 422
+    assert db_session.exec(select(QueuedJob)).all() == []
+
 def test_get_check_request_returns_status(client, accepted_request, db_session):
     queued_job = db_session.exec(select(QueuedJob)).one()
     queued_job.status = "queued"
