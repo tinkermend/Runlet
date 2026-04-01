@@ -22,3 +22,4 @@ class QueuedJobStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     RETRYABLE_FAILED = "retryable_failed"
+    SKIPPED = "skipped"

@@ -1,0 +1,106 @@
+from uuid import uuid4
+
+import pytest
+from sqlmodel import select
+
+from app.domains.control_plane.job_types import ASSET_COMPILE_JOB_TYPE, CRAWL_JOB_TYPE
+from app.domains.crawler_service.schemas import CrawlRunResult
+from app.infrastructure.db.models.jobs import QueuedJob
+from app.jobs.crawl_job import CrawlJobHandler
+from app.workers.runner import WorkerRunner
+
+
+class StubCrawlerService:
+    def __init__(self, result: CrawlRunResult) -> None:
+        self.result = result
+        self.calls = []
+
+    async def run_crawl(self, *, system_id, crawl_scope: str) -> CrawlRunResult:
+        self.calls.append({"system_id": system_id, "crawl_scope": crawl_scope})
+        return self.result
+
+
+def _create_crawl_job(db_session, *, system_id, crawl_scope="full") -> QueuedJob:
+    job = QueuedJob(
+        job_type=CRAWL_JOB_TYPE,
+        payload={"system_id": str(system_id), "crawl_scope": crawl_scope},
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    return job
+
+
+@pytest.mark.anyio
+async def test_crawl_job_persists_snapshot_and_enqueues_compile(
+    db_session,
+    seeded_system,
+):
+    queued_crawl_job = _create_crawl_job(db_session, system_id=seeded_system.id)
+    crawler_service = StubCrawlerService(
+        CrawlRunResult(
+            system_id=seeded_system.id,
+            status="success",
+            snapshot_id=uuid4(),
+            pages_saved=1,
+        )
+    )
+    job_runner = WorkerRunner(
+        session=db_session,
+        handlers={
+            CRAWL_JOB_TYPE: CrawlJobHandler(
+                session=db_session,
+                crawler_service=crawler_service,
+            )
+        },
+    )
+
+    await job_runner.run_once()
+
+    refreshed_job = db_session.get(QueuedJob, queued_crawl_job.id)
+    compile_jobs = db_session.exec(
+        select(QueuedJob).where(QueuedJob.job_type == ASSET_COMPILE_JOB_TYPE)
+    ).all()
+
+    assert refreshed_job is not None
+    assert refreshed_job.status == "completed"
+    assert refreshed_job.finished_at is not None
+    assert len(compile_jobs) == 1
+    assert compile_jobs[0].payload["snapshot_id"] == str(crawler_service.result.snapshot_id)
+    assert compile_jobs[0].payload["compile_scope"] == "impacted_pages_only"
+
+
+@pytest.mark.anyio
+async def test_crawl_job_marks_failure_without_compile_handoff_when_crawl_fails(
+    db_session,
+    seeded_system,
+):
+    queued_crawl_job = _create_crawl_job(db_session, system_id=seeded_system.id)
+    crawler_service = StubCrawlerService(
+        CrawlRunResult(
+            system_id=seeded_system.id,
+            status="auth_required",
+            message="auth required",
+        )
+    )
+    job_runner = WorkerRunner(
+        session=db_session,
+        handlers={
+            CRAWL_JOB_TYPE: CrawlJobHandler(
+                session=db_session,
+                crawler_service=crawler_service,
+            )
+        },
+    )
+
+    await job_runner.run_once()
+
+    refreshed_job = db_session.get(QueuedJob, queued_crawl_job.id)
+    compile_jobs = db_session.exec(
+        select(QueuedJob).where(QueuedJob.job_type == ASSET_COMPILE_JOB_TYPE)
+    ).all()
+
+    assert refreshed_job is not None
+    assert refreshed_job.status == "failed"
+    assert refreshed_job.failure_message == "auth required"
+    assert compile_jobs == []

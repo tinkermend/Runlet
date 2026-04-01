@@ -36,10 +36,10 @@ class WorkerRunner:
 
         handler = self.handlers.get(job.job_type)
         if handler is None:
-            job.status = QueuedJobStatus.FAILED.value
+            job.status = QueuedJobStatus.SKIPPED.value
             job.started_at = job.started_at or utcnow()
             job.finished_at = utcnow()
-            job.failure_message = f"unsupported job type: {job.job_type}"
+            job.failure_message = f"no handler registered for job type: {job.job_type}"
             await self._commit()
             return True
 

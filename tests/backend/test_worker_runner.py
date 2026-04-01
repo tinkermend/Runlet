@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.domains.auth_service.schemas import AuthRefreshResult
-from app.domains.control_plane.job_types import AUTH_REFRESH_JOB_TYPE
+from app.domains.control_plane.job_types import AUTH_REFRESH_JOB_TYPE, ASSET_COMPILE_JOB_TYPE
 from app.infrastructure.db.models.jobs import QueuedJob, utcnow
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
 from app.shared.enums import QueuedJobStatus
@@ -73,3 +73,26 @@ async def test_worker_runner_fetches_accepted_jobs_in_fifo_order(
     assert first.status == QueuedJobStatus.COMPLETED.value
     assert second.status == QueuedJobStatus.ACCEPTED.value
     assert auth_service.calls == [seeded_system.id]
+
+
+@pytest.mark.anyio
+async def test_worker_runner_marks_unhandled_job_as_skipped_with_reason(
+    db_session,
+):
+    job = QueuedJob(
+        job_type=ASSET_COMPILE_JOB_TYPE,
+        payload={"snapshot_id": str(uuid4())},
+        created_at=utcnow(),
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    job_runner = WorkerRunner(session=db_session, handlers={})
+
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, job.id)
+    assert refreshed is not None
+    assert refreshed.status == QueuedJobStatus.SKIPPED.value
+    assert refreshed.failure_message == "no handler registered for job type: asset_compile"

@@ -1,5 +1,6 @@
 ## 2026-04-01
 
+- 新增 crawl job handler 与 compile handoff，crawl 成功后会自动追加 `asset_compile` 作业；未注册的作业类型改为 `skipped` 并附带明确原因。
 - 新增 `crawler_service` 域与首版 extractor 合约，支持消费有效认证态、合并运行时路由与 DOM 菜单提取结果，并持久化 crawl snapshot/page/menu/element 事实。
 - 新增 auth refresh job handler 与最小 worker runner，支持按 FIFO 消费 `accepted` 队列任务，并把认证刷新结果回写为 `running/completed/failed/retryable_failed`。
 - 收紧 auth refresh 语义：显式拒绝多凭据歧义、弱 storage state、非 JSON 序列化状态，并补充 `playwright` 运行依赖声明。
