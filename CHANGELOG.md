@@ -3,3 +3,6 @@
 - 初始化 `backend/` 工程骨架，加入 FastAPI app factory、健康检查接口、基础配置和本地运行说明。
 - 初始化 `cli/` 工程骨架，提供 `openweb doctor` 诊断命令入口。
 - 新增后端启动烟雾测试，验证 `/healthz` 返回基线可用。
+- 新增数据库基础设施：`SQLModel` 基础元数据、数据库会话工厂、共享 `AssetStatus` 枚举与分域模型骨架。
+- 新增 Alembic 基础配置与初始平台 schema 迁移，覆盖事实层/资产层/执行层 MVP 表（含 `systems`、`page_assets`、`page_checks`、`execution_requests`、`queued_jobs`）。
+- 新增初始 schema 冒烟测试，验证迁移后核心表可见。
