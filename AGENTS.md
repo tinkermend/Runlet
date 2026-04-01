@@ -89,6 +89,7 @@
 
 ## 文档与计划约束
 
+- 文档内容语言必须是中文
 - 任何重要架构变更必须先更新 `docs/superpowers/specs/`
 - 任何实施拆解必须更新 `docs/superpowers/plans/`
 - 开发顺序默认遵循四份计划：
