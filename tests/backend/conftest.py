@@ -1,14 +1,16 @@
 from pathlib import Path
 from uuid import uuid4
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine
+from sqlmodel import select
 
 from app.main import create_app
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
-from app.infrastructure.db.models.crawl import Page
+from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
 from app.infrastructure.db.models.systems import System
 from app.shared.enums import AssetStatus
 
@@ -24,7 +26,7 @@ def db_session(tmp_path: Path) -> Session:
 
 
 @pytest.fixture
-def seeded_asset(db_session: Session) -> PageAsset:
+def seeded_system(db_session: Session) -> System:
     system = System(
         code="erp",
         name="ERP",
@@ -32,10 +34,15 @@ def seeded_asset(db_session: Session) -> PageAsset:
         framework_type="react",
     )
     db_session.add(system)
-    db_session.flush()
+    db_session.commit()
+    db_session.refresh(system)
+    return system
 
+
+@pytest.fixture
+def seeded_page_asset(db_session: Session, seeded_system: System) -> PageAsset:
     page = Page(
-        system_id=system.id,
+        system_id=seeded_system.id,
         route_path="/users",
         page_title="用户管理",
     )
@@ -43,7 +50,7 @@ def seeded_asset(db_session: Session) -> PageAsset:
     db_session.flush()
 
     page_asset = PageAsset(
-        system_id=system.id,
+        system_id=seeded_system.id,
         page_id=page.id,
         asset_key="erp.users",
         asset_version="2026.04.01",
@@ -71,6 +78,30 @@ def seeded_asset(db_session: Session) -> PageAsset:
     db_session.refresh(page_asset)
 
     return page_asset
+
+
+@pytest.fixture
+def seeded_asset(seeded_page_asset: PageAsset) -> PageAsset:
+    return seeded_page_asset
+
+
+@pytest.fixture
+def seeded_page_check(db_session: Session, seeded_page_asset: PageAsset) -> PageCheck:
+    statement = select(PageCheck).where(PageCheck.page_asset_id == seeded_page_asset.id)
+    return db_session.exec(statement).one()
+
+
+@pytest.fixture
+def seeded_snapshot(db_session: Session, seeded_system: System) -> CrawlSnapshot:
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.commit()
+    db_session.refresh(snapshot)
+    return snapshot
 
 
 @pytest.fixture
@@ -114,6 +145,21 @@ def seeded_asset_without_matching_check(db_session: Session) -> PageAsset:
     db_session.refresh(page_asset)
 
     return page_asset
+
+
+@pytest.fixture
+def accepted_request(control_plane_service, seeded_page_asset):
+    async def submit():
+        return await control_plane_service.submit_check_request(
+            system_hint="ERP",
+            page_hint="用户管理",
+            check_goal="table_render",
+            strictness="balanced",
+            time_budget_ms=20_000,
+            request_source="skill",
+        )
+
+    return anyio.run(submit)
 
 
 @pytest.fixture

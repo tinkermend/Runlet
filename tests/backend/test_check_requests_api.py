@@ -1,5 +1,3 @@
-import anyio
-import pytest
 from sqlmodel import select
 
 from app.infrastructure.db.models.jobs import QueuedJob
@@ -20,22 +18,6 @@ def test_post_check_requests_returns_accepted(client, seeded_asset):
 
     assert response.status_code == 202
     assert response.json()["execution_track"] == "precompiled"
-
-
-@pytest.fixture
-def accepted_request(control_plane_service, seeded_asset):
-    async def submit():
-        return await control_plane_service.submit_check_request(
-            system_hint="ERP",
-            page_hint="用户管理",
-            check_goal="table_render",
-            strictness="balanced",
-            time_budget_ms=20_000,
-            request_source="skill",
-        )
-
-    return anyio.run(submit)
-
 
 def test_get_check_request_returns_status(client, accepted_request, db_session):
     queued_job = db_session.exec(select(QueuedJob)).one()

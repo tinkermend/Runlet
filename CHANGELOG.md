@@ -16,3 +16,4 @@
 - 新增 page-check run 与 page-asset check listing API，复用 control-plane service/repository 受理直跑任务与 READY 资产下的检查列表查询。
 - 修正 page-asset checks 列表语义：非 `READY` 资产也返回已持久化的 `page_checks`，并显式暴露当前资产状态。
 - 新增认证刷新、采集触发、快照资产编译三个 control-plane 受理 API，并补充目标不存在 `404` 与作业入队测试覆盖。
+- 收敛后端测试 seed helpers 到共享 `conftest.py`，补充 `seeded_system`、`seeded_page_asset`、`seeded_page_check`、`seeded_snapshot`、`accepted_request` 等复用夹具，并完善本地开发与环境变量说明。

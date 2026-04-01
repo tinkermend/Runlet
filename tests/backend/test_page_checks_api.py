@@ -1,19 +1,5 @@
 import pytest
-from sqlmodel import select
-
-from app.infrastructure.db.models.assets import PageCheck
 from app.shared.enums import AssetStatus
-
-
-@pytest.fixture
-def seeded_page_asset(seeded_asset):
-    return seeded_asset
-
-
-@pytest.fixture
-def seeded_page_check(db_session, seeded_page_asset):
-    statement = select(PageCheck).where(PageCheck.page_asset_id == seeded_page_asset.id)
-    return db_session.exec(statement).one()
 
 
 @pytest.fixture

@@ -1,36 +1,7 @@
 import pytest
 from sqlmodel import select
 
-from app.infrastructure.db.models.crawl import CrawlSnapshot
 from app.infrastructure.db.models.jobs import QueuedJob
-from app.infrastructure.db.models.systems import System
-
-
-@pytest.fixture
-def seeded_system(db_session):
-    system = System(
-        code="mes",
-        name="MES",
-        base_url="https://mes.example.com",
-        framework_type="react",
-    )
-    db_session.add(system)
-    db_session.commit()
-    db_session.refresh(system)
-    return system
-
-
-@pytest.fixture
-def seeded_snapshot(db_session, seeded_system):
-    snapshot = CrawlSnapshot(
-        system_id=seeded_system.id,
-        crawl_type="full",
-        framework_detected="react",
-    )
-    db_session.add(snapshot)
-    db_session.commit()
-    db_session.refresh(snapshot)
-    return snapshot
 
 
 def test_post_auth_refresh_accepts_job(client, seeded_system, db_session):
