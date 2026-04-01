@@ -11,8 +11,8 @@ from app.main import create_app
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
-from app.infrastructure.db.models.systems import System
-from app.shared.enums import AssetStatus
+from app.infrastructure.db.models.systems import AuthState, System, SystemCredential
+from app.shared.enums import AssetStatus, AuthStateStatus
 
 
 @pytest.fixture
@@ -102,6 +102,52 @@ def seeded_snapshot(db_session: Session, seeded_system: System) -> CrawlSnapshot
     db_session.commit()
     db_session.refresh(snapshot)
     return snapshot
+
+
+@pytest.fixture
+def seeded_system_credentials(db_session: Session, seeded_system: System) -> SystemCredential:
+    credential = SystemCredential(
+        system_id=seeded_system.id,
+        login_url=f"{seeded_system.base_url}/login",
+        login_username_encrypted="enc:erp-user",
+        login_password_encrypted="enc:erp-password",
+        login_auth_type="form",
+        login_selectors={
+            "username": "#username",
+            "password": "#password",
+            "submit": "button[type=submit]",
+        },
+        secret_ref="local/test",
+    )
+    db_session.add(credential)
+    db_session.commit()
+    db_session.refresh(credential)
+    return credential
+
+
+@pytest.fixture
+def seeded_auth_state(db_session: Session, seeded_system: System) -> AuthState:
+    auth_state = AuthState(
+        system_id=seeded_system.id,
+        status=AuthStateStatus.VALID.value,
+        storage_state={
+            "cookies": [{"name": "sid", "value": "abc123"}],
+            "origins": [
+                {
+                    "origin": seeded_system.base_url,
+                    "localStorage": [{"name": "token", "value": "xyz"}],
+                }
+            ],
+        },
+        cookies={"items": [{"name": "sid", "value": "abc123"}]},
+        local_storage={seeded_system.base_url: {"token": "xyz"}},
+        auth_mode="storage_state",
+        is_valid=True,
+    )
+    db_session.add(auth_state)
+    db_session.commit()
+    db_session.refresh(auth_state)
+    return auth_state
 
 
 @pytest.fixture

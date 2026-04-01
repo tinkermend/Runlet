@@ -129,11 +129,11 @@ class ControlPlaneService:
         if system is None:
             raise HTTPException(status_code=404, detail="system not found")
 
-        await self._enqueue_job(
+        job_id = await self._enqueue_job(
             job_type=AUTH_REFRESH_JOB_TYPE,
             payload={"system_id": str(system.id)},
         )
-        return AuthRefreshAccepted(system_id=system.id)
+        return AuthRefreshAccepted(system_id=system.id, job_id=job_id)
 
     async def trigger_crawl(
         self,
@@ -145,7 +145,7 @@ class ControlPlaneService:
         if system is None:
             raise HTTPException(status_code=404, detail="system not found")
 
-        await self._enqueue_job(
+        job_id = await self._enqueue_job(
             job_type=CRAWL_JOB_TYPE,
             payload={
                 "system_id": str(system.id),
@@ -154,7 +154,7 @@ class ControlPlaneService:
                 "max_pages": payload.max_pages,
             },
         )
-        return CrawlAccepted(system_id=system.id)
+        return CrawlAccepted(system_id=system.id, job_id=job_id)
 
     async def compile_assets(
         self,
@@ -221,10 +221,11 @@ class ControlPlaneService:
             job_id=job_id,
         )
 
-    async def _enqueue_job(self, *, job_type: str, payload: dict[str, object]) -> None:
+    async def _enqueue_job(self, *, job_type: str, payload: dict[str, object]) -> UUID:
         try:
-            await self.dispatcher.enqueue(job_type=job_type, payload=payload)
+            job_id = await self.dispatcher.enqueue(job_type=job_type, payload=payload)
             await self.repository.commit()
+            return job_id
         except Exception:
             await self.repository.rollback()
             raise

@@ -3,6 +3,13 @@
 - 收敛业务查询与基础测试中的数据库导入风格，优先使用 `sqlmodel` 再导出能力；迁移与底层列类型定义继续保留 SQLAlchemy/Alembic。
 - 修正 backend 真实异步数据库路径的 session 工厂，显式返回 `sqlmodel` 异步会话，避免运行时落到无 `.exec()` 的 SQLAlchemy `AsyncSession`。
 - 修复 `backend/alembic.ini` 的 logger 配置错误，恢复初始 schema 迁移与 Alembic 测试可执行性，并补齐异步会话所需的 `greenlet` 及 PostgreSQL 迁移所需同步驱动依赖声明。
+- 更新 auth/crawl API 受理返回，`auth:refresh` 与 `crawl` 现在都会返回真实 `job_id`，并补充 worker 运行、触发方式与 compile handoff 文档。
+- 新增 crawl job handler 与 compile handoff，crawl 成功后会自动追加 `asset_compile` 作业；未注册的作业类型改为 `skipped` 并附带明确原因。
+- 新增 `crawler_service` 域与首版 extractor 合约，支持消费有效认证态、合并运行时路由与 DOM 菜单提取结果，并持久化 crawl snapshot/page/menu/element 事实。
+- 新增 auth refresh job handler 与最小 worker runner，支持按 FIFO 消费 `accepted` 队列任务，并把认证刷新结果回写为 `running/completed/failed/retryable_failed`。
+- 收紧 auth refresh 语义：显式拒绝多凭据歧义、弱 storage state、非 JSON 序列化状态，并补充 `playwright` 运行依赖声明。
+- 新增 `auth_service` 域的首版认证刷新链路：支持凭据解密、可替换浏览器登录适配器、storage state 校验与 `auth_states` 持久化，并补充成功/失败分支测试。
+- 补齐 auth/crawl runtime schema 基线：新增 `AuthState.status`、`QueuedJob` 运行时状态时间戳/失败信息字段，以及 `menu_nodes`、`page_elements` 事实表，并添加 `0002_auth_and_crawl_runtime` 迁移与对应 schema 测试。
 - 补充第一阶段 foundation 完成总结文档，记录 MVP 交付范围、验证结果、遗留边界与下一阶段建议。
 - 新增 AI Playwright 执行平台 foundation 计划落地总结，明确当前仓库已具备 backend MVP 启动、迁移、控制面 API 与队列受理基础。
 - 完成核心 schema 与 control-plane API 基线，包括结构化检查请求、page-check 直跑、page-asset checks 列表、认证刷新、采集触发与快照资产编译受理接口。

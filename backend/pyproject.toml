@@ -19,6 +19,7 @@ dependencies = [
   "psycopg[binary]>=3.2",
   "redis>=5.0",
   "alembic>=1.13",
+  "playwright>=1.52",
 ]
 
 [dependency-groups]

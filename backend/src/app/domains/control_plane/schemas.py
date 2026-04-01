@@ -19,6 +19,12 @@ def _normalize_optional_text(value: str | None) -> str | None:
     return normalized or None
 
 
+def _validate_positive_int(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be greater than 0")
+    return value
+
+
 class CreateCheckRequest(BaseModel):
     system_hint: str
     page_hint: str | None = None
@@ -42,6 +48,11 @@ class CreateCheckRequest(BaseModel):
     def normalize_text(cls, value: str) -> str:
         return _validate_required_text(value)
 
+    @field_validator("time_budget_ms")
+    @classmethod
+    def validate_time_budget(cls, value: int) -> int:
+        return _validate_positive_int(value)
+
 
 class RunPageCheck(BaseModel):
     strictness: str = "balanced"
@@ -52,6 +63,11 @@ class RunPageCheck(BaseModel):
     @classmethod
     def normalize_text(cls, value: str) -> str:
         return _validate_required_text(value)
+
+    @field_validator("time_budget_ms")
+    @classmethod
+    def validate_time_budget(cls, value: int) -> int:
+        return _validate_positive_int(value)
 
 
 class CheckRequestAccepted(BaseModel):
@@ -89,6 +105,7 @@ class PageAssetChecksList(BaseModel):
 
 class AuthRefreshAccepted(BaseModel):
     system_id: UUID
+    job_id: UUID
     status: str = "accepted"
     job_type: str = "auth_refresh"
 
@@ -103,9 +120,15 @@ class CrawlTriggerRequest(BaseModel):
     def normalize_text(cls, value: str) -> str:
         return _validate_required_text(value)
 
+    @field_validator("max_pages")
+    @classmethod
+    def validate_max_pages(cls, value: int) -> int:
+        return _validate_positive_int(value)
+
 
 class CrawlAccepted(BaseModel):
     system_id: UUID
+    job_id: UUID
     status: str = "accepted"
     job_type: str = "crawl"
     snapshot_pending: bool = True

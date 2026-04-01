@@ -48,3 +48,49 @@ class Page(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=True),
     )
     crawled_at: datetime = Field(default_factory=utcnow)
+
+
+class MenuNode(BaseModel, table=True):
+    __tablename__ = "menu_nodes"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    system_id: UUID = Field(foreign_key="systems.id", index=True)
+    snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
+    parent_id: UUID | None = Field(default=None, foreign_key="menu_nodes.id", index=True)
+    page_id: UUID | None = Field(default=None, foreign_key="pages.id", index=True)
+    label: str = Field(max_length=255)
+    route_path: str | None = Field(default=None, max_length=512)
+    depth: int = Field(default=0)
+    sort_order: int = Field(default=0)
+    playwright_locator: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+
+
+class PageElement(BaseModel, table=True):
+    __tablename__ = "page_elements"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    system_id: UUID = Field(foreign_key="systems.id", index=True)
+    snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
+    page_id: UUID = Field(foreign_key="pages.id", index=True)
+    element_type: str = Field(max_length=64)
+    element_role: str | None = Field(default=None, max_length=64)
+    element_text: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    attributes: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    playwright_locator: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    stability_score: float | None = Field(default=None)
+    usage_description: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
