@@ -2,8 +2,10 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine
 
+from app.main import create_app
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
@@ -123,3 +125,14 @@ def control_plane_service(db_session: Session):
     repository = SqlControlPlaneRepository(db_session)
     dispatcher = SqlQueueDispatcher(db_session)
     return ControlPlaneService(repository=repository, dispatcher=dispatcher)
+
+
+@pytest.fixture
+def client(control_plane_service):
+    from app.api.deps import get_control_plane_service
+
+    app = create_app()
+    app.dependency_overrides[get_control_plane_service] = lambda: control_plane_service
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()

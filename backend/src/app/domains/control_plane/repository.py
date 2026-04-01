@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app.domains.control_plane.schemas import CreateCheckRequest
+from app.domains.control_plane.schemas import CheckRequestStatus, CreateCheckRequest
 from app.shared.enums import AssetStatus
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
@@ -43,6 +43,12 @@ class ControlPlaneRepository(Protocol):
         auth_policy: str,
         module_plan_id: UUID | None,
     ) -> ExecutionPlan: ...
+
+    async def get_check_request_status(
+        self,
+        *,
+        request_id: UUID,
+    ) -> CheckRequestStatus | None: ...
 
     async def commit(self) -> None: ...
 
@@ -158,6 +164,29 @@ class SqlControlPlaneRepository:
         self.session.add(plan)
         self.session.flush()
         return plan
+
+    async def get_check_request_status(
+        self,
+        *,
+        request_id: UUID,
+    ) -> CheckRequestStatus | None:
+        request = self.session.get(ExecutionRequest, request_id)
+        if request is None:
+            return None
+
+        statement = select(ExecutionPlan).where(
+            ExecutionPlan.execution_request_id == request_id
+        )
+        plan = self.session.exec(statement).first()
+
+        return CheckRequestStatus(
+            request_id=request.id,
+            plan_id=plan.id if plan else None,
+            page_check_id=plan.resolved_page_check_id if plan else None,
+            execution_track=plan.execution_track if plan else None,
+            auth_policy=plan.auth_policy if plan else None,
+            status="accepted",
+        )
 
     async def commit(self) -> None:
         self.session.commit()

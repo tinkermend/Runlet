@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from uuid import UUID
+
+from fastapi import HTTPException
+
 from app.domains.control_plane.job_types import RUN_CHECK_JOB_TYPE
 from app.domains.control_plane.repository import ControlPlaneRepository
-from app.domains.control_plane.schemas import CheckRequestAccepted, CreateCheckRequest
+from app.domains.control_plane.schemas import (
+    CheckRequestAccepted,
+    CheckRequestStatus,
+    CreateCheckRequest,
+)
 from app.infrastructure.queue.dispatcher import QueueDispatcher
 
 
@@ -80,3 +88,9 @@ class ControlPlaneService:
             auth_policy=DEFAULT_AUTH_POLICY,
             job_id=job_id,
         )
+
+    async def get_check_request_status(self, request_id: UUID) -> CheckRequestStatus:
+        status = await self.repository.get_check_request_status(request_id=request_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail="check request not found")
+        return status

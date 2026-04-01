@@ -11,3 +11,4 @@
 - 新增 control-plane DTO、仓储、服务和 SQL 队列派发抽象，支持检查请求归一化、执行计划入库与 `run_check` 作业受理。
 - 新增 control-plane 服务测试夹具与异步服务测试，覆盖预编译命中与实时回退两条基础路径。
 - 修正 control-plane 作业受理的一致性与解析策略，改为单事务提交，并优先选择 `READY` 且高置信度的资产命中结果。
+- 新增 check-request control-plane API，暴露检查请求创建与状态查询端点，并补充对应的 FastAPI 集成测试。
