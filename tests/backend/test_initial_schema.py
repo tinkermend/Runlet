@@ -42,8 +42,10 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "execution_requests",
         "execution_runs",
         "intent_aliases",
+        "menu_nodes",
         "page_assets",
         "page_checks",
+        "page_elements",
         "pages",
         "queued_jobs",
         "system_credentials",
@@ -66,7 +68,27 @@ def test_initial_schema_exposes_core_columns(db_engine):
     assert {"request_source", "system_hint", "page_hint", "check_goal"} <= execution_request_columns
 
     queued_job_columns = {column["name"] for column in inspector.get_columns("queued_jobs")}
-    assert {"job_type", "payload", "status"} <= queued_job_columns
+    assert {
+        "job_type",
+        "payload",
+        "status",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "failure_message",
+    } <= queued_job_columns
+
+    auth_state_columns = {column["name"] for column in inspector.get_columns("auth_states")}
+    assert {"storage_state", "validated_at", "expires_at", "status"} <= auth_state_columns
+
+    menu_node_columns = {column["name"] for column in inspector.get_columns("menu_nodes")}
+    assert {"system_id", "snapshot_id", "label", "playwright_locator"} <= menu_node_columns
+
+    page_columns = {column["name"] for column in inspector.get_columns("pages")}
+    assert {"route_path", "page_summary"} <= page_columns
+
+    page_element_columns = {column["name"] for column in inspector.get_columns("page_elements")}
+    assert {"page_id", "playwright_locator", "stability_score", "usage_description"} <= page_element_columns
 
 
 def test_initial_schema_matches_sqlmodel_metadata(db_engine):

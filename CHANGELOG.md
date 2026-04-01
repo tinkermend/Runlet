@@ -1,5 +1,6 @@
 ## 2026-04-01
 
+- 补齐 auth/crawl runtime schema 基线：新增 `AuthState.status`、`QueuedJob` 运行时状态时间戳/失败信息字段，以及 `menu_nodes`、`page_elements` 事实表，并添加 `0002_auth_and_crawl_runtime` 迁移与对应 schema 测试。
 - 补充第一阶段 foundation 完成总结文档，记录 MVP 交付范围、验证结果、遗留边界与下一阶段建议。
 - 新增 AI Playwright 执行平台 foundation 计划落地总结，明确当前仓库已具备 backend MVP 启动、迁移、控制面 API 与队列受理基础。
 - 完成核心 schema 与 control-plane API 基线，包括结构化检查请求、page-check 直跑、page-asset checks 列表、认证刷新、采集触发与快照资产编译受理接口。

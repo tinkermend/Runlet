@@ -8,6 +8,7 @@ from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from app.infrastructure.db.base import BaseModel
+from app.shared.enums import AuthStateStatus
 
 
 def utcnow() -> datetime:
@@ -48,6 +49,14 @@ class AuthState(BaseModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
+    status: str = Field(
+        default=AuthStateStatus.PENDING.value,
+        sa_column=sa.Column(
+            sa.String(length=32),
+            nullable=False,
+            server_default=sa.text("'pending'"),
+        ),
+    )
     storage_state: dict[str, object] | None = Field(
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
