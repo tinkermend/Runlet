@@ -1,5 +1,6 @@
 ## 2026-04-01
 
+- 补充第一阶段 foundation 完成总结文档，记录 MVP 交付范围、验证结果、遗留边界与下一阶段建议。
 - 新增 AI Playwright 执行平台 foundation 计划落地总结，明确当前仓库已具备 backend MVP 启动、迁移、控制面 API 与队列受理基础。
 - 完成核心 schema 与 control-plane API 基线，包括结构化检查请求、page-check 直跑、page-asset checks 列表、认证刷新、采集触发与快照资产编译受理接口。
 - 明确后续实施边界：认证刷新与采集落到 auth/crawler follow-on plan，资产编译与漂移检测落到 compiler follow-on plan，执行器、脚本渲染与调度发布落到 runner/script/schedule follow-on plan。
