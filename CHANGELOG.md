@@ -8,3 +8,5 @@
 - 新增初始 schema 冒烟测试，验证迁移后核心表可见。
 - 对齐 foundation 计划中的核心字段语义，修正 `systems`、`page_assets`、`execution_requests`、`queued_jobs` 的列定义与初始迁移。
 - 补充 schema 与 `SQLModel` metadata 一致性校验，并将数据库会话工厂调整为复用默认异步 engine。
+- 新增 control-plane DTO、仓储、服务和 SQL 队列派发抽象，支持检查请求归一化、执行计划入库与 `run_check` 作业受理。
+- 新增 control-plane 服务测试夹具与异步服务测试，覆盖预编译命中与实时回退两条基础路径。
