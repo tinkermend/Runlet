@@ -5,12 +5,14 @@ from uuid import UUID
 
 from sqlalchemy import func
 from sqlmodel import Session, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.domains.control_plane.schemas import CheckRequestStatus, CreateCheckRequest
 from app.shared.enums import AssetStatus
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
+from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.systems import System
 
 
@@ -56,8 +58,20 @@ class ControlPlaneRepository(Protocol):
 
 
 class SqlControlPlaneRepository:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session | AsyncSession) -> None:
         self.session = session
+
+    async def _exec_first(self, statement):
+        if isinstance(self.session, AsyncSession):
+            result = await self.session.exec(statement)
+            return result.first()
+        return self.session.exec(statement).first()
+
+    async def _exec_all(self, statement):
+        if isinstance(self.session, AsyncSession):
+            result = await self.session.exec(statement)
+            return result.all()
+        return self.session.exec(statement).all()
 
     async def resolve_system(self, *, system_hint: str) -> System | None:
         normalized_hint = system_hint.strip().lower()
@@ -65,7 +79,7 @@ class SqlControlPlaneRepository:
             (func.lower(System.code) == normalized_hint)
             | (func.lower(System.name) == normalized_hint)
         )
-        return self.session.exec(statement).first()
+        return await self._exec_first(statement)
 
     async def resolve_page_asset_and_check(
         self,
@@ -95,13 +109,13 @@ class SqlControlPlaneRepository:
             if system_id is not None:
                 asset_statement = asset_statement.where(PageAsset.system_id == system_id)
 
-            page_asset = self.session.exec(asset_statement).first()
+            page_asset = await self._exec_first(asset_statement)
             if page_asset is not None:
                 check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
                     (func.lower(PageCheck.goal) == normalized_goal)
                     | (func.lower(PageCheck.check_code) == normalized_goal)
                 ).order_by(PageCheck.id)
-                page_check = self.session.exec(check_statement).first()
+                page_check = await self._exec_first(check_statement)
                 return page_asset, page_check
 
         if system_id is None or page_hint is None:
@@ -120,7 +134,7 @@ class SqlControlPlaneRepository:
             )
             .order_by(PageAsset.asset_version.desc(), PageAsset.id)
         )
-        page_asset = self.session.exec(asset_statement).first()
+        page_asset = await self._exec_first(asset_statement)
         if page_asset is None:
             return None, None
 
@@ -128,7 +142,7 @@ class SqlControlPlaneRepository:
             (func.lower(PageCheck.goal) == normalized_goal)
             | (func.lower(PageCheck.check_code) == normalized_goal)
         ).order_by(PageCheck.id)
-        page_check = self.session.exec(check_statement).first()
+        page_check = await self._exec_first(check_statement)
         return page_asset, page_check
 
     async def create_execution_request(
@@ -138,7 +152,10 @@ class SqlControlPlaneRepository:
     ) -> ExecutionRequest:
         request = ExecutionRequest(**payload.model_dump())
         self.session.add(request)
-        self.session.flush()
+        if isinstance(self.session, AsyncSession):
+            await self.session.flush()
+        else:
+            self.session.flush()
         return request
 
     async def create_execution_plan(
@@ -162,7 +179,10 @@ class SqlControlPlaneRepository:
             module_plan_id=module_plan_id,
         )
         self.session.add(plan)
-        self.session.flush()
+        if isinstance(self.session, AsyncSession):
+            await self.session.flush()
+        else:
+            self.session.flush()
         return plan
 
     async def get_check_request_status(
@@ -170,14 +190,26 @@ class SqlControlPlaneRepository:
         *,
         request_id: UUID,
     ) -> CheckRequestStatus | None:
-        request = self.session.get(ExecutionRequest, request_id)
+        if isinstance(self.session, AsyncSession):
+            request = await self.session.get(ExecutionRequest, request_id)
+        else:
+            request = self.session.get(ExecutionRequest, request_id)
         if request is None:
             return None
 
         statement = select(ExecutionPlan).where(
             ExecutionPlan.execution_request_id == request_id
         )
-        plan = self.session.exec(statement).first()
+        plan = await self._exec_first(statement)
+        queued_jobs = await self._exec_all(select(QueuedJob))
+        queued_job = next(
+            (
+                job
+                for job in queued_jobs
+                if job.payload.get("execution_request_id") == str(request_id)
+            ),
+            None,
+        )
 
         return CheckRequestStatus(
             request_id=request.id,
@@ -185,11 +217,17 @@ class SqlControlPlaneRepository:
             page_check_id=plan.resolved_page_check_id if plan else None,
             execution_track=plan.execution_track if plan else None,
             auth_policy=plan.auth_policy if plan else None,
-            status="accepted",
+            status=queued_job.status if queued_job else "accepted",
         )
 
     async def commit(self) -> None:
-        self.session.commit()
+        if isinstance(self.session, AsyncSession):
+            await self.session.commit()
+        else:
+            self.session.commit()
 
     async def rollback(self) -> None:
-        self.session.rollback()
+        if isinstance(self.session, AsyncSession):
+            await self.session.rollback()
+        else:
+            self.session.rollback()

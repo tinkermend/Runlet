@@ -1,5 +1,8 @@
 import anyio
 import pytest
+from sqlmodel import select
+
+from app.infrastructure.db.models.jobs import QueuedJob
 
 
 def test_post_check_requests_returns_accepted(client, seeded_asset):
@@ -34,8 +37,21 @@ def accepted_request(control_plane_service, seeded_asset):
     return anyio.run(submit)
 
 
-def test_get_check_request_returns_status(client, accepted_request):
+def test_get_check_request_returns_status(client, accepted_request, db_session):
+    queued_job = db_session.exec(select(QueuedJob)).one()
+    queued_job.status = "queued"
+    db_session.add(queued_job)
+    db_session.commit()
+
     response = client.get(f"/api/v1/check-requests/{accepted_request.request_id}")
 
     assert response.status_code == 200
     assert response.json()["request_id"] == str(accepted_request.request_id)
+    assert response.json()["status"] == "queued"
+    assert response.json()["execution_track"] == "precompiled"
+
+
+def test_get_check_request_returns_404_for_missing_request(client):
+    response = client.get("/api/v1/check-requests/00000000-0000-0000-0000-000000000001")
+
+    assert response.status_code == 404
