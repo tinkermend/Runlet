@@ -54,7 +54,7 @@ def seeded_page_asset(db_session: Session, seeded_system: System) -> PageAsset:
         page_id=page.id,
         asset_key="erp.users",
         asset_version="2026.04.01",
-        status=AssetStatus.READY,
+        status=AssetStatus.SAFE,
     )
     db_session.add(page_asset)
     db_session.flush()
@@ -174,7 +174,7 @@ def seeded_asset_without_matching_check(db_session: Session) -> PageAsset:
         page_id=page.id,
         asset_key="wms.inventory",
         asset_version="2026.04.01",
-        status=AssetStatus.READY,
+        status=AssetStatus.SAFE,
     )
     db_session.add(page_asset)
     db_session.flush()

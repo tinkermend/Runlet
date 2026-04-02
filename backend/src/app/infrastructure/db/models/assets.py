@@ -32,7 +32,7 @@ class PageAsset(BaseModel, table=True):
     asset_key: str = Field(index=True, max_length=255)
     asset_version: str = Field(max_length=64)
     status: AssetStatus = Field(
-        default=AssetStatus.DRAFT,
+        default=AssetStatus.SAFE,
         sa_column=sa.Column(asset_status_enum(), nullable=False),
     )
     compiled_from_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
@@ -70,3 +70,34 @@ class IntentAlias(BaseModel, table=True):
     asset_key: str = Field(max_length=255)
     confidence: float = Field(default=1.0)
     source: str = Field(max_length=64)
+
+
+class ModulePlan(BaseModel, table=True):
+    __tablename__ = "module_plans"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    page_asset_id: UUID = Field(foreign_key="page_assets.id", index=True)
+    check_code: str = Field(max_length=64, index=True)
+    plan_version: str = Field(default="v1", max_length=32)
+    steps_json: list[dict[str, object]] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+
+
+class AssetSnapshot(BaseModel, table=True):
+    __tablename__ = "asset_snapshots"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    page_asset_id: UUID = Field(foreign_key="page_assets.id", index=True)
+    crawl_snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
+    asset_version: str = Field(max_length=64)
+    structure_hash: str = Field(max_length=64)
+    navigation_hash: str = Field(max_length=64)
+    key_locator_hash: str = Field(max_length=64)
+    semantic_summary_hash: str = Field(max_length=64)
+    diff_score_vs_previous: float = Field(default=0.0)
+    status: AssetStatus = Field(
+        default=AssetStatus.SAFE,
+        sa_column=sa.Column(asset_status_enum(), nullable=False),
+    )

@@ -3,7 +3,7 @@ from app.shared.enums import AssetStatus
 
 
 @pytest.fixture
-def seeded_non_ready_page_asset(db_session, seeded_page_asset):
+def seeded_non_safe_page_asset(db_session, seeded_page_asset):
     seeded_page_asset.status = AssetStatus.STALE
     db_session.add(seeded_page_asset)
     db_session.commit()
@@ -21,18 +21,18 @@ def test_post_page_check_run_accepts_job(client, seeded_page_check):
     assert response.json()["page_check_id"] == str(seeded_page_check.id)
 
 
-def test_get_page_asset_checks_lists_ready_checks(client, seeded_page_asset):
+def test_get_page_asset_checks_lists_safe_checks(client, seeded_page_asset):
     response = client.get(f"/api/v1/page-assets/{seeded_page_asset.id}/checks")
 
     assert response.status_code == 200
-    assert response.json()["checks"][0]["status"] == "ready"
+    assert response.json()["checks"][0]["status"] == "safe"
 
 
-def test_get_page_asset_checks_preserves_persisted_checks_for_non_ready_asset(
+def test_get_page_asset_checks_preserves_persisted_checks_for_non_safe_asset(
     client,
-    seeded_non_ready_page_asset,
+    seeded_non_safe_page_asset,
 ):
-    response = client.get(f"/api/v1/page-assets/{seeded_non_ready_page_asset.id}/checks")
+    response = client.get(f"/api/v1/page-assets/{seeded_non_safe_page_asset.id}/checks")
 
     assert response.status_code == 200
     assert len(response.json()["checks"]) == 1

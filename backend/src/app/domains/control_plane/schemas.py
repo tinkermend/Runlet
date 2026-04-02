@@ -145,5 +145,6 @@ class CompileAssetsRequest(BaseModel):
 
 class CompileAssetsAccepted(BaseModel):
     snapshot_id: UUID
+    job_id: UUID
     status: str = "accepted"
     job_type: str = "asset_compile"

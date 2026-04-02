@@ -1,3 +1,12 @@
+## 2026-04-02
+
+- 新增 `asset_compiler` 域，支持基于 crawl snapshot 计算稳定页面指纹、结构 diff 分数，以及 `safe/suspect/stale` 漂移状态映射。
+- 新增 `module_plans` 与 `asset_snapshots` 资产层模型及 `0003_asset_compiler_and_drift` 迁移，并把 `queued_jobs.result_payload` 用于持久化 compile job 输出摘要。
+- 新增标准检查模板与模块计划构建逻辑，当前可为页面生成 `page_open`、`table_render`、`open_create_modal` 等检查及确定性步骤计划。
+- 新增 `AssetCompilerService` 与 `AssetCompileJobHandler`，支持把 `pages/menu_nodes/page_elements` 编译为 `page_assets/page_checks/module_plans/asset_snapshots/intent_aliases`，并由 worker 正式执行 `asset_compile` 作业。
+- 更新 compile-assets API 返回结构，`/api/v1/snapshots/{snapshot_id}/compile-assets` 现在会返回真实 `job_id`，并补充资产编译、漂移语义与排查入口文档。
+- 补齐 asset compiler 回归测试，覆盖 schema、指纹、编译服务、compile job 与 assets API 主路径。
+
 ## 2026-04-01
 
 - 修正 auth refresh 浏览器登录等待策略：提交表单后改为优先等待离开登录页并短暂稳定化，不再依赖 `networkidle`，避免 dpm 这类持续后台请求页面被误判为超时。

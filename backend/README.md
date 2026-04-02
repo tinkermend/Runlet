@@ -18,7 +18,7 @@ cp .env.example .env
 - `DATABASE_URL`：API/worker 共用的异步数据库连接串
 - `REDIS_URL`：control plane 受理队列使用的 Redis 地址
 
-本地默认数据库和 Redis 参数可参考 [docs/base_info.md](/Users/wangpei/src/singe/Runlet/worktrees/task1-auth-crawl-runtime/docs/base_info.md)。
+本地默认数据库和 Redis 参数可参考仓库内的 `docs/base_info.md`。
 
 ## 执行迁移
 
@@ -40,10 +40,9 @@ uv run uvicorn app.main:create_app --factory --reload
 
 - `AuthRefreshJobHandler`
 - `CrawlJobHandler`
+- `AssetCompileJobHandler`
 
 然后在循环中调用 `await worker.run_once()`。
-
-这一阶段 `asset_compile` 仍然是受理但未执行的作业类型；worker 遇到它会标记为 `skipped`，并写明原因。
 
 ## 触发认证刷新
 
@@ -74,6 +73,49 @@ curl -X POST "http://127.0.0.1:8000/api/v1/systems/<system-id>/crawl" \
 
 也就是说，compile handoff 发生在 worker 内部的 job 链路中，而不是由 crawl 受理接口同步返回。
 
+## 触发资产编译
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/snapshots/<snapshot-id>/compile-assets" \
+  -H "content-type: application/json" \
+  -d '{"compile_scope":"impacted_pages_only"}'
+```
+
+返回 `202 Accepted`，包含：
+
+- `snapshot_id`
+- `job_type=asset_compile`
+- `job_id`
+
+## 资产编译与漂移说明
+
+资产编译器会把 `crawl_snapshots/pages/menu_nodes/page_elements` 这些事实层数据转换为以下资产层对象：
+
+- `page_assets`：页面资产主记录，默认由 `system_code + route_path` 生成 `asset_key`
+- `page_checks`：标准检查定义
+- `module_plans`：运行器优先消费的确定性步骤计划
+- `asset_snapshots`：每次编译生成的结构快照与 diff 分数
+- `intent_aliases`：初始意图别名，用于 `intent_aliases -> page_assets -> page_checks` 命中
+
+当前内置的标准检查至少包含：
+
+- `page_open`
+- `table_render`
+- `open_create_modal`
+
+漂移状态说明：
+
+- `safe`：结构变化较小，可继续作为默认命中资产
+- `suspect`：结构有中等变化，需要关注但仍保留资产结果
+- `stale`：结构变化较大，表示资产明显老化
+
+编译结果可从以下位置查看：
+
+- `queued_jobs.result_payload`：一次 compile job 的汇总结果
+- `page_assets.status`：当前页面资产状态
+- `page_checks.module_plan_id`：检查与模块计划的绑定
+- `asset_snapshots`：每次编译的指纹与 diff 记录
+
 ## 运行测试
 
 ```bash
@@ -94,13 +136,25 @@ uv run pytest \
   ../tests/backend/test_job_submission_api.py -v
 ```
 
+asset compiler 相关测试集：
+
+```bash
+cd backend
+uv run pytest \
+  ../tests/backend/test_asset_fingerprints.py \
+  ../tests/backend/test_asset_compiler_service.py \
+  ../tests/backend/test_asset_compile_job.py \
+  ../tests/backend/test_assets_api.py -v
+```
+
 ## 目录说明
 
 - `src/app/api/`：HTTP 接口与依赖注入
 - `src/app/domains/control_plane/`：control plane DTO、仓储、受理服务
 - `src/app/domains/auth_service/`：凭据解密、登录刷新、认证态持久化
 - `src/app/domains/crawler_service/`：采集编排、提取器契约、事实落库
-- `src/app/jobs/`：认证刷新与采集作业 handler
+- `src/app/domains/asset_compiler/`：事实转资产、标准检查、模块计划、漂移计算
+- `src/app/jobs/`：认证刷新、采集、资产编译作业 handler
 - `src/app/workers/`：最小 FIFO worker
 - `src/app/infrastructure/`：数据库、队列和运行时适配
 - `alembic/`：迁移环境与版本

@@ -62,13 +62,17 @@ def test_post_compile_assets_accepts_job(client, seeded_snapshot, db_session):
     )
 
     assert response.status_code == 202
-    assert response.json() == {
+    body = response.json()
+    assert body == {
         "snapshot_id": str(seeded_snapshot.id),
         "status": "accepted",
         "job_type": "asset_compile",
+        "job_id": body["job_id"],
     }
+    assert body["job_id"]
 
     job = db_session.exec(select(QueuedJob)).one()
+    assert str(job.id) == body["job_id"]
     assert job.job_type == "asset_compile"
     assert job.payload == {
         "snapshot_id": str(seeded_snapshot.id),

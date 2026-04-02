@@ -144,7 +144,7 @@ class SqlControlPlaneRepository:
             asset_statement = (
                 select(PageAsset)
                 .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
-                .where(PageAsset.status == AssetStatus.READY)
+                .where(PageAsset.status == AssetStatus.SAFE)
                 .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
                 .where(func.lower(IntentAlias.check_alias) == normalized_goal)
                 .where(
@@ -173,7 +173,7 @@ class SqlControlPlaneRepository:
             select(PageAsset)
             .join(Page, Page.id == PageAsset.page_id)
             .where(PageAsset.system_id == system_id)
-            .where(PageAsset.status == AssetStatus.READY)
+            .where(PageAsset.status == AssetStatus.SAFE)
             .where(
                 (func.lower(Page.page_title) == normalized_page_hint)
                 | (func.lower(Page.route_path) == normalized_page_hint)
@@ -277,7 +277,7 @@ class SqlControlPlaneRepository:
             .join(PageAsset, PageAsset.id == PageCheck.page_asset_id)
             .join(System, System.id == PageAsset.system_id)
             .where(PageCheck.id == page_check_id)
-            .where(PageAsset.status == AssetStatus.READY)
+            .where(PageAsset.status == AssetStatus.SAFE)
         )
         row = await self._exec_first(statement)
         if row is None:
