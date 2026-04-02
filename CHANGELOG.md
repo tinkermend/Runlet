@@ -1,3 +1,10 @@
+## 2026-04-03
+
+- 修正真实站点滑块登录链路：`auth_service.browser_login` 为 `slider_captcha` 新增 `drag` 模式，并在 `slider_piece == slider_handle` 时自动识别为拖条验证码，支持 Vben Admin 这类“拖到最右侧解锁”站点，不再误走 `ddddocr` 拼图偏移求解。
+- 修补浏览器登录假成功问题：提交表单后的认证刷新现在会在抓取 `storage_state` 前校验登录表单是否仍可见，若页面仍停留在登录态则返回 `login_not_completed`，避免把主题/埋点类本地状态误存为有效认证。
+- 增强 Vben Admin 登录稳定性：`browser_login` 现在会在填充表单前执行登录页就绪轮询与重开重试，并在拖条验证码完成后增加短暂 settle 等待，降低静态资源 503 或拖条验证未稳定时直接提交导致的 `Page.fill timeout` / `login_not_completed`。
+- 补充 `browser_login/auth_service` 回归测试，并完成一次真实 Vben Admin 联调验证：服务端拖条登录后，复用返回 `storage_state` 可再次进入 `https://ele.vben.pro/#/analytics`。
+
 ## 2026-04-02
 
 - 修正真实 PostgreSQL 环境的运行闭环阻塞点：缩短 `0006/0007/0008` Alembic revision id，避免 `alembic_version.version_num` 32 位上限导致迁移停在 `0005_job_run_audit_linkage`，并补充对应回归测试。

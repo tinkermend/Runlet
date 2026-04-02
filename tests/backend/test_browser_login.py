@@ -45,11 +45,16 @@ class FakeLocator:
         *,
         screenshot_bytes: bytes | None = None,
         bounding_box: dict[str, float] | None = None,
+        visible: bool = False,
+        visible_sequence: list[bool] | None = None,
     ) -> None:
         self.screenshot_bytes = screenshot_bytes
         self.bounding_box_value = bounding_box
+        self.visible = visible
+        self.visible_sequence = list(visible_sequence or [])
         self.screenshot_calls = 0
         self.bounding_box_calls = 0
+        self.is_visible_calls = 0
 
     async def screenshot(self) -> bytes:
         self.screenshot_calls += 1
@@ -60,6 +65,29 @@ class FakeLocator:
     async def bounding_box(self) -> dict[str, float] | None:
         self.bounding_box_calls += 1
         return self.bounding_box_value
+
+    async def is_visible(self) -> bool:
+        self.is_visible_calls += 1
+        if self.visible_sequence:
+            return self.visible_sequence.pop(0)
+        return self.visible
+
+
+def build_login_form_locators(
+    *,
+    username_selector: str,
+    password_selector: str,
+    username_visible_sequence: list[bool] | None = None,
+    password_visible_sequence: list[bool] | None = None,
+) -> dict[str, FakeLocator]:
+    return {
+        username_selector: FakeLocator(
+            visible_sequence=username_visible_sequence or [True, False]
+        ),
+        password_selector: FakeLocator(
+            visible_sequence=password_visible_sequence or [True, False]
+        ),
+    }
 
 
 class FakePage:
@@ -202,6 +230,10 @@ async def test_login_waits_for_url_change_before_capturing_storage_state(monkeyp
             storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
             post_click_url="https://erp.example.com/home",
             wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            ),
         ),
     )
 
@@ -247,6 +279,10 @@ async def test_login_falls_back_to_short_settle_when_url_never_changes(monkeypat
             },
             post_click_url=login_url,
             wait_for_url_timeout=True,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            ),
         ),
     )
 
@@ -279,7 +315,11 @@ async def test_login_solves_image_captcha_before_submit(monkeypatch):
             storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
             post_click_url="https://erp.example.com/home",
             wait_for_url_timeout=False,
-            locators={
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            )
+            | {
                 ".captcha-image": FakeLocator(screenshot_bytes=b"captcha-image"),
             },
         ),
@@ -320,7 +360,11 @@ async def test_login_solves_slider_before_submit(monkeypatch):
             storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
             post_click_url="https://erp.example.com/home",
             wait_for_url_timeout=False,
-            locators={
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            )
+            | {
                 ".slider-bg": FakeLocator(screenshot_bytes=b"background-image"),
                 ".slider-piece": FakeLocator(screenshot_bytes=b"slider-piece"),
                 ".slider-handle": FakeLocator(
@@ -354,7 +398,241 @@ async def test_login_solves_slider_before_submit(monkeypatch):
     ]
     assert page.mouse.down_calls == 1
     assert page.mouse.up_calls == 1
+    assert page.wait_for_timeout_calls == [500]
     assert browser.closed is True
+
+
+@pytest.mark.anyio
+async def test_login_uses_drag_slider_mode_without_ocr(monkeypatch):
+    login_url = "https://erp.example.com/login"
+    solver = FakeCaptchaSolver(slider_offset_x=42)
+    page, browser, _ = install_fake_async_api(
+        monkeypatch,
+        page=FakePage(
+            login_url=login_url,
+            storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+            post_click_url="https://erp.example.com/home",
+            wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            )
+            | {
+                ".slider-track": FakeLocator(
+                    bounding_box={"x": 100.0, "y": 40.0, "width": 240.0, "height": 24.0}
+                ),
+                ".slider-handle": FakeLocator(
+                    bounding_box={"x": 100.0, "y": 40.0, "width": 40.0, "height": 20.0}
+                ),
+            },
+        ),
+    )
+
+    result = await PlaywrightBrowserLoginAdapter(captcha_solver=solver).login(
+        login_url=login_url,
+        username="erp-user",
+        password="erp-password",
+        auth_type="slider_captcha",
+        selectors={
+            "username": "#username",
+            "password": "#password",
+            "submit": "button[type=submit]",
+            "slider_mode": "drag",
+            "slider_background": ".slider-track",
+            "slider_piece": ".slider-handle",
+            "slider_handle": ".slider-handle",
+        },
+    )
+
+    assert result.storage_state["cookies"][0]["name"] == "sid"
+    assert solver.slider_challenges == []
+    assert page.mouse.move_calls == [
+        (120.0, 50.0, None),
+        (318.0, 50.0, 20),
+    ]
+    assert page.mouse.down_calls == 1
+    assert page.mouse.up_calls == 1
+    assert page.wait_for_timeout_calls == [1_000, 500]
+    assert browser.closed is True
+
+
+@pytest.mark.anyio
+async def test_login_infers_drag_slider_mode_when_piece_matches_handle(monkeypatch):
+    login_url = "https://erp.example.com/login"
+    solver = FakeCaptchaSolver(slider_offset_x=42)
+    page, _, _ = install_fake_async_api(
+        monkeypatch,
+        page=FakePage(
+            login_url=login_url,
+            storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+            post_click_url="https://erp.example.com/home",
+            wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            )
+            | {
+                ".slider-track": FakeLocator(
+                    bounding_box={"x": 100.0, "y": 40.0, "width": 240.0, "height": 24.0}
+                ),
+                ".slider-handle": FakeLocator(
+                    bounding_box={"x": 100.0, "y": 40.0, "width": 40.0, "height": 20.0}
+                ),
+            },
+        ),
+    )
+
+    await PlaywrightBrowserLoginAdapter(captcha_solver=solver).login(
+        login_url=login_url,
+        username="erp-user",
+        password="erp-password",
+        auth_type="slider_captcha",
+        selectors={
+            "username": "#username",
+            "password": "#password",
+            "submit": "button[type=submit]",
+            "slider_background": ".slider-track",
+            "slider_piece": ".slider-handle",
+            "slider_handle": ".slider-handle",
+        },
+    )
+
+    assert solver.slider_challenges == []
+    assert page.mouse.move_calls == [
+        (120.0, 50.0, None),
+        (318.0, 50.0, 20),
+    ]
+    assert page.wait_for_timeout_calls == [1_000, 500]
+
+
+@pytest.mark.anyio
+async def test_login_rejects_storage_state_when_login_form_still_visible(monkeypatch):
+    login_url = "https://erp.example.com/login"
+    install_fake_async_api(
+        monkeypatch,
+        page=FakePage(
+            login_url=login_url,
+            storage_state={
+                "cookies": [{"name": "analytics", "value": "abc123"}],
+                "origins": [
+                    {
+                        "origin": "https://erp.example.com",
+                        "localStorage": [{"name": "theme", "value": "dark"}],
+                    }
+                ],
+            },
+            post_click_url=login_url,
+            wait_for_url_timeout=True,
+            locators={
+                "#username": FakeLocator(visible=True),
+                "#password": FakeLocator(visible=True),
+            },
+        ),
+    )
+
+    with pytest.raises(BrowserLoginFailure) as exc_info:
+        await PlaywrightBrowserLoginAdapter().login(
+            login_url=login_url,
+            username="erp-user",
+            password="erp-password",
+            auth_type="none",
+            selectors={
+                "username": "#username",
+                "password": "#password",
+                "submit": "button[type=submit]",
+            },
+        )
+
+    assert str(exc_info.value) == "login_not_completed"
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.anyio
+async def test_login_retries_when_login_page_is_not_ready_on_first_load(monkeypatch):
+    login_url = "https://erp.example.com/login"
+    page, browser, _ = install_fake_async_api(
+        monkeypatch,
+        page=FakePage(
+            login_url=login_url,
+            storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+            post_click_url="https://erp.example.com/home",
+            wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+                username_visible_sequence=[False, True, False],
+                password_visible_sequence=[True, False],
+            ),
+        ),
+    )
+
+    result = await PlaywrightBrowserLoginAdapter().login(
+        login_url=login_url,
+        username="erp-user",
+        password="erp-password",
+        auth_type="none",
+        selectors={
+            "username": "#username",
+            "password": "#password",
+            "submit": "button[type=submit]",
+            "login_page_max_attempts": 2,
+            "login_page_ready_timeout_ms": 1,
+            "login_page_ready_poll_ms": 1,
+            "login_page_retry_wait_ms": 7,
+        },
+    )
+
+    assert result.storage_state["cookies"][0]["name"] == "sid"
+    assert page.goto_calls == [
+        (login_url, "domcontentloaded"),
+        (login_url, "domcontentloaded"),
+    ]
+    assert page.wait_for_timeout_calls == [7, 500]
+    assert page.fill_calls == [
+        ("#username", "erp-user"),
+        ("#password", "erp-password"),
+    ]
+    assert browser.closed is True
+
+
+@pytest.mark.anyio
+async def test_login_fails_when_login_page_never_becomes_ready(monkeypatch):
+    login_url = "https://erp.example.com/login"
+    install_fake_async_api(
+        monkeypatch,
+        page=FakePage(
+            login_url=login_url,
+            storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+            post_click_url="https://erp.example.com/home",
+            wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+                username_visible_sequence=[False, False],
+                password_visible_sequence=[False, False],
+            ),
+        ),
+    )
+
+    with pytest.raises(BrowserLoginFailure) as exc_info:
+        await PlaywrightBrowserLoginAdapter().login(
+            login_url=login_url,
+            username="erp-user",
+            password="erp-password",
+            auth_type="none",
+            selectors={
+                "username": "#username",
+                "password": "#password",
+                "submit": "button[type=submit]",
+                "login_page_max_attempts": 2,
+                "login_page_ready_timeout_ms": 1,
+                "login_page_ready_poll_ms": 1,
+                "login_page_retry_wait_ms": 7,
+            },
+        )
+
+    assert str(exc_info.value) == "login_page_not_ready"
+    assert exc_info.value.retryable is True
 
 
 @pytest.mark.anyio
@@ -367,6 +645,10 @@ async def test_login_respects_playwright_headless_setting(monkeypatch):
             storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
             post_click_url="https://erp.example.com/home",
             wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            ),
         ),
     )
 
@@ -397,6 +679,10 @@ async def test_login_rejects_sms_captcha_as_not_implemented(monkeypatch):
             storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
             post_click_url="https://erp.example.com/home",
             wait_for_url_timeout=False,
+            locators=build_login_form_locators(
+                username_selector="#username",
+                password_selector="#password",
+            ),
         ),
     )
 
