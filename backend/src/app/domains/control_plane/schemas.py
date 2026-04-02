@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 def _validate_required_text(value: str) -> str:
@@ -132,6 +132,52 @@ class CrawlAccepted(BaseModel):
     status: str = "accepted"
     job_type: str = "crawl"
     snapshot_pending: bool = True
+
+
+class UpdateSystemAuthPolicy(BaseModel):
+    enabled: bool = True
+    schedule_expr: str
+    auth_mode: str
+    captcha_provider: str = "ddddocr"
+
+    @field_validator("schedule_expr", "auth_mode", "captcha_provider", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+
+class SystemAuthPolicyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    system_id: UUID
+    enabled: bool
+    state: str
+    schedule_expr: str
+    auth_mode: str
+    captcha_provider: str
+
+
+class UpdateSystemCrawlPolicy(BaseModel):
+    enabled: bool = True
+    schedule_expr: str
+    crawl_scope: str = "full"
+
+    @field_validator("schedule_expr", "crawl_scope", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+
+class SystemCrawlPolicyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    system_id: UUID
+    enabled: bool
+    state: str
+    schedule_expr: str
+    crawl_scope: str
 
 
 class CompileAssetsRequest(BaseModel):

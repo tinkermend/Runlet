@@ -274,6 +274,11 @@ def registry(scheduler_registry):
 
 
 @pytest.fixture
+def scheduler_runtime(control_plane_service):
+    return control_plane_service.scheduler_registry
+
+
+@pytest.fixture
 def accepted_request(control_plane_service, seeded_page_asset):
     async def submit():
         return await control_plane_service.submit_check_request(

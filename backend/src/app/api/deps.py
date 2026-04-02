@@ -28,12 +28,18 @@ def get_registry_scheduler() -> BackgroundScheduler:
     return _registry_scheduler
 
 
-async def get_control_plane_service(session: SessionDep) -> ControlPlaneService:
+RegistrySchedulerDep = Annotated[BackgroundScheduler, Depends(get_registry_scheduler)]
+
+
+async def get_control_plane_service(
+    session: SessionDep,
+    registry_scheduler: RegistrySchedulerDep,
+) -> ControlPlaneService:
     dispatcher = SqlQueueDispatcher(session)
     published_job_service = PublishedJobService(session=session, dispatcher=dispatcher)
     scheduler_registry = SchedulerRegistry(
         session=session,
-        scheduler=get_registry_scheduler(),
+        scheduler=registry_scheduler,
     )
     return ControlPlaneService(
         repository=SqlControlPlaneRepository(session),

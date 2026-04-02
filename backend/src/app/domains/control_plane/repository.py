@@ -7,6 +7,11 @@ from uuid import UUID
 from sqlmodel import Session, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.domains.control_plane.runtime_policies import (
+    UpsertSystemAuthPolicy,
+    UpsertSystemCrawlPolicy,
+    resolve_runtime_policy_state,
+)
 from app.domains.control_plane.schemas import (
     CheckRequestStatus,
     CreateCheckRequest,
@@ -17,8 +22,9 @@ from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageChec
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
 from app.infrastructure.db.models.jobs import QueuedJob
+from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.infrastructure.db.models.systems import System
-from app.shared.enums import AssetStatus
+from app.shared.enums import AssetStatus, RuntimePolicyState
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,28 @@ class PageCheckRunTarget:
 
 class ControlPlaneRepository(Protocol):
     async def get_system_by_id(self, *, system_id: UUID) -> System | None: ...
+
+    async def get_system_auth_policy(self, *, system_id: UUID) -> SystemAuthPolicy | None: ...
+
+    async def upsert_system_auth_policy(
+        self,
+        *,
+        system_id: UUID,
+        payload: UpsertSystemAuthPolicy,
+    ) -> SystemAuthPolicy: ...
+
+    async def get_system_crawl_policy(self, *, system_id: UUID) -> SystemCrawlPolicy | None: ...
+
+    async def upsert_system_crawl_policy(
+        self,
+        *,
+        system_id: UUID,
+        payload: UpsertSystemCrawlPolicy,
+    ) -> SystemCrawlPolicy: ...
+
+    async def list_active_auth_policies(self) -> list[SystemAuthPolicy]: ...
+
+    async def list_active_crawl_policies(self) -> list[SystemCrawlPolicy]: ...
 
     async def get_snapshot_by_id(
         self,
@@ -110,8 +138,106 @@ class SqlControlPlaneRepository:
             return await self.session.get(model, identifier)
         return self.session.get(model, identifier)
 
+    async def _flush(self) -> None:
+        if isinstance(self.session, AsyncSession):
+            await self.session.flush()
+            return
+        self.session.flush()
+
+    async def _refresh(self, model) -> None:
+        if isinstance(self.session, AsyncSession):
+            await self.session.refresh(model)
+            return
+        self.session.refresh(model)
+
     async def get_system_by_id(self, *, system_id: UUID) -> System | None:
         return await self._get(System, system_id)
+
+    async def get_system_auth_policy(self, *, system_id: UUID) -> SystemAuthPolicy | None:
+        statement = select(SystemAuthPolicy).where(SystemAuthPolicy.system_id == system_id)
+        return await self._exec_first(statement)
+
+    async def upsert_system_auth_policy(
+        self,
+        *,
+        system_id: UUID,
+        payload: UpsertSystemAuthPolicy,
+    ) -> SystemAuthPolicy:
+        policy = await self.get_system_auth_policy(system_id=system_id)
+        next_state = resolve_runtime_policy_state(enabled=payload.enabled)
+        if policy is None:
+            policy = SystemAuthPolicy(
+                id=system_id,
+                system_id=system_id,
+                enabled=payload.enabled,
+                state=next_state,
+                schedule_expr=payload.schedule_expr,
+                auth_mode=payload.auth_mode,
+                captcha_provider=payload.captcha_provider,
+            )
+            self.session.add(policy)
+        else:
+            policy.enabled = payload.enabled
+            policy.state = next_state
+            policy.schedule_expr = payload.schedule_expr
+            policy.auth_mode = payload.auth_mode
+            policy.captcha_provider = payload.captcha_provider
+            self.session.add(policy)
+
+        await self._flush()
+        await self._refresh(policy)
+        return policy
+
+    async def get_system_crawl_policy(self, *, system_id: UUID) -> SystemCrawlPolicy | None:
+        statement = select(SystemCrawlPolicy).where(SystemCrawlPolicy.system_id == system_id)
+        return await self._exec_first(statement)
+
+    async def upsert_system_crawl_policy(
+        self,
+        *,
+        system_id: UUID,
+        payload: UpsertSystemCrawlPolicy,
+    ) -> SystemCrawlPolicy:
+        policy = await self.get_system_crawl_policy(system_id=system_id)
+        next_state = resolve_runtime_policy_state(enabled=payload.enabled)
+        if policy is None:
+            policy = SystemCrawlPolicy(
+                id=system_id,
+                system_id=system_id,
+                enabled=payload.enabled,
+                state=next_state,
+                schedule_expr=payload.schedule_expr,
+                crawl_scope=payload.crawl_scope,
+            )
+            self.session.add(policy)
+        else:
+            policy.enabled = payload.enabled
+            policy.state = next_state
+            policy.schedule_expr = payload.schedule_expr
+            policy.crawl_scope = payload.crawl_scope
+            self.session.add(policy)
+
+        await self._flush()
+        await self._refresh(policy)
+        return policy
+
+    async def list_active_auth_policies(self) -> list[SystemAuthPolicy]:
+        statement = (
+            select(SystemAuthPolicy)
+            .where(SystemAuthPolicy.enabled.is_(True))
+            .where(SystemAuthPolicy.state == RuntimePolicyState.ACTIVE.value)
+            .order_by(SystemAuthPolicy.system_id)
+        )
+        return await self._exec_all(statement)
+
+    async def list_active_crawl_policies(self) -> list[SystemCrawlPolicy]:
+        statement = (
+            select(SystemCrawlPolicy)
+            .where(SystemCrawlPolicy.enabled.is_(True))
+            .where(SystemCrawlPolicy.state == RuntimePolicyState.ACTIVE.value)
+            .order_by(SystemCrawlPolicy.system_id)
+        )
+        return await self._exec_all(statement)
 
     async def get_snapshot_by_id(
         self,
@@ -199,10 +325,7 @@ class SqlControlPlaneRepository:
     ) -> ExecutionRequest:
         request = ExecutionRequest(**payload.model_dump())
         self.session.add(request)
-        if isinstance(self.session, AsyncSession):
-            await self.session.flush()
-        else:
-            self.session.flush()
+        await self._flush()
         return request
 
     async def create_execution_plan(
@@ -226,10 +349,7 @@ class SqlControlPlaneRepository:
             module_plan_id=module_plan_id,
         )
         self.session.add(plan)
-        if isinstance(self.session, AsyncSession):
-            await self.session.flush()
-        else:
-            self.session.flush()
+        await self._flush()
         return plan
 
     async def get_check_request_status(

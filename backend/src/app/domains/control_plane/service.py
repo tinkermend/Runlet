@@ -11,7 +11,18 @@ from app.domains.control_plane.job_types import (
     RUN_CHECK_JOB_TYPE,
 )
 from app.domains.control_plane.repository import ControlPlaneRepository
-from app.domains.control_plane.scheduler_registry import SchedulerRegistry
+from app.domains.control_plane.runtime_policies import (
+    InvalidRuntimePolicyScheduleError,
+    UpsertSystemAuthPolicy,
+    UpsertSystemCrawlPolicy,
+    is_policy_effectively_active,
+    validate_policy_schedule_expr,
+)
+from app.domains.control_plane.scheduler_registry import (
+    SchedulerRegistry,
+    build_auth_policy_job_id,
+    build_crawl_policy_job_id,
+)
 from app.domains.control_plane.schemas import (
     AuthRefreshAccepted,
     CheckRequestAccepted,
@@ -20,9 +31,13 @@ from app.domains.control_plane.schemas import (
     CompileAssetsRequest,
     CreateCheckRequest,
     CrawlAccepted,
+    SystemAuthPolicyRead,
+    SystemCrawlPolicyRead,
     CrawlTriggerRequest,
     PageAssetChecksList,
     RunPageCheck,
+    UpdateSystemAuthPolicy,
+    UpdateSystemCrawlPolicy,
 )
 from app.domains.runner_service.script_renderer import RenderScriptResult
 from app.domains.runner_service.scheduler import (
@@ -204,6 +219,88 @@ class ControlPlaneService:
         except PublishedJobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    async def get_system_auth_policy(self, *, system_id: UUID) -> SystemAuthPolicyRead:
+        system = await self.repository.get_system_by_id(system_id=system_id)
+        if system is None:
+            raise HTTPException(status_code=404, detail="system not found")
+        policy = await self.repository.get_system_auth_policy(system_id=system_id)
+        if policy is None:
+            raise HTTPException(status_code=404, detail="auth policy not found")
+        return SystemAuthPolicyRead.model_validate(policy)
+
+    async def upsert_system_auth_policy(
+        self,
+        *,
+        system_id: UUID,
+        payload: UpdateSystemAuthPolicy,
+    ) -> SystemAuthPolicyRead:
+        system = await self.repository.get_system_by_id(system_id=system_id)
+        if system is None:
+            raise HTTPException(status_code=404, detail="system not found")
+        try:
+            validate_policy_schedule_expr(payload.schedule_expr)
+        except InvalidRuntimePolicyScheduleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        try:
+            policy = await self.repository.upsert_system_auth_policy(
+                system_id=system_id,
+                payload=UpsertSystemAuthPolicy(**payload.model_dump()),
+            )
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+
+        await self._sync_auth_policy_registry(
+            policy_id=policy.id,
+            system_id=policy.system_id,
+            enabled=policy.enabled,
+            state=policy.state,
+        )
+        return SystemAuthPolicyRead.model_validate(policy)
+
+    async def get_system_crawl_policy(self, *, system_id: UUID) -> SystemCrawlPolicyRead:
+        system = await self.repository.get_system_by_id(system_id=system_id)
+        if system is None:
+            raise HTTPException(status_code=404, detail="system not found")
+        policy = await self.repository.get_system_crawl_policy(system_id=system_id)
+        if policy is None:
+            raise HTTPException(status_code=404, detail="crawl policy not found")
+        return SystemCrawlPolicyRead.model_validate(policy)
+
+    async def upsert_system_crawl_policy(
+        self,
+        *,
+        system_id: UUID,
+        payload: UpdateSystemCrawlPolicy,
+    ) -> SystemCrawlPolicyRead:
+        system = await self.repository.get_system_by_id(system_id=system_id)
+        if system is None:
+            raise HTTPException(status_code=404, detail="system not found")
+        try:
+            validate_policy_schedule_expr(payload.schedule_expr)
+        except InvalidRuntimePolicyScheduleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        try:
+            policy = await self.repository.upsert_system_crawl_policy(
+                system_id=system_id,
+                payload=UpsertSystemCrawlPolicy(**payload.model_dump()),
+            )
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+
+        await self._sync_crawl_policy_registry(
+            policy_id=policy.id,
+            system_id=policy.system_id,
+            enabled=policy.enabled,
+            state=policy.state,
+        )
+        return SystemCrawlPolicyRead.model_validate(policy)
+
     async def refresh_auth(self, *, system_id: UUID) -> AuthRefreshAccepted:
         system = await self.repository.get_system_by_id(system_id=system_id)
         if system is None:
@@ -309,3 +406,33 @@ class ControlPlaneService:
         except Exception:
             await self.repository.rollback()
             raise
+
+    async def _sync_auth_policy_registry(
+        self,
+        *,
+        policy_id: UUID,
+        system_id: UUID,
+        enabled: bool,
+        state: str,
+    ) -> None:
+        if self.scheduler_registry is None:
+            return
+        if is_policy_effectively_active(enabled=enabled, state=state):
+            await self.scheduler_registry.upsert_auth_policy(policy_id)
+            return
+        self.scheduler_registry.remove_job(build_auth_policy_job_id(system_id))
+
+    async def _sync_crawl_policy_registry(
+        self,
+        *,
+        policy_id: UUID,
+        system_id: UUID,
+        enabled: bool,
+        state: str,
+    ) -> None:
+        if self.scheduler_registry is None:
+            return
+        if is_policy_effectively_active(enabled=enabled, state=state):
+            await self.scheduler_registry.upsert_crawl_policy(policy_id)
+            return
+        self.scheduler_registry.remove_job(build_crawl_policy_job_id(system_id))
