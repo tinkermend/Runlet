@@ -1,6 +1,7 @@
 ## 2026-04-02
 
 - 补齐 runtime policy 的 worker 侧审计字段：`system_auth_policies/system_crawl_policies` 新增 `last_succeeded_at`、`last_failed_at`、`last_failure_message`，`auth_refresh` 与 `crawl` worker 在成功/失败后会回写绑定 policy 的执行结果。
+- 认证刷新链路升级为验证码感知登录流程：`auth_type` 统一规范化为 `none/image_captcha/slider_captcha/sms_captcha`，支持按 `PLAYWRIGHT_HEADLESS` 启动浏览器、图形验证码回填、滑块验证码拖拽求解，并对 `sms_captcha` 返回显式 `not_implemented`。
 - 新增 `ddddocr` 验证码求解抽象与契约测试，首版支持图形验证码识别、滑块验证码偏移求解，并为短信验证码保留显式未实现入口与禁用态错误分流。
 - 补充仓库技术栈说明，并将 backend 依赖声明与本地锁文件对齐：为验证码能力显式加入 `ddddocr` 依赖，避免 `uv.lock` 与 `pyproject.toml` 不一致。
 - 补齐 worker 常驻进程入口：新增 `runlet-worker` 启动脚本，正式组装 `AuthService/CrawlerService/AssetCompilerService/RunnerService` 与四类队列 handler；同时新增 `PlaywrightRunnerRuntime`，让 `run_check` 在 worker 中可按 `module_plan` + 服务端认证注入执行。

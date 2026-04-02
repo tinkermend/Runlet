@@ -149,6 +149,21 @@ class RetryableFailingBrowserLoginAdapter:
         raise BrowserLoginFailure("temporary login failure", retryable=True)
 
 
+class UnexpectedBrowserLoginAdapter:
+    async def login(
+        self,
+        *,
+        login_url: str,
+        username: str,
+        password: str,
+        auth_type: str,
+        selectors: dict[str, object] | None,
+    ) -> BrowserLoginResult:
+        raise AssertionError(
+            f"browser login should not be called for auth_type={auth_type}"
+        )
+
+
 class InvalidStorageStateBrowserLoginAdapter:
     async def login(
         self,
@@ -211,7 +226,7 @@ async def test_refresh_auth_state_persists_valid_state(
             "login_url": "https://erp.example.com/login",
             "username": "erp-user",
             "password": "erp-password",
-            "auth_type": "form",
+            "auth_type": "none",
             "selectors": {
                 "username": "#username",
                 "password": "#password",
@@ -226,6 +241,25 @@ async def test_refresh_auth_state_persists_valid_state(
     assert persisted_state.status == "valid"
     assert persisted_state.is_valid is True
     assert persisted_state.storage_state["cookies"][0]["name"] == "sid"
+
+
+@pytest.mark.anyio
+async def test_refresh_auth_state_never_returns_storage_state_to_api(
+    db_session,
+    seeded_system_credentials,
+):
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=SuccessfulBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "success"
+    assert "storage_state" not in result.model_dump()
 
 
 @pytest.mark.anyio
@@ -268,6 +302,29 @@ async def test_refresh_auth_state_marks_retryable_failure_when_login_is_transien
 
 
 @pytest.mark.anyio
+async def test_refresh_auth_state_returns_not_implemented_for_sms_captcha(
+    db_session,
+    seeded_system_credentials,
+):
+    seeded_system_credentials.login_auth_type = "sms_captcha"
+    db_session.add(seeded_system_credentials)
+    db_session.commit()
+
+    auth_service = AuthService(
+        session=db_session,
+        crypto=PrefixDecryptor(),
+        browser_login=UnexpectedBrowserLoginAdapter(),
+    )
+
+    result = await auth_service.refresh_auth_state(
+        system_id=seeded_system_credentials.system_id
+    )
+
+    assert result.status == "failed"
+    assert result.message == "not_implemented"
+
+
+@pytest.mark.anyio
 async def test_refresh_auth_state_rejects_storage_state_without_real_auth_signals(
     db_session,
     seeded_system_credentials,
@@ -283,7 +340,7 @@ async def test_refresh_auth_state_rejects_storage_state_without_real_auth_signal
     )
 
     assert result.status == "failed"
-    assert result.message == "captured auth state is empty"
+    assert result.message == "auth_state_empty"
     assert db_session.exec(select(AuthState)).all() == []
 
 

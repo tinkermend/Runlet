@@ -9,7 +9,11 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
-from app.domains.auth_service.browser_login import BrowserLoginAdapter, BrowserLoginFailure
+from app.domains.auth_service.browser_login import (
+    BrowserLoginAdapter,
+    BrowserLoginFailure,
+    normalize_auth_mode,
+)
 from app.domains.auth_service.crypto import CredentialCrypto, LocalCredentialCrypto
 from app.domains.auth_service.schemas import (
     AuthRefreshResult,
@@ -54,11 +58,18 @@ class AuthService:
                     message="system credentials not found",
                 )
             decrypted = self._decrypt_credentials(credentials)
+            auth_mode = normalize_auth_mode(decrypted.auth_type)
+            if auth_mode == "sms_captcha":
+                return AuthRefreshResult(
+                    system_id=system.id,
+                    status="failed",
+                    message="not_implemented",
+                )
             login_result = await self.browser_login.login(
                 login_url=decrypted.login_url,
                 username=decrypted.username,
                 password=decrypted.password,
-                auth_type=decrypted.auth_type,
+                auth_type=auth_mode,
                 selectors=decrypted.selectors,
             )
             auth_state = self._build_auth_state(
@@ -119,7 +130,7 @@ class AuthService:
     ) -> AuthState:
         storage_state = login_result.storage_state
         if not self._is_storage_state_valid(storage_state):
-            raise ValueError("captured auth state is empty")
+            raise ValueError("auth_state_empty")
 
         validated_at = utcnow()
         cookies = cast(list[dict[str, object]], storage_state.get("cookies", []))
