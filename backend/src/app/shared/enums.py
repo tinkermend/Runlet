@@ -45,3 +45,19 @@ class PublishedJobState(StrEnum):
     ACTIVE = "active"
     PAUSED = "paused"
     ARCHIVED = "archived"
+
+
+class RuntimePolicyState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+
+
+class RuntimeTriggerSource(StrEnum):
+    SCHEDULER = "scheduler"
+    MANUAL = "manual"
+    PLATFORM = "platform"
+
+
+class CrawlScope(StrEnum):
+    FULL = "full"
+    INCREMENTAL = "incremental"

@@ -8,7 +8,7 @@ from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from app.infrastructure.db.base import BaseModel
-from app.shared.enums import PublishedJobState, QueuedJobStatus
+from app.shared.enums import PublishedJobState, QueuedJobStatus, RuntimeTriggerSource
 
 
 json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
@@ -36,6 +36,12 @@ class QueuedJob(BaseModel, table=True):
     result_payload: dict[str, object] | None = Field(
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
+    )
+    policy_id: UUID | None = Field(default=None, index=True)
+    trigger_source: str | None = Field(default=None, max_length=32)
+    scheduled_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
     status: str = Field(default=QueuedJobStatus.ACCEPTED.value, max_length=32)
     created_at: datetime = Field(
@@ -102,12 +108,13 @@ class JobRun(BaseModel, table=True):
     # Snapshot fields for auditability. PublishedJob may change after a run is created.
     script_render_id: UUID | None = Field(default=None, foreign_key="script_renders.id", index=True)
     asset_version: str | None = Field(default=None, max_length=64)
+    policy_id: UUID | None = Field(default=None, index=True)
     runtime_policy: str = Field(
         default="default",
         sa_column=sa.Column(sa.String(length=64), nullable=False, server_default="default"),
     )
     schedule_expr: str | None = Field(default=None, max_length=255)
-    trigger_source: str = Field(default="scheduler", max_length=32)
+    trigger_source: str = Field(default=RuntimeTriggerSource.SCHEDULER.value, max_length=32)
     run_status: str = Field(default=QueuedJobStatus.ACCEPTED.value, max_length=32)
     scheduled_at: datetime = Field(
         default_factory=utcnow,

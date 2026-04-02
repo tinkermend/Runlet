@@ -8,7 +8,12 @@ from alembic.runtime.migration import MigrationContext
 from sqlmodel import create_engine, inspect
 
 from app.infrastructure.db.base import BaseModel
-from app.infrastructure.db.models import assets, crawl, execution, jobs, systems  # noqa: F401
+from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
+
+
+@pytest.fixture
+def inspector(db_engine):
+    return inspect(db_engine)
 
 
 @pytest.fixture
@@ -54,6 +59,8 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "published_jobs",
         "queued_jobs",
         "script_renders",
+        "system_auth_policies",
+        "system_crawl_policies",
         "system_credentials",
         "systems",
     }
@@ -192,3 +199,18 @@ def test_runtime_datetime_columns_are_timezone_aware_in_metadata():
     ]
 
     assert all(column.type.timezone is True for column in runtime_columns)
+
+
+def test_runtime_policy_tables_exist(inspector):
+    table_names = set(inspector.get_table_names())
+    assert "system_auth_policies" in table_names
+    assert "system_crawl_policies" in table_names
+
+
+def test_runtime_policy_models_expose_expected_fields():
+    from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
+
+    assert hasattr(SystemAuthPolicy, "schedule_expr")
+    assert hasattr(SystemAuthPolicy, "last_triggered_at")
+    assert hasattr(SystemCrawlPolicy, "crawl_scope")
+    assert hasattr(SystemCrawlPolicy, "enabled")
