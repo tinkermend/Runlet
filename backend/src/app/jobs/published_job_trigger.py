@@ -36,6 +36,10 @@ class PublishedJobTrigger:
         run_scheduled_at = scheduled_at or utcnow()
         job_run = JobRun(
             published_job_id=published_job.id,
+            script_render_id=published_job.script_render_id,
+            asset_version=published_job.asset_version,
+            runtime_policy=published_job.runtime_policy,
+            schedule_expr=published_job.schedule_expr,
             trigger_source=trigger_source,
             run_status=QueuedJobStatus.ACCEPTED.value,
             scheduled_at=run_scheduled_at,
@@ -61,6 +65,7 @@ class PublishedJobTrigger:
             job_type=RUN_CHECK_JOB_TYPE,
             payload=payload,
         )
+        job_run.queued_job_id = queued_job_id
         queued_job = await self._get(QueuedJob, queued_job_id)
         if queued_job is not None:
             queued_job.payload = {**queued_job.payload, "queued_job_id": str(queued_job_id)}

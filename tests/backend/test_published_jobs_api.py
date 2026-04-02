@@ -113,6 +113,12 @@ def test_trigger_published_job_enqueues_run_check(client, created_published_job,
     assert queued_job.payload["scheduled_at"]
     assert job_run is not None
     assert job_run.published_job_id == UUID(created_published_job["published_job_id"])
+    # Audit linkage should be queryable from JobRun without re-parsing QueuedJob payload.
+    assert str(job_run.queued_job_id) == body["queued_job_id"]
+    assert str(job_run.script_render_id) == str(rendered_script.id)
+    assert job_run.asset_version == rendered_script.render_metadata["asset_version"]
+    assert job_run.runtime_policy == "published"
+    assert job_run.schedule_expr == "0 */2 * * *"
 
 
 def test_get_published_job_runs_returns_created_runs(client, created_published_job):

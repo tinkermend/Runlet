@@ -97,7 +97,16 @@ class JobRun(BaseModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     published_job_id: UUID = Field(foreign_key="published_jobs.id", index=True)
+    queued_job_id: UUID | None = Field(default=None, foreign_key="queued_jobs.id", index=True)
     execution_run_id: UUID | None = Field(default=None, foreign_key="execution_runs.id", index=True)
+    # Snapshot fields for auditability. PublishedJob may change after a run is created.
+    script_render_id: UUID | None = Field(default=None, foreign_key="script_renders.id", index=True)
+    asset_version: str | None = Field(default=None, max_length=64)
+    runtime_policy: str = Field(
+        default="default",
+        sa_column=sa.Column(sa.String(length=64), nullable=False, server_default="default"),
+    )
+    schedule_expr: str | None = Field(default=None, max_length=255)
     trigger_source: str = Field(default="scheduler", max_length=32)
     run_status: str = Field(default=QueuedJobStatus.ACCEPTED.value, max_length=32)
     scheduled_at: datetime = Field(
