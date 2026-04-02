@@ -191,7 +191,7 @@ flowchart TD
 - 判断哪些 cron 当前到点
 - 轮询数据库做统一触发
 
-建议将现有 `backend/src/app/domains/runner_service/scheduler.py` 拆分或改名，避免继续用 `scheduler` 命名承载非调度器业务。
+当前保留 `backend/src/app/domains/runner_service/scheduler.py` 文件名，但服务边界已收敛为发布任务创建/触发/查询与单条调度回调触发，不再包含全量扫描职责。
 
 ### 6.2 `RuntimePolicyService`
 
@@ -216,7 +216,7 @@ flowchart TD
   - `upsert_crawl_policy(...)`
   - `remove_job(...)`
 
-建议 job id 规范如下：
+当前 job id 规范如下：
 
 - `published_job:<published_job_id>`
 - `auth_policy:<system_id>`
@@ -386,70 +386,59 @@ flowchart TD
 
 ---
 
-## 9. 文件与模块调整建议
+## 9. 已落地文件与边界收口
 
-### 9.1 新增文件
+### 9.1 已新增核心文件
 
 - `backend/src/app/domains/control_plane/runtime_policies.py`
 - `backend/src/app/domains/control_plane/scheduler_registry.py`
 - `backend/src/app/runtime/scheduler_runtime.py`
 - `backend/src/app/runtime/scheduler_daemon.py`
 - `tests/backend/test_runtime_policies_api.py`
-- `tests/backend/test_runtime_scheduler.py`
-- `tests/backend/test_runtime_daemons.py`
+- `tests/backend/test_scheduler_runtime.py`
+- `tests/backend/test_scheduler_daemon.py`
 
-### 9.2 修改文件
+### 9.2 已修改关键文件
 
-- `backend/pyproject.toml`
-  - 新增 `apscheduler`
-- `backend/src/app/domains/control_plane/service.py`
-  - 接入 policy 管理与 scheduler registry 调用
-- `backend/src/app/api/deps.py`
-  - 注入 scheduler runtime 相关依赖
-- `backend/src/app/infrastructure/db/models/runtime_policies.py`
-  - 落地系统级策略表
-- `backend/src/app/jobs/auth_refresh_job.py`
-  - 增加 policy-trigger payload 审计字段
-- `backend/src/app/jobs/crawl_job.py`
-  - 增加 policy-trigger payload 审计字段
+- `backend/pyproject.toml`：已接入 `apscheduler`
+- `backend/src/app/domains/control_plane/service.py`：已接入 policy 写库后的 scheduler registry 同步
+- `backend/src/app/api/deps.py`：已注入 scheduler runtime 依赖
+- `backend/src/app/infrastructure/db/models/runtime_policies.py`：已落地系统级策略表
+- `backend/src/app/jobs/auth_refresh_job.py`：已写入 policy-trigger 审计字段
+- `backend/src/app/jobs/crawl_job.py`：已写入 policy-trigger 审计字段
 
-### 9.3 拆分或重命名文件
+### 9.3 `runner_service/scheduler.py` 收口状态
 
-- `backend/src/app/domains/runner_service/scheduler.py`
-
-建议拆分为：
-
-- `published_jobs.py` 或等价命名
-- 去掉 `trigger_due_jobs()` 这类扫描所有任务的逻辑
+- 保留 `scheduler.py` 命名，不再暴露旧 `SchedulerService` 边界
+- `PublishedJobService` 不再提供 `trigger_due_jobs()` 这类批量扫库接口
+- 调度回调统一走 `PublishedJobService.trigger_scheduled_job(...)`
 
 ---
 
-## 10. 迁移策略
+## 10. 实施收口状态
 
-### 10.1 分阶段实施
+### 10.1 主链收口
 
-建议按以下顺序推进：
+截至 2026-04-02，统一调度主链已收口完成：
 
-1. 先抽离现有 `published_jobs` 业务能力
-2. 再落地 `runtime_policies` 模型与 API
-3. 再接入 `SchedulerRegistry + SchedulerRuntime + APScheduler`
-4. 最后下线旧扫描主链、补齐回归测试与文档
+1. `published_jobs` 业务边界已从历史扫描模型收敛到单条触发模型
+2. `runtime_policies`（auth/crawl）模型、API 与调度注册已接入同一运行面
+3. `SchedulerRegistry + SchedulerRuntime + APScheduler` 已作为唯一平台定时触发主链
+4. 旧扫描主链已下线，并通过回归测试防止 `trigger_due_jobs`/`SchedulerService` 边界回归
 
-### 10.2 兼容期策略
+### 10.2 稳定态策略
 
-兼容期策略已结束，旧扫描链路已下线：
-
-- `PublishedJobService` 仅保留单条调度触发入口，不再提供批量扫描入口
-- 调度触发统一收口到 APScheduler callback
-- 回归测试中加入“不暴露 `trigger_due_jobs`”断言，防止旧入口回归
+- 正式执行仍统一走 `queued_jobs -> worker`
+- APScheduler 仅负责触发，不持有业务真相
+- 调度真相仍以数据库状态为准，运行时注册失败可通过 `reload_all()` 自愈
 
 ---
 
-## 11. 测试与验收设计
+## 11. 测试与验收结果
 
 ### 11.1 单元测试
 
-覆盖以下内容：
+已覆盖：
 
 - cron 表达式到 `CronTrigger` 的转换
 - 非法 cron 校验
@@ -458,7 +447,7 @@ flowchart TD
 
 ### 11.2 集成测试
 
-覆盖以下内容：
+已覆盖：
 
 - 创建 `published_job` 后成功注册 APScheduler job
 - `published_job` 到点后创建 `job_run` 并投递 `run_check`
@@ -468,7 +457,7 @@ flowchart TD
 
 ### 11.3 运行时测试
 
-覆盖以下内容：
+已覆盖：
 
 - `scheduler daemon` 启动时能从数据库恢复全部有效 job
 - 停用对象后对应 APScheduler job 被移除
@@ -476,7 +465,7 @@ flowchart TD
 
 ### 11.4 验收标准
 
-满足以下条件后，方可认为改造完成：
+当前已满足以下条件：
 
 1. 后端依赖中已正式接入 `apscheduler`
 2. `published_jobs` 不再依赖全量扫库来判定是否到点

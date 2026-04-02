@@ -202,6 +202,21 @@ curl "http://127.0.0.1:8000/api/v1/published-jobs/<published-job-id>/runs"
 
 可查看该发布任务关联的 `job_runs` 列表及其 `execution_run_id/run_status/started_at/finished_at`。
 
+### 统一调度运行时结构
+
+当前调度运行时由以下组件组成：
+
+- `SchedulerRuntime`（`src/app/runtime/scheduler_runtime.py`）：APScheduler 的进程内宿主，负责启动/停止、重载注册项，并在 job fire 后回调到平台 enqueue 边界。
+- `SchedulerRegistry`（`src/app/domains/control_plane/scheduler_registry.py`）：数据库真相到 APScheduler job 的映射层，负责 `published_job`、`auth_policy`、`crawl_policy` 的 upsert/remove。
+- `scheduler_daemon`（`src/app/runtime/scheduler_daemon.py`）：常驻进程入口，负责托管 `SchedulerRuntime` 生命周期。
+
+当前触发链路：
+
+1. `control_plane` 写入 `published_jobs` 或 `runtime_policies` 后调用 `SchedulerRegistry` 注册/更新 APScheduler 触发器。
+2. APScheduler 到点 fire，`SchedulerRuntime` 监听调度事件并按 job kind 回调。
+3. `published_job` 回调重入 `PublishedJobService.trigger_scheduled_job(...)`，创建 `job_run` 并入队 `run_check`。
+4. `auth_policy`/`crawl_policy` 回调分别入队 `auth_refresh`/`crawl`，并写入 `policy_id`、`trigger_source=scheduler`、`scheduled_at` 审计字段。
+
 ### APScheduler 回调触发
 
 当前 runner 域的调度触发边界是 `PublishedJobService.trigger_scheduled_job(published_job_id, scheduled_at)`。该入口由 APScheduler job callback 按 `published_job_id + scheduled_at` 调用：

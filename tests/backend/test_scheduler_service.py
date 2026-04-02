@@ -17,6 +17,12 @@ def test_published_job_service_no_longer_exposes_bulk_cron_scanner():
     assert not hasattr(PublishedJobService, "trigger_due_jobs")
 
 
+def test_runner_scheduler_module_no_longer_exposes_legacy_scheduler_service():
+    from app.domains.runner_service import scheduler as scheduler_module
+
+    assert not hasattr(scheduler_module, "SchedulerService")
+
+
 @pytest.fixture
 def seeded_schedulable_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(

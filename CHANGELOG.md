@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 补齐统一调度文档收口：将 APScheduler 设计文档改写为“已实施快照”语态，补充 README 中 `SchedulerRuntime/SchedulerRegistry/scheduler_daemon` 运行时结构与 callback 回流路径说明，并在调度回归中新增模块级断言防止 `SchedulerService` 旧边界回归。
 - 下线旧批量扫描遗留语义：补充 `PublishedJobService` 不再暴露 `trigger_due_jobs` 的回归断言，更新 scheduler/README/统一调度设计文档措辞，明确发布任务调度已统一为 APScheduler callback 单条触发边界。
 - 修复发布任务创建在非法 cron 下的脏写与错误码问题：`schedule_expr` 现在在 `PublishedJobService` 提交前校验，非法表达式返回 422 且不持久化 `published_jobs`；同时清理 `SchedulerRegistry` 未使用构造参数。
 - 新增 APScheduler registry（非持久化 job store）并接入 published job 创建链路：统一 `published_job/auth_policy/crawl_policy` job id 规范，发布任务创建后自动 upsert 触发器，`enabled=false`/非 active 状态时自动移除注册任务。
