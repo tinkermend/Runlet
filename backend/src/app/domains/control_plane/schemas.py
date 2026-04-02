@@ -4,6 +4,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.shared.enums import CrawlScope
+
+
+ALLOWED_AUTH_MODES = {
+    "none",
+    "image_captcha",
+    "slider_captcha",
+    "sms_captcha",
+}
+
 
 def _validate_required_text(value: str) -> str:
     normalized = value.strip()
@@ -23,6 +33,14 @@ def _validate_positive_int(value: int) -> int:
     if value <= 0:
         raise ValueError("value must be greater than 0")
     return value
+
+
+def _validate_allowed_text(*, value: str, allowed: set[str], field_name: str) -> str:
+    normalized = _validate_required_text(value).lower()
+    if normalized not in allowed:
+        allowed_text = ", ".join(sorted(allowed))
+        raise ValueError(f"{field_name} must be one of: {allowed_text}")
+    return normalized
 
 
 class CreateCheckRequest(BaseModel):
@@ -140,10 +158,19 @@ class UpdateSystemAuthPolicy(BaseModel):
     auth_mode: str
     captcha_provider: str = "ddddocr"
 
-    @field_validator("schedule_expr", "auth_mode", "captcha_provider", mode="before")
+    @field_validator("schedule_expr", "captcha_provider", mode="before")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         return _validate_required_text(value)
+
+    @field_validator("auth_mode", mode="before")
+    @classmethod
+    def validate_auth_mode(cls, value: str) -> str:
+        return _validate_allowed_text(
+            value=value,
+            allowed=ALLOWED_AUTH_MODES,
+            field_name="auth_mode",
+        )
 
 
 class SystemAuthPolicyRead(BaseModel):
@@ -163,10 +190,19 @@ class UpdateSystemCrawlPolicy(BaseModel):
     schedule_expr: str
     crawl_scope: str = "full"
 
-    @field_validator("schedule_expr", "crawl_scope", mode="before")
+    @field_validator("schedule_expr", mode="before")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         return _validate_required_text(value)
+
+    @field_validator("crawl_scope", mode="before")
+    @classmethod
+    def validate_crawl_scope(cls, value: str) -> str:
+        return _validate_allowed_text(
+            value=value,
+            allowed={scope.value for scope in CrawlScope},
+            field_name="crawl_scope",
+        )
 
 
 class SystemCrawlPolicyRead(BaseModel):

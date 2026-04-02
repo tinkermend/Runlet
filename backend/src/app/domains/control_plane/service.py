@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -53,6 +54,7 @@ from app.infrastructure.queue.dispatcher import QueueDispatcher
 
 
 DEFAULT_AUTH_POLICY = "server_injected"
+logger = logging.getLogger(__name__)
 
 
 class ControlPlaneService:
@@ -252,7 +254,7 @@ class ControlPlaneService:
             await self.repository.rollback()
             raise
 
-        await self._sync_auth_policy_registry(
+        await self._sync_auth_policy_registry_safely(
             policy_id=policy.id,
             system_id=policy.system_id,
             enabled=policy.enabled,
@@ -293,7 +295,7 @@ class ControlPlaneService:
             await self.repository.rollback()
             raise
 
-        await self._sync_crawl_policy_registry(
+        await self._sync_crawl_policy_registry_safely(
             policy_id=policy.id,
             system_id=policy.system_id,
             enabled=policy.enabled,
@@ -436,3 +438,47 @@ class ControlPlaneService:
             await self.scheduler_registry.upsert_crawl_policy(policy_id)
             return
         self.scheduler_registry.remove_job(build_crawl_policy_job_id(system_id))
+
+    async def _sync_auth_policy_registry_safely(
+        self,
+        *,
+        policy_id: UUID,
+        system_id: UUID,
+        enabled: bool,
+        state: str,
+    ) -> None:
+        try:
+            await self._sync_auth_policy_registry(
+                policy_id=policy_id,
+                system_id=system_id,
+                enabled=enabled,
+                state=state,
+            )
+        except Exception:
+            logger.exception(
+                "failed to sync auth policy registry: policy_id=%s system_id=%s",
+                policy_id,
+                system_id,
+            )
+
+    async def _sync_crawl_policy_registry_safely(
+        self,
+        *,
+        policy_id: UUID,
+        system_id: UUID,
+        enabled: bool,
+        state: str,
+    ) -> None:
+        try:
+            await self._sync_crawl_policy_registry(
+                policy_id=policy_id,
+                system_id=system_id,
+                enabled=enabled,
+                state=state,
+            )
+        except Exception:
+            logger.exception(
+                "failed to sync crawl policy registry: policy_id=%s system_id=%s",
+                policy_id,
+                system_id,
+            )

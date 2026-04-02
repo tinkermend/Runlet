@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -165,6 +166,7 @@ class SqlControlPlaneRepository:
     ) -> SystemAuthPolicy:
         policy = await self.get_system_auth_policy(system_id=system_id)
         next_state = resolve_runtime_policy_state(enabled=payload.enabled)
+        created_new_row = policy is None
         if policy is None:
             policy = SystemAuthPolicy(
                 system_id=system_id,
@@ -183,7 +185,26 @@ class SqlControlPlaneRepository:
             policy.captcha_provider = payload.captcha_provider
             self.session.add(policy)
 
-        await self._flush()
+        try:
+            await self._flush()
+        except IntegrityError as exc:
+            if not created_new_row or not _is_unique_system_id_violation(
+                exc=exc,
+                table_name="system_auth_policies",
+            ):
+                raise
+            await self.rollback()
+            policy = await self.get_system_auth_policy(system_id=system_id)
+            if policy is None:
+                raise
+            policy.enabled = payload.enabled
+            policy.state = next_state
+            policy.schedule_expr = payload.schedule_expr
+            policy.auth_mode = payload.auth_mode
+            policy.captcha_provider = payload.captcha_provider
+            self.session.add(policy)
+            await self._flush()
+
         await self._refresh(policy)
         return policy
 
@@ -199,6 +220,7 @@ class SqlControlPlaneRepository:
     ) -> SystemCrawlPolicy:
         policy = await self.get_system_crawl_policy(system_id=system_id)
         next_state = resolve_runtime_policy_state(enabled=payload.enabled)
+        created_new_row = policy is None
         if policy is None:
             policy = SystemCrawlPolicy(
                 system_id=system_id,
@@ -215,7 +237,25 @@ class SqlControlPlaneRepository:
             policy.crawl_scope = payload.crawl_scope
             self.session.add(policy)
 
-        await self._flush()
+        try:
+            await self._flush()
+        except IntegrityError as exc:
+            if not created_new_row or not _is_unique_system_id_violation(
+                exc=exc,
+                table_name="system_crawl_policies",
+            ):
+                raise
+            await self.rollback()
+            policy = await self.get_system_crawl_policy(system_id=system_id)
+            if policy is None:
+                raise
+            policy.enabled = payload.enabled
+            policy.state = next_state
+            policy.schedule_expr = payload.schedule_expr
+            policy.crawl_scope = payload.crawl_scope
+            self.session.add(policy)
+            await self._flush()
+
         await self._refresh(policy)
         return policy
 
@@ -448,3 +488,8 @@ class SqlControlPlaneRepository:
             await self.session.rollback()
         else:
             self.session.rollback()
+
+
+def _is_unique_system_id_violation(*, exc: IntegrityError, table_name: str) -> bool:
+    message = str(exc).lower()
+    return "unique" in message and table_name in message and "system_id" in message
