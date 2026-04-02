@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 新增 APScheduler registry（非持久化 job store）并接入 published job 创建链路：统一 `published_job/auth_policy/crawl_policy` job id 规范，发布任务创建后自动 upsert 触发器，`enabled=false`/非 active 状态时自动移除注册任务。
 - 收敛发布任务调度服务边界为 `PublishedJobService.trigger_scheduled_job`，补回按 `scheduled_at` 对 `schedule_expr` 的二次校验，并保留“同一分钟去重”，防止计划变更后的陈旧触发继续入队。
 - 新增 runtime policy schema 基线：增加 `system_auth_policies/system_crawl_policies` 模型与 `0006_runtime_policies_and_scheduler_runtime` 迁移，并为后续调度链路补齐 `queued_jobs/job_runs` 的 `policy_id` 及队列审计字段 `trigger_source/scheduled_at`。
 - 新增 APScheduler 统一调度改造实施计划，按 `runtime_policies` schema、发布任务服务拆分、APScheduler registry、runtime policy API、scheduler runtime/daemon、旧扫描链清理六个任务拆分为可执行步骤。
