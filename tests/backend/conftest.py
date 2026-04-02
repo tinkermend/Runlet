@@ -9,6 +9,7 @@ from sqlmodel import select
 
 from app.main import create_app
 from app.infrastructure.db.base import BaseModel
+from app.infrastructure.db.models import runtime_policies  # noqa: F401
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
 from app.infrastructure.db.models.systems import AuthState, System, SystemCredential
