@@ -11,6 +11,12 @@ from app.infrastructure.db.models.execution import ScriptRender
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
 
 
+def test_published_job_service_no_longer_exposes_bulk_cron_scanner():
+    from app.domains.runner_service.scheduler import PublishedJobService
+
+    assert not hasattr(PublishedJobService, "trigger_due_jobs")
+
+
 @pytest.fixture
 def seeded_schedulable_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(

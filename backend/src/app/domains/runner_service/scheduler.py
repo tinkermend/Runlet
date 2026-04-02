@@ -78,6 +78,11 @@ class PublishedJobRunsList(BaseModel):
 
 
 class PublishedJobService:
+    """Published job 服务层。
+
+    该服务仅保留发布任务的 CRUD/触发与单条调度回调入口，不再提供全量 cron 扫描能力。
+    """
+
     def __init__(
         self,
         *,

@@ -202,16 +202,16 @@ curl "http://127.0.0.1:8000/api/v1/published-jobs/<published-job-id>/runs"
 
 可查看该发布任务关联的 `job_runs` 列表及其 `execution_run_id/run_status/started_at/finished_at`。
 
-### Cron 扫描触发
+### APScheduler 回调触发
 
-当前 runner 域的调度触发边界是 `PublishedJobService.trigger_scheduled_job(published_job_id, scheduled_at)`：
+当前 runner 域的调度触发边界是 `PublishedJobService.trigger_scheduled_job(published_job_id, scheduled_at)`。该入口由 APScheduler job callback 按 `published_job_id + scheduled_at` 调用：
 
 1. 对目标 `published_job` 加锁并校验 `state=active`
 2. 用传入的 `scheduled_at` 对 `schedule_expr` 做二次匹配，防止旧触发器在计划变更后继续入队
 3. 校验同一分钟是否已触发，避免重复创建 `job_run`
 4. 通过 `PublishedJobTrigger` 创建 `job_run` 并投递 `run_check`
 
-也就是说，cron 调度的结果仍然回到平台内部的 `run_check` 执行链，而不是直接在调度器里执行 Playwright 脚本。
+也就是说，调度回调的结果仍然回到平台内部的 `run_check` 执行链，而不是直接在调度器里执行 Playwright 脚本。
 
 ## 运行测试
 

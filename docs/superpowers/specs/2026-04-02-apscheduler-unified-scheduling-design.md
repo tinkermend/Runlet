@@ -2,18 +2,18 @@
 
 **日期：** 2026-04-02  
 **作者：** Codex  
-**状态：** Draft
+**状态：** 已实施（Implemented）
 
 ---
 
 ## 1. 文档定位
 
-本文档定义后端调度能力从“自研 cron 扫描”改造为“数据库为真相、APScheduler 为统一触发器”的设计方案，覆盖以下两类调度对象：
+本文档定义后端调度能力从“自研 cron 扫描”改造为“数据库为真相、APScheduler 为统一触发器”的方案，并同步截至 2026-04-02 的实现对齐状态，覆盖以下两类调度对象：
 
 - `published_jobs`
 - `system_auth_policies` / `system_crawl_policies`
 
-本文档只描述设计，不包含实现提交。设计继续遵守仓库中的核心约束：
+本文档保留设计决策，并补充已落地实现状态。设计继续遵守仓库中的核心约束：
 
 - 检查资产是主模型
 - Playwright 脚本是派生产物
@@ -23,21 +23,16 @@
 
 ---
 
-## 2. 背景与问题归因
+## 2. 背景与实施对齐
 
-当前仓库在文档层与实现层之间存在明显漂移：
+本文档创建时用于解决“文档定义 APScheduler、代码仍使用自研扫描”的漂移问题。  
+截至 2026-04-02，改造已按计划落地，当前对齐状态如下：
 
-1. 多份设计与实施计划把 `APScheduler` 写入技术栈。
-2. 实际后端依赖未引入 `apscheduler`。
-3. 当前落地的调度实现是自研数据库扫描：
-   - `published_jobs` 由 `SchedulerService.trigger_due_jobs()` 扫描并匹配 cron。
-   - `auth/crawl runtime policy` 还停留在 design/plan，相关 `runtime_scheduler.py`、`scheduler_daemon.py` 尚未实现。
-
-这说明当前状态并不是“APScheduler 已经被实现后又回退”，而是：
-
-- 第一阶段为了优先打通 `published_job -> queued_job -> worker` 主链，先落了最小可用的 cron 扫描实现；
-- 第二阶段 auth/crawl runtime 设计继续扩展了 `scheduler daemon`，但尚未实现；
-- 最终形成“文档定义 APScheduler、代码实际未接入”的漂移状态。
+1. 后端已引入 `apscheduler`，并建立 `SchedulerRegistry + SchedulerRuntime + scheduler daemon` 主链。
+2. `published_jobs` 已移除批量扫库触发入口，不再暴露 `SchedulerService.trigger_due_jobs()` 风格接口。
+3. 调度触发统一通过 APScheduler callback 调用 `PublishedJobService.trigger_scheduled_job(published_job_id, scheduled_at)`。
+4. `runtime_policies`（auth/crawl）schema、API 与调度注册链路已接入统一触发面，并回到 `queued_jobs -> worker` 执行主链。
+5. 文档、测试与实现已围绕“数据库真相 + APScheduler 触发器”重新对齐。
 
 ---
 
@@ -442,11 +437,11 @@ flowchart TD
 
 ### 10.2 兼容期策略
 
-在 APScheduler 主链切稳之前，可短暂保留旧扫描逻辑作为开发兼容，但必须满足：
+兼容期策略已结束，旧扫描链路已下线：
 
-- 生产默认不开启旧扫描入口
-- 文档明确旧逻辑为过渡态
-- 旧入口完成迁移后应删除，避免长期双链路
+- `PublishedJobService` 仅保留单条调度触发入口，不再提供批量扫描入口
+- 调度触发统一收口到 APScheduler callback
+- 回归测试中加入“不暴露 `trigger_due_jobs`”断言，防止旧入口回归
 
 ---
 
@@ -491,19 +486,14 @@ flowchart TD
 
 ---
 
-## 12. 工作量评估
+## 12. 实施结果与验证
 
-基于当前仓库状态，工作量评估如下：
+截至 2026-04-02，本设计对应改造已完成主要收口：
 
-- 抽离 `published_jobs` 业务服务：0.5 到 1 天
-- 落地 `runtime_policies` 模型、仓储与 API：2 到 4 天
-- 引入 `APScheduler` 与统一 runtime：2 到 3 天
-- 回归测试、README、CHANGELOG、收尾清理：1 到 2 天
-
-总体预计：
-
-- 保守估计 7 到 10 个工作日
-- 如果 auth/crawl runtime 相关配套实现仍有较多缺口，则可能延伸到 10 到 12 个工作日
+- `published_jobs`、`system_auth_policies`、`system_crawl_policies` 已统一接入 APScheduler 调度触发面
+- 调度触发与正式执行边界保持不变：触发走 callback，执行走 `queued_jobs -> worker`
+- 旧批量扫描入口已移除，并以回归断言防止 `trigger_due_jobs` 类接口回归
+- 文档（README/spec）与变更记录（CHANGELOG）已同步到统一调度语义
 
 ---
 
@@ -511,9 +501,9 @@ flowchart TD
 
 ### 13.1 主要风险
 
-- `runtime_policies` 尚未落地，实际改造范围会大于“只替换调度器”
-- 当前 `runner_service/scheduler.py` 命名与职责混杂，拆分时容易影响既有 API 与测试
-- 如果过渡期保留双链路过久，文档与实现会再次漂移
+- 当前仍为单实例 scheduler 部署模型，多实例场景仍需额外的 leader 选举/锁策略
+- `runner_service/scheduler.py` 命名仍带历史包袱，后续若重命名需同步 API 与测试
+- auth/crawl/runtime 相关链路新增后，需持续保持调度回归测试覆盖避免边界回退
 
 ### 13.2 后续可扩展方向
 
@@ -535,4 +525,4 @@ flowchart TD
 - `control_plane` 继续做跨域编排
 - `worker` 继续做正式执行
 
-在这一前提下，`published_jobs` 与未来的 `runtime_policies` 才能落到同一套稳定、可审计、可恢复的调度框架中，并消除当前“文档定义 APScheduler、代码实际未使用”的漂移问题。
+在这一前提下，`published_jobs` 与 `runtime_policies` 已落到同一套稳定、可审计、可恢复的调度框架中，并消除了“文档定义 APScheduler、代码实际未使用”的漂移问题。
