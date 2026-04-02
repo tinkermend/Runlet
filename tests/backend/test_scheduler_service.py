@@ -79,7 +79,6 @@ async def test_published_job_service_triggers_single_job_once_per_minute(
     db_session,
 ):
     fixed_now = datetime(2026, 4, 2, 8, 0, tzinfo=UTC)
-    published_job_service.now_provider = lambda: fixed_now
 
     first = await published_job_service.trigger_scheduled_job(
         published_job_id=seeded_published_job.id,
@@ -99,3 +98,45 @@ async def test_published_job_service_triggers_single_job_once_per_minute(
     assert job_runs[0].scheduled_at.replace(tzinfo=UTC) == fixed_now
     assert any(job.job_type == "run_check" for job in queued_jobs)
     assert queued_jobs[0].payload["scheduled_at"] == fixed_now.isoformat()
+
+
+@pytest.mark.anyio
+async def test_published_job_service_skips_stale_schedule_fire(
+    published_job_service,
+    seeded_published_job,
+    db_session,
+):
+    seeded_published_job.schedule_expr = "0 */2 * * *"
+    db_session.add(seeded_published_job)
+    db_session.commit()
+    db_session.refresh(seeded_published_job)
+
+    triggered = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=datetime(2026, 4, 2, 8, 1, tzinfo=UTC),
+    )
+
+    assert triggered is False
+    assert db_session.exec(select(JobRun)).all() == []
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+@pytest.mark.anyio
+async def test_published_job_service_skips_paused_job(
+    published_job_service,
+    seeded_published_job,
+    db_session,
+):
+    seeded_published_job.state = "paused"
+    db_session.add(seeded_published_job)
+    db_session.commit()
+    db_session.refresh(seeded_published_job)
+
+    triggered = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=datetime(2026, 4, 2, 8, 0, tzinfo=UTC),
+    )
+
+    assert triggered is False
+    assert db_session.exec(select(JobRun)).all() == []
+    assert db_session.exec(select(QueuedJob)).all() == []

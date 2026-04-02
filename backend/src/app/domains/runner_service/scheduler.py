@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -13,10 +12,6 @@ from app.infrastructure.db.models.jobs import JobRun, PublishedJob
 from app.infrastructure.queue.dispatcher import QueueDispatcher
 from app.jobs.published_job_trigger import PublishedJobTrigger
 from app.shared.enums import PublishedJobState
-
-
-def utcnow() -> datetime:
-    return datetime.now(UTC)
 
 
 def _validate_required_text(value: str) -> str:
@@ -79,11 +74,9 @@ class PublishedJobService:
         *,
         session: Session | AsyncSession,
         dispatcher: QueueDispatcher,
-        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self.session = session
         self.dispatcher = dispatcher
-        self.now_provider = now_provider or utcnow
         self.trigger = PublishedJobTrigger(session=session, dispatcher=dispatcher)
 
     async def create_published_job(
@@ -180,6 +173,8 @@ class PublishedJobService:
         locked_job = await self._lock_published_job(published_job_id=published_job_id)
         if locked_job is None or _state_value(locked_job.state) != PublishedJobState.ACTIVE.value:
             return False
+        if not _cron_matches(schedule_expr=locked_job.schedule_expr, scheduled_at=scheduled_at):
+            return False
         if await self._already_triggered_for_minute(
             published_job_id=locked_job.id,
             scheduled_at=scheduled_at,
@@ -260,3 +255,27 @@ def _state_value(value: PublishedJobState | str) -> str:
 def _minute_key(value: datetime) -> datetime:
     normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return normalized.astimezone(UTC).replace(second=0, microsecond=0)
+
+
+def _cron_matches(*, schedule_expr: str, scheduled_at: datetime) -> bool:
+    parts = schedule_expr.split()
+    if len(parts) != 5:
+        return False
+    minute, hour, _day, _month, _weekday = parts
+    trigger_time = _minute_key(scheduled_at)
+    return _cron_field_matches(minute, trigger_time.minute) and _cron_field_matches(hour, trigger_time.hour)
+
+
+def _cron_field_matches(field: str, value: int) -> bool:
+    if field == "*":
+        return True
+    if field.startswith("*/"):
+        try:
+            interval = int(field[2:])
+        except ValueError:
+            return False
+        return interval > 0 and value % interval == 0
+    try:
+        return int(field) == value
+    except ValueError:
+        return False

@@ -204,12 +204,12 @@ curl "http://127.0.0.1:8000/api/v1/published-jobs/<published-job-id>/runs"
 
 ### Cron 扫描触发
 
-当前调度逻辑由 `SchedulerService.trigger_due_jobs()` 负责：
+当前 runner 域的调度触发边界是 `PublishedJobService.trigger_scheduled_job(published_job_id, scheduled_at)`：
 
-1. 扫描 `state=active` 的 `published_jobs`
-2. 用统一的 `now` 判断 cron 是否到点
-3. 对目标 `published_job` 加锁后再次校验，避免同一分钟重复触发
-4. 创建 `job_run` 并投递 `run_check`
+1. 对目标 `published_job` 加锁并校验 `state=active`
+2. 用传入的 `scheduled_at` 对 `schedule_expr` 做二次匹配，防止旧触发器在计划变更后继续入队
+3. 校验同一分钟是否已触发，避免重复创建 `job_run`
+4. 通过 `PublishedJobTrigger` 创建 `job_run` 并投递 `run_check`
 
 也就是说，cron 调度的结果仍然回到平台内部的 `run_check` 执行链，而不是直接在调度器里执行 Playwright 脚本。
 
