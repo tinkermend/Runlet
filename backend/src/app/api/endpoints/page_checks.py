@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.api.deps import ControlPlaneServiceDep
 from app.domains.control_plane.schemas import (
     CheckRequestAccepted,
     PageAssetChecksList,
     RunPageCheck,
+)
+from app.domains.runner_service.script_renderer import (
+    RenderScriptRequest,
+    RenderScriptResult,
 )
 
 
@@ -30,3 +34,22 @@ async def list_page_asset_checks(
     service: ControlPlaneServiceDep,
 ) -> PageAssetChecksList:
     return await service.list_page_asset_checks(page_asset_id)
+
+
+@router.post(
+    "/page-checks/{page_check_id}:render-script",
+    status_code=201,
+    response_model=RenderScriptResult,
+)
+async def render_page_check_script(
+    page_check_id: UUID,
+    payload: RenderScriptRequest,
+    service: ControlPlaneServiceDep,
+) -> RenderScriptResult:
+    try:
+        return await service.render_page_check_script(
+            page_check_id=page_check_id,
+            render_mode=payload.render_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

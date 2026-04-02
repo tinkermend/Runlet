@@ -23,6 +23,7 @@ from app.domains.control_plane.schemas import (
     PageAssetChecksList,
     RunPageCheck,
 )
+from app.domains.runner_service.script_renderer import RenderScriptResult
 from app.infrastructure.queue.dispatcher import QueueDispatcher
 
 
@@ -35,9 +36,11 @@ class ControlPlaneService:
         *,
         repository: ControlPlaneRepository,
         dispatcher: QueueDispatcher,
+        script_renderer=None,
     ) -> None:
         self.repository = repository
         self.dispatcher = dispatcher
+        self.script_renderer = script_renderer
 
     async def submit_check_request(
         self,
@@ -123,6 +126,22 @@ class ControlPlaneService:
         if page_asset_checks is None:
             raise HTTPException(status_code=404, detail="page asset not found")
         return page_asset_checks
+
+    async def render_page_check_script(
+        self,
+        *,
+        page_check_id: UUID,
+        render_mode: str,
+    ) -> RenderScriptResult:
+        if self.script_renderer is None:
+            raise HTTPException(status_code=500, detail="script renderer is not configured")
+        target = await self.repository.get_page_check_run_target(page_check_id=page_check_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="page check not found")
+        return await self.script_renderer.render_page_check(
+            page_check_id=target.page_check.id,
+            render_mode=render_mode,
+        )
 
     async def refresh_auth(self, *, system_id: UUID) -> AuthRefreshAccepted:
         system = await self.repository.get_system_by_id(system_id=system_id)
