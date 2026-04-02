@@ -27,6 +27,7 @@
 - MCP: FastMCP
 - Front: React + Vite
 - Test: pytest
+- 验证码识别: ddddocr
 
 ## 架构约束
 

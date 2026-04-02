@@ -91,6 +91,8 @@ playwright-report/
 playwright/.cache/
 test/
 
+output/
+
 # Git worktrees
 worktrees/
 
