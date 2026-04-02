@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 新增后端认证与采集运行闭环设计文档，明确 `scheduler daemon + worker daemon`、系统级 `auth/crawl` 策略模型、`ddddocr` 验证码抽象、真实 crawler extractor 边界，以及手动/定时认证与采集的统一队列主链。
 - 新增 `runner_service` 域与确定性 `module_executor`，支持在服务端注入认证后消费 `module_plan` 执行 `auth.inject_state`、`nav.menu_chain`、`page.wait_ready`、`assert.table_visible`、`assert.page_open` 等模块步骤，并持久化 `execution_runs/execution_artifacts`。
 - 新增 `run_check` worker 链路，worker 现在可以正式消费 `run_check` 队列任务、回写运行状态，并把执行结果与 `execution_run`、`job_run` 审计链路关联起来。
 - 新增 Playwright 脚本渲染能力与 `/api/v1/page-checks/{page_check_id}:render-script` 接口，支持按 `runtime/published` 模式生成稳定脚本并持久化 `script_renders` 与渲染元数据。
