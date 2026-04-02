@@ -27,3 +27,21 @@ class QueuedJobStatus(StrEnum):
     FAILED = "failed"
     RETRYABLE_FAILED = "retryable_failed"
     SKIPPED = "skipped"
+
+
+class ExecutionResultStatus(StrEnum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+class RenderResultStatus(StrEnum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+class PublishedJobState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ARCHIVED = "archived"

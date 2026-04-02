@@ -44,6 +44,7 @@ uv run uvicorn app.main:create_app --factory --reload
 - `AuthRefreshJobHandler`
 - `CrawlJobHandler`
 - `AssetCompileJobHandler`
+- `RunCheckJobHandler`
 
 然后在循环中调用 `await worker.run_once()`。
 
@@ -119,6 +120,99 @@ curl -X POST "http://127.0.0.1:8000/api/v1/snapshots/<snapshot-id>/compile-asset
 - `page_checks.module_plan_id`：检查与模块计划的绑定
 - `asset_snapshots`：每次编译的指纹与 diff 记录
 
+## run_check 执行链路
+
+`run_check` 是平台内部执行 `page_check` 的正式作业类型，默认围绕 `page_check + module_plan + runtime_policy` 运行，而不是直接执行一段孤立脚本文本。当前链路如下：
+
+1. control plane 受理检查请求，优先通过 `intent_aliases -> page_assets -> page_checks` 命中检查，并创建 `execution_request`、`execution_plan`、`queued_job`
+2. worker 取到 `run_check` 后，调用 `RunnerService.run_page_check()`
+3. runner service 解析 `page_check/module_plan`，读取有效认证态，并在服务端注入认证后按步骤执行模块计划
+4. 执行结果写回 `execution_runs`、`execution_artifacts`，队列状态与 `queued_jobs.result_payload` 同步更新
+
+当前 `RunCheckJobHandler` 也会在调度场景下把 `published_job_id`、`job_run_id`、`script_render_id`、`asset_version`、`runtime_policy`、`schedule_expr` 等上下文写入 `result_payload`，便于后续审计。
+
+## 渲染 Playwright 脚本
+
+渲染接口：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/page-checks/<page-check-id>:render-script" \
+  -H "content-type: application/json" \
+  -d '{"render_mode":"published"}'
+```
+
+接口会：
+
+1. 解析 `page_check -> module_plan`
+2. 生成稳定的 Playwright Python 脚本文本
+3. 持久化一条 `script_renders` 记录
+
+当前支持：
+
+- `render_mode=runtime`
+- `render_mode=published`
+
+`script_renders.render_metadata` 会保存 `asset_version`、`module_plan_id`、`plan_version`、`runtime_policy`、`auth_policy`、`script_sha256`、`script_path` 等元数据。认证策略始终保持为“由平台服务端注入”，不会把完整 `storage_state` 作为上层通用输出。
+
+## 发布任务与调度
+
+### 创建发布任务
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/published-jobs" \
+  -H "content-type: application/json" \
+  -d '{
+    "script_render_id":"<script-render-id>",
+    "page_check_id":"<page-check-id>",
+    "schedule_type":"cron",
+    "schedule_expr":"0 */2 * * *",
+    "trigger_source":"platform",
+    "enabled":true
+  }'
+```
+
+创建时会绑定：
+
+- `page_check_id`
+- `script_render_id`
+- `asset_version`
+- `runtime_policy`
+- `schedule_expr`
+
+平台的主调度对象仍然是 `published_job/page_check/asset_version/runtime_policy` 组合，而不是单独调度脚本文本。
+
+### 手动触发发布任务
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/published-jobs/<published-job-id>:trigger"
+```
+
+接口会创建：
+
+- `job_runs`
+- 对应的 `run_check` 队列任务
+
+当前队列 payload 会保留 `published_job_id`、`job_run_id`、`queued_job_id`、`script_render_id`、`asset_version`、`runtime_policy`、`schedule_expr`、`trigger_source`、`scheduled_at` 等审计快照。
+
+### 查询发布任务运行记录
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/published-jobs/<published-job-id>/runs"
+```
+
+可查看该发布任务关联的 `job_runs` 列表及其 `execution_run_id/run_status/started_at/finished_at`。
+
+### Cron 扫描触发
+
+当前调度逻辑由 `SchedulerService.trigger_due_jobs()` 负责：
+
+1. 扫描 `state=active` 的 `published_jobs`
+2. 用统一的 `now` 判断 cron 是否到点
+3. 对目标 `published_job` 加锁后再次校验，避免同一分钟重复触发
+4. 创建 `job_run` 并投递 `run_check`
+
+也就是说，cron 调度的结果仍然回到平台内部的 `run_check` 执行链，而不是直接在调度器里执行 Playwright 脚本。
+
 ## 运行测试
 
 ```bash
@@ -150,6 +244,18 @@ uv run pytest \
   ../tests/backend/test_assets_api.py -v
 ```
 
+runner/render/scheduling 相关测试集：
+
+```bash
+cd backend
+uv run pytest \
+  ../tests/backend/test_runner_service.py \
+  ../tests/backend/test_run_check_job.py \
+  ../tests/backend/test_script_renderer.py \
+  ../tests/backend/test_published_jobs_api.py \
+  ../tests/backend/test_scheduler_service.py -v
+```
+
 ## 目录说明
 
 - `src/app/api/`：HTTP 接口与依赖注入
@@ -157,7 +263,7 @@ uv run pytest \
 - `src/app/domains/auth_service/`：凭据解密、登录刷新、认证态持久化
 - `src/app/domains/crawler_service/`：采集编排、提取器契约、事实落库
 - `src/app/domains/asset_compiler/`：事实转资产、标准检查、模块计划、漂移计算
-- `src/app/jobs/`：认证刷新、采集、资产编译作业 handler
+- `src/app/jobs/`：认证刷新、采集、资产编译、run_check、published job trigger 作业逻辑
 - `src/app/workers/`：最小 FIFO worker
 - `src/app/infrastructure/`：数据库、队列和运行时适配
 - `alembic/`：迁移环境与版本

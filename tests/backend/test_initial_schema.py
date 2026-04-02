@@ -39,17 +39,21 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "asset_snapshots",
         "auth_states",
         "crawl_snapshots",
+        "execution_artifacts",
         "execution_plans",
         "execution_requests",
         "execution_runs",
         "intent_aliases",
+        "job_runs",
         "menu_nodes",
         "module_plans",
         "page_assets",
         "page_checks",
         "page_elements",
         "pages",
+        "published_jobs",
         "queued_jobs",
+        "script_renders",
         "system_credentials",
         "systems",
     }
@@ -90,6 +94,29 @@ def test_initial_schema_exposes_core_columns(db_engine):
     }
     assert {"request_source", "system_hint", "page_hint", "check_goal"} <= execution_request_columns
 
+    execution_artifact_columns = {
+        column["name"] for column in inspector.get_columns("execution_artifacts")
+    }
+    assert {
+        "execution_run_id",
+        "artifact_kind",
+        "result_status",
+        "payload",
+        "artifact_uri",
+        "created_at",
+    } <= execution_artifact_columns
+
+    script_render_columns = {column["name"] for column in inspector.get_columns("script_renders")}
+    assert {
+        "execution_artifact_id",
+        "execution_plan_id",
+        "render_mode",
+        "render_result",
+        "script_body",
+        "render_metadata",
+        "created_at",
+    } <= script_render_columns
+
     queued_job_columns = {column["name"] for column in inspector.get_columns("queued_jobs")}
     assert {
         "job_type",
@@ -101,6 +128,32 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "finished_at",
         "failure_message",
     } <= queued_job_columns
+
+    published_job_columns = {column["name"] for column in inspector.get_columns("published_jobs")}
+    assert {
+        "job_key",
+        "page_check_id",
+        "script_render_id",
+        "asset_version",
+        "runtime_policy",
+        "schedule_expr",
+        "timezone",
+        "state",
+        "created_at",
+        "updated_at",
+    } <= published_job_columns
+
+    job_run_columns = {column["name"] for column in inspector.get_columns("job_runs")}
+    assert {
+        "published_job_id",
+        "execution_run_id",
+        "trigger_source",
+        "run_status",
+        "scheduled_at",
+        "started_at",
+        "finished_at",
+        "failure_message",
+    } <= job_run_columns
 
     auth_state_columns = {column["name"] for column in inspector.get_columns("auth_states")}
     assert {"storage_state", "validated_at", "expires_at", "status"} <= auth_state_columns

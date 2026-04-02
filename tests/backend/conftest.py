@@ -212,15 +212,22 @@ def accepted_request(control_plane_service, seeded_page_asset):
 def control_plane_service(db_session: Session):
     from app.domains.control_plane.repository import SqlControlPlaneRepository
     from app.domains.control_plane.service import ControlPlaneService
+    from app.domains.runner_service.scheduler import SchedulerService
+    from app.domains.runner_service.script_renderer import ScriptRenderer
     from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 
     repository = SqlControlPlaneRepository(db_session)
     dispatcher = SqlQueueDispatcher(db_session)
-    return ControlPlaneService(repository=repository, dispatcher=dispatcher)
+    return ControlPlaneService(
+        repository=repository,
+        dispatcher=dispatcher,
+        script_renderer=ScriptRenderer(session=db_session),
+        scheduler_service=SchedulerService(session=db_session, dispatcher=dispatcher),
+    )
 
 
 @pytest.fixture
-def client(control_plane_service):
+def client(control_plane_service, db_session):
     from app.api.deps import get_control_plane_service
 
     app = create_app()

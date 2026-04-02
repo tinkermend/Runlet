@@ -4,11 +4,15 @@ from uuid import uuid4
 import pytest
 
 from app.domains.auth_service.schemas import AuthRefreshResult
-from app.domains.control_plane.job_types import AUTH_REFRESH_JOB_TYPE, ASSET_COMPILE_JOB_TYPE
+from app.domains.control_plane.job_types import (
+    AUTH_REFRESH_JOB_TYPE,
+    ASSET_COMPILE_JOB_TYPE,
+    RUN_CHECK_JOB_TYPE,
+)
 from app.infrastructure.db.models.jobs import QueuedJob, utcnow
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
 from app.shared.enums import QueuedJobStatus
-from app.workers.runner import WorkerRunner
+from app.workers.runner import WorkerRunner, build_worker_handlers
 
 
 class StubAuthService:
@@ -19,6 +23,11 @@ class StubAuthService:
     async def refresh_auth_state(self, *, system_id):
         self.calls.append(system_id)
         return self.result
+
+
+class ExplodingHandler:
+    async def run(self, *, job_id):
+        raise RuntimeError(f"boom for {job_id}")
 
 
 def _create_auth_job(db_session, *, system_id, created_at) -> QueuedJob:
@@ -96,3 +105,39 @@ async def test_worker_runner_marks_unhandled_job_as_skipped_with_reason(
     assert refreshed is not None
     assert refreshed.status == QueuedJobStatus.SKIPPED.value
     assert refreshed.failure_message == "no handler registered for job type: asset_compile"
+
+
+def test_build_worker_handlers_registers_run_check_handler(db_session):
+    handlers = build_worker_handlers(
+        session=db_session,
+        runner_service=object(),
+    )
+
+    assert RUN_CHECK_JOB_TYPE in handlers
+
+
+@pytest.mark.anyio
+async def test_worker_runner_marks_job_failed_when_handler_raises(
+    db_session,
+):
+    job = QueuedJob(
+        job_type=ASSET_COMPILE_JOB_TYPE,
+        payload={"snapshot_id": str(uuid4())},
+        created_at=utcnow(),
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    job_runner = WorkerRunner(
+        session=db_session,
+        handlers={ASSET_COMPILE_JOB_TYPE: ExplodingHandler()},
+    )
+
+    handled = await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, job.id)
+    assert handled is True
+    assert refreshed is not None
+    assert refreshed.status == QueuedJobStatus.FAILED.value
+    assert refreshed.failure_message.startswith("handler crashed: boom for")
