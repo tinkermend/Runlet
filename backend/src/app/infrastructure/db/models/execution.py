@@ -1,10 +1,39 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from app.infrastructure.db.base import BaseModel
+from app.shared.enums import ExecutionResultStatus, RenderResultStatus
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def execution_result_status_enum() -> sa.Enum:
+    return sa.Enum(
+        ExecutionResultStatus,
+        name="execution_result_status",
+        native_enum=False,
+        values_callable=lambda values: [value.value for value in values],
+    )
+
+
+def render_result_status_enum() -> sa.Enum:
+    return sa.Enum(
+        RenderResultStatus,
+        name="render_result_status",
+        native_enum=False,
+        values_callable=lambda values: [value.value for value in values],
+    )
+
+
+json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
 
 
 class ExecutionRequest(BaseModel, table=True):
@@ -43,3 +72,53 @@ class ExecutionRun(BaseModel, table=True):
     failure_category: str | None = Field(default=None, max_length=64)
     asset_version: str | None = Field(default=None, max_length=64)
     snapshot_version: str | None = Field(default=None, max_length=64)
+
+
+class ExecutionArtifact(BaseModel, table=True):
+    __tablename__ = "execution_artifacts"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    execution_run_id: UUID = Field(foreign_key="execution_runs.id", index=True)
+    artifact_kind: str = Field(max_length=64)
+    result_status: ExecutionResultStatus = Field(
+        default=ExecutionResultStatus.PENDING,
+        sa_column=sa.Column(execution_result_status_enum(), nullable=False),
+    )
+    payload: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    artifact_uri: str | None = Field(default=None, max_length=1024)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+    )
+
+
+class ScriptRender(BaseModel, table=True):
+    __tablename__ = "script_renders"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    execution_artifact_id: UUID | None = Field(
+        default=None,
+        foreign_key="execution_artifacts.id",
+        index=True,
+    )
+    execution_plan_id: UUID | None = Field(default=None, foreign_key="execution_plans.id", index=True)
+    render_mode: str = Field(max_length=32)
+    render_result: RenderResultStatus = Field(
+        default=RenderResultStatus.PENDING,
+        sa_column=sa.Column(render_result_status_enum(), nullable=False),
+    )
+    script_body: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    render_metadata: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+    )
