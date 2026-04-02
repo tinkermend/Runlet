@@ -28,6 +28,7 @@ from app.domains.runner_service.scheduler import (
     CreatePublishedJobRequest,
     PublishedJobCreated,
     PublishedJobRunsList,
+    PublishedJobService,
     PublishedJobTriggerAccepted,
 )
 from app.infrastructure.queue.dispatcher import QueueDispatcher
@@ -43,12 +44,12 @@ class ControlPlaneService:
         repository: ControlPlaneRepository,
         dispatcher: QueueDispatcher,
         script_renderer=None,
-        scheduler_service=None,
+        published_job_service: PublishedJobService | None = None,
     ) -> None:
         self.repository = repository
         self.dispatcher = dispatcher
         self.script_renderer = script_renderer
-        self.scheduler_service = scheduler_service
+        self.published_job_service = published_job_service
 
     async def submit_check_request(
         self,
@@ -156,10 +157,10 @@ class ControlPlaneService:
         *,
         payload: CreatePublishedJobRequest,
     ) -> PublishedJobCreated:
-        if self.scheduler_service is None:
-            raise HTTPException(status_code=500, detail="scheduler service is not configured")
+        if self.published_job_service is None:
+            raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
-            return await self.scheduler_service.create_published_job(payload=payload)
+            return await self.published_job_service.create_published_job(payload=payload)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -169,10 +170,10 @@ class ControlPlaneService:
         published_job_id: UUID,
         trigger_source: str = "manual",
     ) -> PublishedJobTriggerAccepted:
-        if self.scheduler_service is None:
-            raise HTTPException(status_code=500, detail="scheduler service is not configured")
+        if self.published_job_service is None:
+            raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
-            return await self.scheduler_service.trigger_published_job(
+            return await self.published_job_service.trigger_published_job(
                 published_job_id=published_job_id,
                 trigger_source=trigger_source,
             )
@@ -184,10 +185,10 @@ class ControlPlaneService:
         *,
         published_job_id: UUID,
     ) -> PublishedJobRunsList:
-        if self.scheduler_service is None:
-            raise HTTPException(status_code=500, detail="scheduler service is not configured")
+        if self.published_job_service is None:
+            raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
-            return await self.scheduler_service.list_published_job_runs(
+            return await self.published_job_service.list_published_job_runs(
                 published_job_id=published_job_id,
             )
         except ValueError as exc:

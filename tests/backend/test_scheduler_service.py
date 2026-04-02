@@ -62,29 +62,39 @@ def seeded_published_job(db_session, seeded_schedulable_check):
 
 
 @pytest.fixture
-def scheduler_service(db_session):
-    from app.domains.runner_service.scheduler import SchedulerService
+def published_job_service(db_session):
+    from app.domains.runner_service.scheduler import PublishedJobService
     from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 
-    return SchedulerService(
+    return PublishedJobService(
         session=db_session,
         dispatcher=SqlQueueDispatcher(db_session),
     )
 
 
 @pytest.mark.anyio
-async def test_scheduler_triggers_due_jobs(scheduler_service, seeded_published_job, db_session):
+async def test_published_job_service_triggers_single_job_once_per_minute(
+    published_job_service,
+    seeded_published_job,
+    db_session,
+):
     fixed_now = datetime(2026, 4, 2, 8, 0, tzinfo=UTC)
-    scheduler_service.now_provider = lambda: fixed_now
+    published_job_service.now_provider = lambda: fixed_now
 
-    triggered = await scheduler_service.trigger_due_jobs()
-    triggered_again = await scheduler_service.trigger_due_jobs()
+    first = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=fixed_now,
+    )
+    second = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=fixed_now,
+    )
 
     job_runs = db_session.exec(select(JobRun)).all()
     queued_jobs = db_session.exec(select(QueuedJob)).all()
 
-    assert triggered == 1
-    assert triggered_again == 0
+    assert first is True
+    assert second is False
     assert len(job_runs) == 1
     assert job_runs[0].scheduled_at.replace(tzinfo=UTC) == fixed_now
     assert any(job.job_type == "run_check" for job in queued_jobs)

@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.domains.control_plane.repository import SqlControlPlaneRepository
 from app.domains.control_plane.service import ControlPlaneService
-from app.domains.runner_service.scheduler import SchedulerService
+from app.domains.runner_service.scheduler import PublishedJobService
 from app.domains.runner_service.script_renderer import ScriptRenderer
 from app.infrastructure.db.session import get_session
 from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
@@ -22,7 +22,7 @@ async def get_control_plane_service(session: SessionDep) -> ControlPlaneService:
         repository=SqlControlPlaneRepository(session),
         dispatcher=dispatcher,
         script_renderer=ScriptRenderer(session=session),
-        scheduler_service=SchedulerService(session=session, dispatcher=dispatcher),
+        published_job_service=PublishedJobService(session=session, dispatcher=dispatcher),
     )
 
 

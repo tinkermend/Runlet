@@ -213,7 +213,7 @@ def accepted_request(control_plane_service, seeded_page_asset):
 def control_plane_service(db_session: Session):
     from app.domains.control_plane.repository import SqlControlPlaneRepository
     from app.domains.control_plane.service import ControlPlaneService
-    from app.domains.runner_service.scheduler import SchedulerService
+    from app.domains.runner_service.scheduler import PublishedJobService
     from app.domains.runner_service.script_renderer import ScriptRenderer
     from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 
@@ -223,7 +223,7 @@ def control_plane_service(db_session: Session):
         repository=repository,
         dispatcher=dispatcher,
         script_renderer=ScriptRenderer(session=db_session),
-        scheduler_service=SchedulerService(session=db_session, dispatcher=dispatcher),
+        published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
     )
 
 

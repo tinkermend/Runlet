@@ -73,7 +73,7 @@ class PublishedJobRunsList(BaseModel):
     runs: list[PublishedJobRunItem]
 
 
-class SchedulerService:
+class PublishedJobService:
     def __init__(
         self,
         *,
@@ -171,35 +171,37 @@ class SchedulerService:
             ],
         )
 
-    async def trigger_due_jobs(self) -> int:
-        now = self.now_provider()
-        statement = select(PublishedJob).where(PublishedJob.state == PublishedJobState.ACTIVE.value)
-        published_jobs = await self._exec_all(statement)
-
-        triggered = 0
-        for published_job in published_jobs:
-            if not _cron_matches(published_job.schedule_expr, now):
-                continue
-            locked_job = await self._lock_published_job(published_job_id=published_job.id)
-            if locked_job is None or _state_value(locked_job.state) != PublishedJobState.ACTIVE.value:
-                continue
-            if not _cron_matches(locked_job.schedule_expr, now):
-                continue
-            if await self._already_triggered_for_minute(published_job_id=locked_job.id, now=now):
-                continue
-            await self.trigger.trigger(
-                published_job=locked_job,
-                trigger_source="scheduler",
-                scheduled_at=now,
-            )
-            triggered += 1
-        return triggered
+    async def trigger_scheduled_job(
+        self,
+        *,
+        published_job_id: UUID,
+        scheduled_at: datetime,
+    ) -> bool:
+        locked_job = await self._lock_published_job(published_job_id=published_job_id)
+        if locked_job is None or _state_value(locked_job.state) != PublishedJobState.ACTIVE.value:
+            return False
+        if await self._already_triggered_for_minute(
+            published_job_id=locked_job.id,
+            scheduled_at=scheduled_at,
+        ):
+            return False
+        await self.trigger.trigger(
+            published_job=locked_job,
+            trigger_source="scheduler",
+            scheduled_at=scheduled_at,
+        )
+        return True
 
     async def _lock_published_job(self, *, published_job_id: UUID) -> PublishedJob | None:
         statement = select(PublishedJob).where(PublishedJob.id == published_job_id).with_for_update()
         return await self._exec_first(statement)
 
-    async def _already_triggered_for_minute(self, *, published_job_id: UUID, now: datetime) -> bool:
+    async def _already_triggered_for_minute(
+        self,
+        *,
+        published_job_id: UUID,
+        scheduled_at: datetime,
+    ) -> bool:
         statement = (
             select(JobRun)
             .where(JobRun.published_job_id == published_job_id)
@@ -208,7 +210,7 @@ class SchedulerService:
         latest = await self._exec_first(statement)
         if latest is None:
             return False
-        return _minute_key(latest.scheduled_at) == _minute_key(now)
+        return _minute_key(latest.scheduled_at) == _minute_key(scheduled_at)
 
     async def _get(self, model, identifier):
         if isinstance(self.session, AsyncSession):
@@ -258,26 +260,3 @@ def _state_value(value: PublishedJobState | str) -> str:
 def _minute_key(value: datetime) -> datetime:
     normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return normalized.astimezone(UTC).replace(second=0, microsecond=0)
-
-
-def _cron_matches(schedule_expr: str, now: datetime) -> bool:
-    parts = schedule_expr.split()
-    if len(parts) != 5:
-        return False
-    minute, hour, _day, _month, _weekday = parts
-    return _cron_field_matches(minute, now.minute) and _cron_field_matches(hour, now.hour)
-
-
-def _cron_field_matches(field: str, value: int) -> bool:
-    if field == "*":
-        return True
-    if field.startswith("*/"):
-        try:
-            interval = int(field[2:])
-        except ValueError:
-            return False
-        return interval > 0 and value % interval == 0
-    try:
-        return int(field) == value
-    except ValueError:
-        return False
