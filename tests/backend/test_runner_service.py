@@ -68,6 +68,92 @@ class LifecycleRuntime(FakeRuntime):
         self.closed += 1
 
 
+class FakeVisibleLocator:
+    def __init__(self, *, count: int = 1) -> None:
+        self._count = count
+        self.wait_for_calls: list[dict[str, object]] = []
+
+    @property
+    def first(self) -> "FakeVisibleLocator":
+        return self
+
+    async def count(self) -> int:
+        return self._count
+
+    async def wait_for(self, *, state: str, timeout: int | None = None) -> None:
+        self.wait_for_calls.append({"state": state, "timeout": timeout})
+
+
+class FakeContainerLocator:
+    def __init__(self, *, selector: str, count: int, role_locators: dict[tuple[str, str, bool], FakeVisibleLocator] | None = None) -> None:
+        self.selector = selector
+        self._count = count
+        self.role_locators = role_locators or {}
+        self.role_calls: list[dict[str, object]] = []
+
+    async def count(self) -> int:
+        return self._count
+
+    def get_by_role(self, role: str, *, name: str, exact: bool = False) -> FakeVisibleLocator:
+        self.role_calls.append({"role": role, "name": name, "exact": exact})
+        return self.role_locators.get((role, name, exact), FakeVisibleLocator(count=0))
+
+
+class FakePlaywrightPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.locator_calls: list[str] = []
+        self.global_role_calls: list[dict[str, object]] = []
+        self.menu_link = FakeVisibleLocator()
+        self.locators = {
+            "#menu_top_mix": FakeContainerLocator(
+                selector="#menu_top_mix",
+                count=1,
+                role_locators={
+                    ("link", "总览", True): self.menu_link,
+                },
+            ),
+            "nav": FakeContainerLocator(selector="nav", count=0),
+            "aside": FakeContainerLocator(selector="aside", count=0),
+            "[role='menu']": FakeContainerLocator(selector="[role='menu']", count=0),
+            "[role='navigation']": FakeContainerLocator(selector="[role='navigation']", count=0),
+        }
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+
+    def locator(self, selector: str) -> FakeContainerLocator:
+        self.locator_calls.append(selector)
+        return self.locators.get(selector, FakeContainerLocator(selector=selector, count=0))
+
+    def get_by_role(self, role: str, *, name: str, exact: bool = False) -> FakeVisibleLocator:
+        self.global_role_calls.append({"role": role, "name": name, "exact": exact})
+        raise AssertionError("global get_by_role should not be used when scoped menu container exists")
+
+
+class FakeGlobalFallbackPlaywrightPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.locator_calls: list[str] = []
+        self.global_role_calls: list[dict[str, object]] = []
+        self.global_menuitem = FakeVisibleLocator()
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+
+    def locator(self, selector: str) -> FakeContainerLocator:
+        self.locator_calls.append(selector)
+        return FakeContainerLocator(selector=selector, count=0)
+
+    def get_by_role(self, role: str, *, name: str, exact: bool = False) -> FakeVisibleLocator:
+        self.global_role_calls.append({"role": role, "name": name, "exact": exact})
+        if role == "link":
+            return FakeVisibleLocator(count=0)
+        if role == "menuitem":
+            return self.global_menuitem
+        return FakeVisibleLocator(count=0)
+
+
 @pytest.fixture
 def seeded_ready_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -256,3 +342,49 @@ async def test_run_page_check_fails_when_server_injected_auth_is_blocked(
     assert execution_run.status == "failed"
     assert artifact.result_status.value == "failed"
     assert artifact.payload["step_results"][0]["status"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_prefers_scoped_menu_container_for_navigation():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime.set_base_url("https://erp.example.com")
+    runtime._page = FakePlaywrightPage()
+
+    result = await runtime.navigate_menu_chain(
+        menu_chain=["总览"],
+        route_path="/front/database/allInstance",
+    )
+
+    assert result is True
+    assert runtime._page.goto_calls == [
+        ("https://erp.example.com/front/database/allInstance", "domcontentloaded")
+    ]
+    assert runtime._page.locator_calls[0] == "#menu_top_mix"
+    assert runtime._page.menu_link.wait_for_calls == [{"state": "visible", "timeout": None}]
+    assert runtime._page.global_role_calls == []
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_falls_back_to_global_menuitem_when_no_scoped_container_exists():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime.set_base_url("https://erp.example.com")
+    runtime._page = FakeGlobalFallbackPlaywrightPage()
+
+    result = await runtime.navigate_menu_chain(
+        menu_chain=["总览"],
+        route_path="/front/database/allInstance",
+    )
+
+    assert result is True
+    assert runtime._page.goto_calls == [
+        ("https://erp.example.com/front/database/allInstance", "domcontentloaded")
+    ]
+    assert runtime._page.global_role_calls == [
+        {"role": "link", "name": "总览", "exact": True},
+        {"role": "menuitem", "name": "总览", "exact": True},
+    ]
+    assert runtime._page.global_menuitem.wait_for_calls == [{"state": "visible", "timeout": None}]

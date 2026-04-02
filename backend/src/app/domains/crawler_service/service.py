@@ -56,6 +56,8 @@ class BrowserFactory(Protocol):
 
 class PlaywrightBrowserFactory:
     _INITIAL_SETTLE_MS = 5000
+    _ROUTE_SETTLE_MS = 2000
+    _ROUTE_RENDER_TIMEOUT_MS = 10000
     _ROUTE_HINTS_SCRIPT = """
 () => {
   const __RUNLET_ROUTE_HINTS__ = true;
@@ -169,6 +171,15 @@ class PlaywrightBrowserFactory:
 () => {
   const __RUNLET_PAGE_ELEMENTS__ = true;
   const result = [];
+  const isVisible = (node) => {
+    if (!(node instanceof Element)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== 'hidden'
+      && style.display !== 'none'
+      && rect.width > 0
+      && rect.height > 0;
+  };
   const selectors = [
     'button',
     '[role="button"]',
@@ -176,18 +187,38 @@ class PlaywrightBrowserFactory:
     'select',
     'textarea',
     'table',
+    '[role="grid"]',
+    '.el-table',
+    '.vxe-table',
+    '.ant-table',
+    '.ivu-table',
+    '.n-data-table',
+    '.ag-root',
+    '[class*="ag-theme"]',
     '[role="tab"]',
     '[role="searchbox"]',
     '[data-testid]'
   ];
   const nodes = document.querySelectorAll(selectors.join(','));
   Array.from(nodes).forEach((node) => {
+    if (!isVisible(node)) return;
     const tagName = (node.tagName || '').toLowerCase();
     const role = node.getAttribute('role');
     const text = (node.textContent || node.getAttribute('aria-label') || node.getAttribute('placeholder') || '').trim();
+    const className = typeof node.className === 'string' ? node.className : '';
+    const isTableLike = tagName === 'table'
+      || role === 'grid'
+      || role === 'table'
+      || className.includes('el-table')
+      || className.includes('vxe-table')
+      || className.includes('ant-table')
+      || className.includes('ivu-table')
+      || className.includes('n-data-table')
+      || className.includes('ag-root')
+      || className.includes('ag-theme');
     const elementType = role === 'tab'
       ? 'tab'
-      : tagName === 'table'
+      : isTableLike
       ? 'table'
       : tagName || role || 'element';
     if (!elementType) return;
@@ -197,6 +228,8 @@ class PlaywrightBrowserFactory:
       role: role || null,
       text: text || null,
       aria_label: node.getAttribute('aria-label'),
+      class_name: className || null,
+      visible: true,
       attributes: {
         name: node.getAttribute('name'),
         type: node.getAttribute('type'),
@@ -207,6 +240,23 @@ class PlaywrightBrowserFactory:
     });
   });
   return result;
+}
+"""
+    _ROUTE_RENDER_READY_SCRIPT = """
+() => {
+  const visibleSelector = (selector) => {
+    return Array.from(document.querySelectorAll(selector)).some((node) => {
+      const style = window.getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && rect.width > 0
+        && rect.height > 0;
+    });
+  };
+  const bodyText = (document.body?.innerText || '').trim();
+  return bodyText.length > 50
+    || visibleSelector('table, [role="grid"], .el-table, .vxe-table, .ant-table, .ivu-table, .n-data-table, .ag-root, [class*="ag-theme"]');
 }
 """
 
@@ -263,9 +313,71 @@ class PlaywrightBrowserFactory:
                 *,
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
-                del crawl_scope
                 await self_nonlocal._ensure_settled()
-                return await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
+                route_hints = await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
+                menu_nodes = await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                route_paths: list[str] = []
+                seen_routes: set[str] = set()
+
+                def add_route(route_path: object) -> None:
+                    if not isinstance(route_path, str):
+                        return
+                    normalized = route_path.strip()
+                    if not normalized or not normalized.startswith("/") or normalized in seen_routes:
+                        return
+                    seen_routes.add(normalized)
+                    route_paths.append(normalized)
+
+                if crawl_scope == "full":
+                    for hint in route_hints:
+                        if isinstance(hint, dict):
+                            add_route(hint.get("path") or hint.get("route_path"))
+                    for node in menu_nodes:
+                        if isinstance(node, dict):
+                            add_route(node.get("route_path") or node.get("page_route_path"))
+                else:
+                    current_path = await page.evaluate("() => window.location.pathname")
+                    add_route(current_path)
+
+                if not route_paths:
+                    current_path = await page.evaluate("() => window.location.pathname")
+                    add_route(current_path)
+
+                elements: list[dict[str, object]] = []
+                seen_payloads: set[str] = set()
+                for route_path in route_paths:
+                    await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
+                    await self_nonlocal._wait_for_route_render()
+                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
+                    if not isinstance(collected, list):
+                        continue
+                    for item in collected:
+                        if not isinstance(item, dict):
+                            continue
+                        payload = dict(item)
+                        if not payload.get("page_route_path"):
+                            payload["page_route_path"] = route_path
+                        dedupe_key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                        if dedupe_key in seen_payloads:
+                            continue
+                        seen_payloads.add(dedupe_key)
+                        elements.append(payload)
+                return elements
+
+            async def _wait_for_route_render(self_nonlocal) -> None:
+                waiter = getattr(page, "wait_for_function", None)
+                if not callable(waiter):
+                    return
+                try:
+                    if await page.evaluate(PlaywrightBrowserFactory._ROUTE_RENDER_READY_SCRIPT):
+                        return
+                    await waiter(
+                        PlaywrightBrowserFactory._ROUTE_RENDER_READY_SCRIPT,
+                        timeout=PlaywrightBrowserFactory._ROUTE_RENDER_TIMEOUT_MS,
+                    )
+                except Exception:
+                    return
 
             async def close(self_nonlocal) -> None:
                 await page.close()

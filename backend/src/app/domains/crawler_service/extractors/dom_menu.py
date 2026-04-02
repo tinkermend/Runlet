@@ -28,6 +28,16 @@ class NullDomMenuExtractor:
 
 
 class DomMenuTraversalExtractor:
+    _TABLE_CLASS_MARKERS = (
+        "el-table",
+        "vxe-table",
+        "ant-table",
+        "ivu-table",
+        "n-data-table",
+        "ag-root",
+        "ag-theme",
+    )
+
     async def extract(
         self,
         *,
@@ -108,7 +118,9 @@ class DomMenuTraversalExtractor:
         page_route_path = self._normalize_path(item.get("page_route_path") or item.get("route_path"))
         if page_route_path is None:
             return None
-        element_type = self._clean_text(item.get("element_type") or item.get("tag_name"))
+        if not self._is_visible(item):
+            return None
+        element_type = self._normalize_element_type(item)
         if element_type is None:
             return None
         role = self._clean_text(item.get("role") or item.get("element_role"))
@@ -151,6 +163,25 @@ class DomMenuTraversalExtractor:
 
     def _escape_quote(self, value: str) -> str:
         return value.replace("'", "\\'")
+
+    def _is_visible(self, item: dict[str, Any]) -> bool:
+        visible = item.get("visible")
+        if isinstance(visible, bool):
+            return visible
+        return True
+
+    def _normalize_element_type(self, item: dict[str, Any]) -> str | None:
+        raw_type = self._clean_text(item.get("element_type") or item.get("tag_name"))
+        role = self._clean_text(item.get("role") or item.get("element_role"))
+        class_name = self._clean_text(item.get("class_name"))
+
+        if raw_type == "table":
+            return "table"
+        if role in {"grid", "table"}:
+            return "table"
+        if class_name and any(marker in class_name for marker in self._TABLE_CLASS_MARKERS):
+            return "table"
+        return raw_type
 
     def _ensure_dict_list(self, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):

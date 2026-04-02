@@ -4,6 +4,14 @@ import re
 
 
 class PlaywrightRunnerRuntime:
+    _MENU_SCOPE_SELECTORS = (
+        "#menu_top_mix",
+        "nav",
+        "aside",
+        "[role='menu']",
+        "[role='navigation']",
+    )
+
     def __init__(self) -> None:
         self._base_url: str | None = None
         self._playwright = None
@@ -31,7 +39,7 @@ class PlaywrightRunnerRuntime:
         page = self._require_page()
         await page.goto(self._resolve_url(route_path), wait_until="domcontentloaded")
         for label in menu_chain:
-            await page.get_by_role("link", name=label).wait_for(state="visible")
+            await self._wait_for_menu_label(page=page, label=label)
         return True
 
     async def wait_page_ready(self, *, route_path: str) -> bool:
@@ -83,6 +91,28 @@ class PlaywrightRunnerRuntime:
         if self._base_url is None:
             raise RuntimeError("playwright runner runtime base_url is not configured")
         return f"{self._base_url}{route_path}"
+
+    async def _wait_for_menu_label(self, *, page, label: str) -> None:
+        for selector in self._MENU_SCOPE_SELECTORS:
+            container = page.locator(selector)
+            if await container.count() == 0:
+                continue
+            scoped_link = container.get_by_role("link", name=label, exact=True).first
+            if await scoped_link.count() > 0:
+                await scoped_link.wait_for(state="visible")
+                return
+            scoped_menuitem = container.get_by_role("menuitem", name=label, exact=True).first
+            if await scoped_menuitem.count() > 0:
+                await scoped_menuitem.wait_for(state="visible")
+                return
+
+        global_link = page.get_by_role("link", name=label, exact=True).first
+        if await global_link.count() > 0:
+            await global_link.wait_for(state="visible")
+            return
+
+        global_menuitem = page.get_by_role("menuitem", name=label, exact=True).first
+        await global_menuitem.wait_for(state="visible")
 
 
 def _route_pattern(route_path: str) -> str:

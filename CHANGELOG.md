@@ -7,6 +7,9 @@
 
 ## 2026-04-02
 
+- 修正真实 crawler 的逐路由 DOM 事实采集口径：`PlaywrightBrowserFactory` 现在会沿 runtime route hints 逐页采集元素事实，并在页面仍处于占位态时等待正文渲染完成；同时过滤隐藏元素、补充 AG Grid / Element Table 等组件表格识别，避免把总览页隐藏 `<table>` 误编译为 `table_render`。
+- 修正逐路由元素采集的漏页边界：当 runtime route hints 不完整时，crawler 现在会把 DOM 菜单中的 `route_path` 一并纳入逐页采集候选，减少仅采到当前页元素、遗漏菜单可达页面事实的问题。
+- 修正运行器菜单定位的全局回退：`PlaywrightRunnerRuntime` 在找不到 scoped menu container 时，除了全局 `link` 之外也会回退到全局 `menuitem`，降低不同前端菜单语义实现导致的导航等待失败。
 - 修正真实 PostgreSQL 环境的运行闭环阻塞点：缩短 `0006/0007/0008` Alembic revision id，避免 `alembic_version.version_num` 32 位上限导致迁移停在 `0005_job_run_audit_linkage`，并补充对应回归测试。
 - 修正 SPA 采集时机过早问题：`PlaywrightBrowserFactory` 首次采集前增加一次性 settle 等待，dpm 真实采集结果从仅 `1 page / 0 menu / 0 element` 恢复到 `23 pages / 25 menus / 27 elements`。
 - 修正运行时路由与 DOM 菜单脱节导致的资产导航空链问题：当菜单节点缺少 `route_path` 时，crawler 会基于 runtime page title 回填菜单路由与页面关联，使 dpm 这类站点编译出的 `module_plan.nav.menu_chain` 不再为空。

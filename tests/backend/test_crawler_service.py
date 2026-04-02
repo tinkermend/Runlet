@@ -10,6 +10,7 @@ from app.domains.crawler_service.schemas import (
     MenuCandidate,
     PageCandidate,
 )
+from app.domains.crawler_service.extractors.dom_menu import DomMenuTraversalExtractor
 from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowserFactory
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 
@@ -177,6 +178,47 @@ def install_fake_crawler_async_api(
     sys.modules["playwright.async_api"] = module
     monkeypatch.setitem(sys.modules, "playwright.async_api", module)
     return page, context, browser, chromium, playwright
+
+
+class RouteAwareFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.current_url = "about:blank"
+        self.route_hints = [
+            {"path": "/front/database/allInstance", "title": "总览"},
+            {"path": "/front/database/dbInstance", "title": "数据库实例"},
+        ]
+        self.menu_nodes = []
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+
+    async def evaluate(self, script: str):
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return self.route_hints
+        if "__RUNLET_MENU_NODES__" in script:
+            return self.menu_nodes
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            if self.current_url.endswith("/front/database/dbInstance"):
+                return [
+                    {
+                        "page_route_path": "/front/database/dbInstance",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ]
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class FakeRouterExtractor:
@@ -429,6 +471,133 @@ async def test_run_crawl_enriches_menu_routes_from_runtime_titles(
 
 
 @pytest.mark.anyio
+async def test_dom_menu_traversal_extractor_skips_hidden_tables_and_normalizes_visible_grids():
+    extractor = DomMenuTraversalExtractor()
+    browser_session = FakeBrowserSession()
+    browser_session.dom_elements = [
+        {
+            "page_route_path": "/front/database/allInstance",
+            "element_type": "table",
+            "text": "隐藏总览表格",
+            "visible": False,
+        },
+        {
+            "page_route_path": "/front/database/dbInstance",
+            "element_type": "div",
+            "role": "grid",
+            "class_name": "el-table el-table--small",
+            "text": "实例列表",
+            "visible": True,
+        },
+    ]
+
+    result = await extractor.extract(
+        browser_session=browser_session,
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert [(element.page_route_path, element.element_type, element.element_role) for element in result.elements] == [
+        ("/front/database/dbInstance", "table", "grid")
+    ]
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_collects_dom_elements_across_discovered_routes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    page = RouteAwareFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+
+    factory = PlaywrightBrowserFactory()
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    dom_elements = await session.collect_dom_elements(crawl_scope="full")
+    await session.close()
+
+    assert dom_elements == [
+        {
+            "page_route_path": "/front/database/dbInstance",
+            "element_type": "button",
+            "role": "button",
+            "text": "刷新",
+        }
+    ]
+    assert page.goto_calls == [
+        ("https://erp.example.com", "domcontentloaded"),
+        ("https://erp.example.com/front/database/allInstance", "domcontentloaded"),
+        ("https://erp.example.com/front/database/dbInstance", "domcontentloaded"),
+    ]
+    assert page.wait_for_timeout_calls == [5000, 2000, 2000]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_collects_dom_elements_from_menu_routes_when_runtime_hints_are_partial(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    page = RouteAwareFakeCrawlerPage()
+    page.route_hints = [{"path": "/front/database/allInstance", "title": "总览"}]
+    page.menu_nodes = [
+        {"label": "数据库实例", "route_path": "/front/database/dbInstance", "role": "menuitem"}
+    ]
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+
+    factory = PlaywrightBrowserFactory()
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    dom_elements = await session.collect_dom_elements(crawl_scope="full")
+    await session.close()
+
+    assert dom_elements == [
+        {
+            "page_route_path": "/front/database/dbInstance",
+            "element_type": "button",
+            "role": "button",
+            "text": "刷新",
+        }
+    ]
+    assert page.goto_calls == [
+        ("https://erp.example.com", "domcontentloaded"),
+        ("https://erp.example.com/front/database/allInstance", "domcontentloaded"),
+        ("https://erp.example.com/front/database/dbInstance", "domcontentloaded"),
+    ]
+
+
+@pytest.mark.anyio
 async def test_playwright_browser_factory_session_collects_runtime_facts(monkeypatch):
     page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
     factory = PlaywrightBrowserFactory()
@@ -446,8 +615,12 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert route_hints[0]["path"] == "/dashboard"
     assert menu_nodes[1]["label"] == "用户管理"
     assert dom_elements[0]["element_type"] == "button"
-    assert page.goto_calls == [("https://erp.example.com", "domcontentloaded")]
-    assert page.wait_for_timeout_calls == [5000]
+    assert page.goto_calls == [
+        ("https://erp.example.com", "domcontentloaded"),
+        ("https://erp.example.com/dashboard", "domcontentloaded"),
+        ("https://erp.example.com/users", "domcontentloaded"),
+    ]
+    assert page.wait_for_timeout_calls == [5000, 2000, 2000]
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True
