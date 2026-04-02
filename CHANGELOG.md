@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 新增 runtime policy schema 基线：增加 `system_auth_policies/system_crawl_policies` 模型与 `0006_runtime_policies_and_scheduler_runtime` 迁移，并为后续调度链路补齐 `queued_jobs/job_runs` 的 `policy_id` 及队列审计字段 `trigger_source/scheduled_at`。
 - 新增 APScheduler 统一调度改造实施计划，按 `runtime_policies` schema、发布任务服务拆分、APScheduler registry、runtime policy API、scheduler runtime/daemon、旧扫描链清理六个任务拆分为可执行步骤。
 - 新增 APScheduler 统一调度改造设计文档，明确以数据库为调度真相、APScheduler 为统一触发器、`control_plane` 为调度运行归属，并给出 `published_jobs + runtime_policies` 的统一改造路径、阶段拆分与工作量评估。
 - 新增后端认证与采集运行闭环实施计划，按 runtime policy、control_plane daemon、`ddddocr` 验证码、真实 crawler extractor、调度扫描器与回归验证拆分为可执行任务。
