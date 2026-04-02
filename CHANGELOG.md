@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 补充仓库技术栈说明，并将 backend 依赖声明与本地锁文件对齐：为验证码能力显式加入 `ddddocr` 依赖，避免 `uv.lock` 与 `pyproject.toml` 不一致。
 - 补齐 worker 常驻进程入口：新增 `runlet-worker` 启动脚本，正式组装 `AuthService/CrawlerService/AssetCompilerService/RunnerService` 与四类队列 handler；同时新增 `PlaywrightRunnerRuntime`，让 `run_check` 在 worker 中可按 `module_plan` + 服务端认证注入执行。
 - 收口 APScheduler 运行闭环：新增 `runlet-scheduler` 正式入口，`scheduler_daemon` 现在会按 `scheduler_reload_interval_seconds` 周期 `reload_all()`，并把 `SchedulerRegistry` 改为支持 fresh session 重载，确保独立 daemon 进程能从数据库真相源持续收敛最新 `published_job/runtime_policy` 状态。
 - 修复发布任务创建后的 registry 镜像异常处理：`published_job` 创建在数据库已提交后，若 `SchedulerRegistry.upsert_published_job(...)` 失败，现在只记录 runtime mirror failure，不再错误返回 500；同时补充 API 回归测试覆盖该降级语义。

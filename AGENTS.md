@@ -15,6 +15,19 @@
 
 - 项目测试与数据库相关环境信息见 `docs/base_info.md` 文件
 
+## 技术栈
+
+- Backend: FastAPI + Pydantic v2 + SQLModel + UV
+- DB: PostgreSQL
+- Cache / Lock: Redis
+- Browser Runtime: Playwright Python
+- Scheduler: APScheduler
+- Worker: Python worker process
+- CLI: Typer
+- MCP: FastMCP
+- Front: React + Vite
+- Test: pytest
+
 ## 架构约束
 
 系统按以下五个核心子域组织：
