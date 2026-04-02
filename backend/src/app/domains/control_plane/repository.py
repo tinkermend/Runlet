@@ -167,7 +167,6 @@ class SqlControlPlaneRepository:
         next_state = resolve_runtime_policy_state(enabled=payload.enabled)
         if policy is None:
             policy = SystemAuthPolicy(
-                id=system_id,
                 system_id=system_id,
                 enabled=payload.enabled,
                 state=next_state,
@@ -202,7 +201,6 @@ class SqlControlPlaneRepository:
         next_state = resolve_runtime_policy_state(enabled=payload.enabled)
         if policy is None:
             policy = SystemCrawlPolicy(
-                id=system_id,
                 system_id=system_id,
                 enabled=payload.enabled,
                 state=next_state,

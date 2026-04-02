@@ -27,7 +27,6 @@ async def test_registry_upserts_published_job_into_apscheduler(registry, seeded_
 @pytest.mark.anyio
 async def test_registry_upserts_auth_policy_into_apscheduler(registry, seeded_system, db_session):
     policy = SystemAuthPolicy(
-        id=seeded_system.id,
         system_id=seeded_system.id,
         enabled=True,
         state=RuntimePolicyState.ACTIVE.value,
@@ -39,14 +38,15 @@ async def test_registry_upserts_auth_policy_into_apscheduler(registry, seeded_sy
 
     await registry.upsert_auth_policy(policy.id)
 
-    job = registry.scheduler.get_job(f"auth_policy:{seeded_system.id}")
-    assert job is not None
+    system_scoped_job = registry.scheduler.get_job(f"auth_policy:{seeded_system.id}")
+    policy_scoped_job = registry.scheduler.get_job(f"auth_policy:{policy.id}")
+    assert system_scoped_job is not None
+    assert policy_scoped_job is None
 
 
 @pytest.mark.anyio
 async def test_registry_removes_crawl_policy_job_when_policy_disabled(registry, seeded_system, db_session):
     policy = SystemCrawlPolicy(
-        id=seeded_system.id,
         system_id=seeded_system.id,
         enabled=True,
         state=RuntimePolicyState.ACTIVE.value,
@@ -58,6 +58,7 @@ async def test_registry_removes_crawl_policy_job_when_policy_disabled(registry, 
 
     await registry.upsert_crawl_policy(policy.id)
     assert registry.scheduler.get_job(f"crawl_policy:{seeded_system.id}") is not None
+    assert registry.scheduler.get_job(f"crawl_policy:{policy.id}") is None
 
     policy.enabled = False
     db_session.add(policy)

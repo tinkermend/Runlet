@@ -17,12 +17,12 @@ def build_published_job_id(published_job_id: UUID | str) -> str:
     return f"published_job:{published_job_id}"
 
 
-def build_auth_policy_job_id(policy_id: UUID | str) -> str:
-    return f"auth_policy:{policy_id}"
+def build_auth_policy_job_id(system_id: UUID | str) -> str:
+    return f"auth_policy:{system_id}"
 
 
-def build_crawl_policy_job_id(policy_id: UUID | str) -> str:
-    return f"crawl_policy:{policy_id}"
+def build_crawl_policy_job_id(system_id: UUID | str) -> str:
+    return f"crawl_policy:{system_id}"
 
 
 def _state_value(value: PublishedJobState | str) -> str:
@@ -79,11 +79,10 @@ class SchedulerRegistry:
         )
 
     async def upsert_auth_policy(self, policy_id: UUID) -> None:
-        job_id = build_auth_policy_job_id(policy_id)
         policy = await self._get(SystemAuthPolicy, policy_id)
         if policy is None:
-            self.remove_job(job_id)
             return
+        job_id = build_auth_policy_job_id(policy.system_id)
         if not policy.enabled or _policy_state_value(policy.state) != RuntimePolicyState.ACTIVE.value:
             self.remove_job(job_id)
             return
@@ -97,11 +96,10 @@ class SchedulerRegistry:
         )
 
     async def upsert_crawl_policy(self, policy_id: UUID) -> None:
-        job_id = build_crawl_policy_job_id(policy_id)
         policy = await self._get(SystemCrawlPolicy, policy_id)
         if policy is None:
-            self.remove_job(job_id)
             return
+        job_id = build_crawl_policy_job_id(policy.system_id)
         if not policy.enabled or _policy_state_value(policy.state) != RuntimePolicyState.ACTIVE.value:
             self.remove_job(job_id)
             return
