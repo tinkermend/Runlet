@@ -166,14 +166,14 @@ class ControlPlaneService:
         if snapshot is None:
             raise HTTPException(status_code=404, detail="snapshot not found")
 
-        await self._enqueue_job(
+        job_id = await self._enqueue_job(
             job_type=ASSET_COMPILE_JOB_TYPE,
             payload={
                 "snapshot_id": str(snapshot.id),
                 "compile_scope": payload.compile_scope,
             },
         )
-        return CompileAssetsAccepted(snapshot_id=snapshot.id)
+        return CompileAssetsAccepted(snapshot_id=snapshot.id, job_id=job_id)
 
     async def _accept_check_request(
         self,

@@ -138,7 +138,7 @@ async def test_submit_check_request_rolls_back_when_enqueue_fails(
 
 
 @pytest.mark.anyio
-async def test_submit_check_request_prefers_ready_high_confidence_asset(
+async def test_submit_check_request_prefers_safe_high_confidence_asset(
     db_session,
 ):
     system = System(
@@ -169,14 +169,14 @@ async def test_submit_check_request_prefers_ready_high_confidence_asset(
         page_id=ready_page.id,
         asset_key="oms.orders.ready",
         asset_version="2026.04.02",
-        status=AssetStatus.READY,
+        status=AssetStatus.SAFE,
     )
     stale_asset = PageAsset(
         system_id=system.id,
         page_id=stale_page.id,
         asset_key="oms.orders.stale",
         asset_version="2026.04.03",
-        status=AssetStatus.DISABLED,
+        status=AssetStatus.STALE,
     )
     db_session.add(ready_asset)
     db_session.add(stale_asset)

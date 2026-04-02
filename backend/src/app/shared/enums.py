@@ -2,11 +2,15 @@ from enum import StrEnum
 
 
 class AssetStatus(StrEnum):
-    DRAFT = "draft"
-    READY = "ready"
+    SAFE = "safe"
     SUSPECT = "suspect"
     STALE = "stale"
-    DISABLED = "disabled"
+
+
+class AssetCompileStatus(StrEnum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
 
 
 class AuthStateStatus(StrEnum):

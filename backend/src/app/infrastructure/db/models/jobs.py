@@ -24,6 +24,10 @@ class QueuedJob(BaseModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     job_type: str = Field(index=True, max_length=64)
     payload: dict[str, object] = Field(sa_column=sa.Column(json_type, nullable=False))
+    result_payload: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
     status: str = Field(default=QueuedJobStatus.ACCEPTED.value, max_length=32)
     created_at: datetime = Field(
         default_factory=utcnow,

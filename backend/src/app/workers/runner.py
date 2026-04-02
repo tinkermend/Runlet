@@ -62,3 +62,38 @@ class WorkerRunner:
             await self.session.commit()
             return
         self.session.commit()
+
+
+def build_worker_handlers(
+    *,
+    session: Session | AsyncSession,
+    auth_service=None,
+    crawler_service=None,
+    asset_compiler_service=None,
+) -> dict[str, JobHandler]:
+    from app.domains.control_plane.job_types import (
+        ASSET_COMPILE_JOB_TYPE,
+        AUTH_REFRESH_JOB_TYPE,
+        CRAWL_JOB_TYPE,
+    )
+    from app.jobs.asset_compile_job import AssetCompileJobHandler
+    from app.jobs.auth_refresh_job import AuthRefreshJobHandler
+    from app.jobs.crawl_job import CrawlJobHandler
+
+    handlers: dict[str, JobHandler] = {}
+    if auth_service is not None:
+        handlers[AUTH_REFRESH_JOB_TYPE] = AuthRefreshJobHandler(
+            session=session,
+            auth_service=auth_service,
+        )
+    if crawler_service is not None:
+        handlers[CRAWL_JOB_TYPE] = CrawlJobHandler(
+            session=session,
+            crawler_service=crawler_service,
+        )
+    if asset_compiler_service is not None:
+        handlers[ASSET_COMPILE_JOB_TYPE] = AssetCompileJobHandler(
+            session=session,
+            asset_compiler_service=asset_compiler_service,
+        )
+    return handlers

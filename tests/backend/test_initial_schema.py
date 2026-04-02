@@ -36,6 +36,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
     table_names = set(inspector.get_table_names())
     assert table_names == {
         "alembic_version",
+        "asset_snapshots",
         "auth_states",
         "crawl_snapshots",
         "execution_plans",
@@ -43,6 +44,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "execution_runs",
         "intent_aliases",
         "menu_nodes",
+        "module_plans",
         "page_assets",
         "page_checks",
         "page_elements",
@@ -60,7 +62,28 @@ def test_initial_schema_exposes_core_columns(db_engine):
     assert {"code", "name", "base_url", "framework_type"} <= systems_columns
 
     page_assets_columns = {column["name"] for column in inspector.get_columns("page_assets")}
-    assert {"system_id", "page_id", "asset_key", "asset_version", "status"} <= page_assets_columns
+    assert {
+        "system_id",
+        "page_id",
+        "asset_key",
+        "asset_version",
+        "status",
+        "compiled_from_snapshot_id",
+    } <= page_assets_columns
+
+    module_plan_columns = {column["name"] for column in inspector.get_columns("module_plans")}
+    assert {"page_asset_id", "check_code", "plan_version", "steps_json"} <= module_plan_columns
+
+    asset_snapshot_columns = {column["name"] for column in inspector.get_columns("asset_snapshots")}
+    assert {
+        "page_asset_id",
+        "crawl_snapshot_id",
+        "navigation_hash",
+        "key_locator_hash",
+        "semantic_summary_hash",
+        "diff_score_vs_previous",
+        "status",
+    } <= asset_snapshot_columns
 
     execution_request_columns = {
         column["name"] for column in inspector.get_columns("execution_requests")
@@ -71,6 +94,7 @@ def test_initial_schema_exposes_core_columns(db_engine):
     assert {
         "job_type",
         "payload",
+        "result_payload",
         "status",
         "created_at",
         "started_at",
