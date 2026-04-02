@@ -11,6 +11,7 @@ from app.domains.control_plane.job_types import (
     RUN_CHECK_JOB_TYPE,
 )
 from app.domains.control_plane.repository import ControlPlaneRepository
+from app.domains.control_plane.scheduler_registry import SchedulerRegistry
 from app.domains.control_plane.schemas import (
     AuthRefreshAccepted,
     CheckRequestAccepted,
@@ -45,11 +46,13 @@ class ControlPlaneService:
         dispatcher: QueueDispatcher,
         script_renderer=None,
         published_job_service: PublishedJobService | None = None,
+        scheduler_registry: SchedulerRegistry | None = None,
     ) -> None:
         self.repository = repository
         self.dispatcher = dispatcher
         self.script_renderer = script_renderer
         self.published_job_service = published_job_service
+        self.scheduler_registry = scheduler_registry
 
     async def submit_check_request(
         self,
@@ -160,7 +163,10 @@ class ControlPlaneService:
         if self.published_job_service is None:
             raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
-            return await self.published_job_service.create_published_job(payload=payload)
+            created = await self.published_job_service.create_published_job(payload=payload)
+            if self.scheduler_registry is not None:
+                await self.scheduler_registry.upsert_published_job(created.published_job_id)
+            return created
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

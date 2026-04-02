@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import anyio
 import pytest
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine
 from sqlmodel import select
@@ -10,8 +11,10 @@ from sqlmodel import select
 from app.main import create_app
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import runtime_policies  # noqa: F401
-from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
+from app.infrastructure.db.models.assets import IntentAlias, ModulePlan, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
+from app.infrastructure.db.models.execution import ScriptRender
+from app.infrastructure.db.models.jobs import PublishedJob
 from app.infrastructure.db.models.systems import AuthState, System, SystemCredential
 from app.shared.enums import AssetStatus, AuthStateStatus
 
@@ -195,6 +198,86 @@ def seeded_asset_without_matching_check(db_session: Session) -> PageAsset:
 
 
 @pytest.fixture
+def seeded_schedulable_check(db_session: Session, seeded_page_check: PageCheck, seeded_auth_state: AuthState):
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code=seeded_page_check.check_code,
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {"module": "assert.table_visible", "params": {"route_path": "/users"}},
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
+def seeded_published_job(db_session: Session, seeded_schedulable_check: PageCheck) -> PublishedJob:
+    from app.domains.runner_service.script_renderer import ScriptRenderer
+
+    render_result = anyio.run(
+        lambda: ScriptRenderer(session=db_session).render_page_check(
+            page_check_id=seeded_schedulable_check.id,
+            render_mode="published",
+        )
+    )
+    script_render = db_session.get(ScriptRender, render_result.script_render_id)
+    assert script_render is not None
+
+    published_job = PublishedJob(
+        job_key="erp_users_table_render",
+        page_check_id=seeded_schedulable_check.id,
+        script_render_id=script_render.id,
+        asset_version=script_render.render_metadata["asset_version"],
+        runtime_policy="published",
+        schedule_expr="* * * * *",
+        state="active",
+    )
+    db_session.add(published_job)
+    db_session.commit()
+    db_session.refresh(published_job)
+    return published_job
+
+
+@pytest.fixture
+def scheduler() -> BackgroundScheduler:
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.start(paused=True)
+    try:
+        yield scheduler
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+
+@pytest.fixture
+def scheduler_registry(db_session: Session, scheduler: BackgroundScheduler):
+    from app.domains.control_plane.scheduler_registry import SchedulerRegistry
+    from app.domains.runner_service.scheduler import PublishedJobService
+    from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
+
+    dispatcher = SqlQueueDispatcher(db_session)
+    return SchedulerRegistry(
+        session=db_session,
+        scheduler=scheduler,
+        published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
+    )
+
+
+@pytest.fixture
+def registry(scheduler_registry):
+    return scheduler_registry
+
+
+@pytest.fixture
 def accepted_request(control_plane_service, seeded_page_asset):
     async def submit():
         return await control_plane_service.submit_check_request(
@@ -210,7 +293,7 @@ def accepted_request(control_plane_service, seeded_page_asset):
 
 
 @pytest.fixture
-def control_plane_service(db_session: Session):
+def control_plane_service(db_session: Session, scheduler_registry):
     from app.domains.control_plane.repository import SqlControlPlaneRepository
     from app.domains.control_plane.service import ControlPlaneService
     from app.domains.runner_service.scheduler import PublishedJobService
@@ -224,6 +307,7 @@ def control_plane_service(db_session: Session):
         dispatcher=dispatcher,
         script_renderer=ScriptRenderer(session=db_session),
         published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
+        scheduler_registry=scheduler_registry,
     )
 
 

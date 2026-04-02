@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 from sqlmodel import select
 
+from app.domains.control_plane.scheduler_registry import build_published_job_id
 from app.infrastructure.db.models.assets import ModulePlan, PageCheck
 from app.infrastructure.db.models.execution import ScriptRender
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
@@ -69,7 +70,12 @@ def created_published_job(client, rendered_script):
     return response.json()
 
 
-def test_create_published_job_binds_script_and_asset_version(client, rendered_script, db_session):
+def test_create_published_job_binds_script_and_asset_version(
+    client,
+    rendered_script,
+    db_session,
+    control_plane_service,
+):
     response = client.post(
         "/api/v1/published-jobs",
         json={
@@ -89,6 +95,32 @@ def test_create_published_job_binds_script_and_asset_version(client, rendered_sc
     assert published_job is not None
     assert published_job.asset_version == rendered_script.render_metadata["asset_version"]
     assert published_job.state.value == "active"
+    scheduler_job = control_plane_service.scheduler_registry.scheduler.get_job(
+        build_published_job_id(body["published_job_id"])
+    )
+    assert scheduler_job is not None
+
+
+def test_create_disabled_published_job_unregisters_scheduler_job(client, rendered_script, control_plane_service):
+    response = client.post(
+        "/api/v1/published-jobs",
+        json={
+            "script_render_id": str(rendered_script.id),
+            "page_check_id": str(rendered_script.render_metadata["page_check_id"]),
+            "schedule_type": "cron",
+            "schedule_expr": "0 */2 * * *",
+            "trigger_source": "platform",
+            "enabled": False,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["state"] == "paused"
+    scheduler_job = control_plane_service.scheduler_registry.scheduler.get_job(
+        build_published_job_id(body["published_job_id"])
+    )
+    assert scheduler_job is None
 
 
 def test_trigger_published_job_enqueues_run_check(client, created_published_job, db_session, rendered_script):
