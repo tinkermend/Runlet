@@ -8,6 +8,7 @@ import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
+from app.config.settings import settings
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.shared.enums import QueuedJobStatus
 
@@ -56,10 +57,11 @@ class WorkerRunner:
 
     async def run_forever(
         self,
-        poll_interval_ms: int = 500,
+        poll_interval_ms: int | None = None,
         stop_event: anyio.Event | None = None,
     ) -> None:
-        interval_seconds = max(poll_interval_ms, 1) / 1000
+        interval_ms = settings.worker_poll_interval_ms if poll_interval_ms is None else poll_interval_ms
+        interval_seconds = max(interval_ms, 1) / 1000
         while True:
             if stop_event is not None and stop_event.is_set():
                 return

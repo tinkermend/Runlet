@@ -6,6 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config.settings import settings
 from app.domains.control_plane.repository import SqlControlPlaneRepository
 from app.domains.control_plane.scheduler_registry import SchedulerRegistry
 from app.domains.control_plane.service import ControlPlaneService
@@ -23,7 +24,7 @@ def get_registry_scheduler() -> BackgroundScheduler:
     global _registry_scheduler
 
     if _registry_scheduler is None:
-        _registry_scheduler = BackgroundScheduler(timezone="UTC")
+        _registry_scheduler = BackgroundScheduler(timezone=settings.scheduler_timezone)
         _registry_scheduler.start(paused=True)
     return _registry_scheduler
 

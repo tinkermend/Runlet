@@ -4,6 +4,7 @@ from uuid import uuid4
 import anyio
 import pytest
 
+from app.config.settings import settings
 from app.domains.auth_service.schemas import AuthRefreshResult
 from app.domains.control_plane.job_types import (
     AUTH_REFRESH_JOB_TYPE,
@@ -267,3 +268,31 @@ async def test_worker_runner_persists_crawl_policy_trigger_audit_fields(
     assert refreshed.policy_id == policy_id
     assert refreshed.trigger_source == "scheduler"
     assert refreshed.scheduled_at.replace(tzinfo=UTC) == scheduled_at
+
+
+@pytest.mark.anyio
+async def test_worker_runner_run_forever_uses_configured_poll_interval_when_not_overridden(
+    db_session,
+    monkeypatch,
+):
+    runner = WorkerRunner(session=db_session, handlers={})
+    stop_event = anyio.Event()
+    calls = {"count": 0}
+    sleep_seconds: list[float] = []
+
+    async def fake_run_once() -> bool:
+        calls["count"] += 1
+        return False
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_seconds.append(seconds)
+        stop_event.set()
+
+    runner.run_once = fake_run_once  # type: ignore[assignment]
+    monkeypatch.setattr(settings, "worker_poll_interval_ms", 7)
+    monkeypatch.setattr("app.workers.runner.anyio.sleep", fake_sleep)
+
+    await runner.run_forever(stop_event=stop_event, poll_interval_ms=None)
+
+    assert calls["count"] > 0
+    assert sleep_seconds == [0.007]

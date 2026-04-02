@@ -6,6 +6,7 @@ from functools import partial
 import anyio
 import pytest
 
+from app.api import deps as api_deps
 from app.runtime.scheduler_daemon import run_scheduler_daemon
 
 
@@ -41,3 +42,19 @@ async def test_scheduler_daemon_starts_runtime_and_waits_for_stop_signal():
         stop_event.set()
 
     assert runtime.stopped == 1
+
+
+def test_registry_scheduler_uses_configured_timezone(monkeypatch):
+    previous_scheduler = api_deps._registry_scheduler
+    if previous_scheduler is not None and previous_scheduler.running:
+        previous_scheduler.shutdown(wait=False)
+    api_deps._registry_scheduler = None
+    monkeypatch.setattr(api_deps.settings, "scheduler_timezone", "Asia/Shanghai")
+
+    scheduler = api_deps.get_registry_scheduler()
+    try:
+        assert str(scheduler.timezone) == "Asia/Shanghai"
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+        api_deps._registry_scheduler = None
