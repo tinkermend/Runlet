@@ -123,6 +123,42 @@ def test_create_disabled_published_job_unregisters_scheduler_job(client, rendere
     assert scheduler_job is None
 
 
+def test_create_published_job_returns_success_when_registry_sync_fails(
+    client,
+    rendered_script,
+    db_session,
+    control_plane_service,
+    monkeypatch,
+):
+    async def raise_registry_failure(published_job_id):
+        raise RuntimeError(f"registry unavailable for {published_job_id}")
+
+    monkeypatch.setattr(
+        control_plane_service.scheduler_registry,
+        "upsert_published_job",
+        raise_registry_failure,
+    )
+
+    response = client.post(
+        "/api/v1/published-jobs",
+        json={
+            "script_render_id": str(rendered_script.id),
+            "page_check_id": str(rendered_script.render_metadata["page_check_id"]),
+            "schedule_type": "cron",
+            "schedule_expr": "0 */2 * * *",
+            "trigger_source": "platform",
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    persisted_job = db_session.get(PublishedJob, UUID(body["published_job_id"]))
+    assert persisted_job is not None
+    assert persisted_job.script_render_id == rendered_script.id
+    assert persisted_job.schedule_expr == "0 */2 * * *"
+
+
 def test_create_published_job_rejects_invalid_cron_without_persisting_row(client, rendered_script, db_session):
     response = client.post(
         "/api/v1/published-jobs",

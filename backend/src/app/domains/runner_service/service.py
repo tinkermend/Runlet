@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -84,10 +85,14 @@ class RunnerService:
         self.session.add(execution_run)
         await self._flush()
 
-        execution_result = await self.module_executor.execute(
-            steps_json=module_plan.steps_json,
-            storage_state=auth_state.storage_state,
-        )
+        await self._configure_runtime(base_url=system.base_url)
+        try:
+            execution_result = await self.module_executor.execute(
+                steps_json=module_plan.steps_json,
+                storage_state=auth_state.storage_state,
+            )
+        finally:
+            await self._close_runtime()
 
         execution_run.status = execution_result.status.value
         execution_run.auth_status = execution_result.auth_status.value
@@ -200,3 +205,19 @@ class RunnerService:
             await self.session.refresh(model)
             return
         self.session.refresh(model)
+
+    async def _configure_runtime(self, *, base_url: str) -> None:
+        setter = getattr(self.runtime, "set_base_url", None)
+        if not callable(setter):
+            return
+        result = setter(base_url)
+        if inspect.isawaitable(result):
+            await result
+
+    async def _close_runtime(self) -> None:
+        closer = getattr(self.runtime, "close", None)
+        if not callable(closer):
+            return
+        result = closer()
+        if inspect.isawaitable(result):
+            await result

@@ -183,8 +183,9 @@ class ControlPlaneService:
             raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
             created = await self.published_job_service.create_published_job(payload=payload)
-            if self.scheduler_registry is not None:
-                await self.scheduler_registry.upsert_published_job(created.published_job_id)
+            await self._sync_published_job_registry_safely(
+                published_job_id=created.published_job_id,
+            )
             return created
         except InvalidPublishedJobScheduleError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -481,4 +482,18 @@ class ControlPlaneService:
                 "failed to sync crawl policy registry: policy_id=%s system_id=%s",
                 policy_id,
                 system_id,
+            )
+
+    async def _sync_published_job_registry(self, *, published_job_id: UUID) -> None:
+        if self.scheduler_registry is None:
+            return
+        await self.scheduler_registry.upsert_published_job(published_job_id)
+
+    async def _sync_published_job_registry_safely(self, *, published_job_id: UUID) -> None:
+        try:
+            await self._sync_published_job_registry(published_job_id=published_job_id)
+        except Exception:
+            logger.exception(
+                "runtime mirror failure while syncing published job registry: published_job_id=%s",
+                published_job_id,
             )

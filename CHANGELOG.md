@@ -1,5 +1,8 @@
 ## 2026-04-02
 
+- 补齐 worker 常驻进程入口：新增 `runlet-worker` 启动脚本，正式组装 `AuthService/CrawlerService/AssetCompilerService/RunnerService` 与四类队列 handler；同时新增 `PlaywrightRunnerRuntime`，让 `run_check` 在 worker 中可按 `module_plan` + 服务端认证注入执行。
+- 收口 APScheduler 运行闭环：新增 `runlet-scheduler` 正式入口，`scheduler_daemon` 现在会按 `scheduler_reload_interval_seconds` 周期 `reload_all()`，并把 `SchedulerRegistry` 改为支持 fresh session 重载，确保独立 daemon 进程能从数据库真相源持续收敛最新 `published_job/runtime_policy` 状态。
+- 修复发布任务创建后的 registry 镜像异常处理：`published_job` 创建在数据库已提交后，若 `SchedulerRegistry.upsert_published_job(...)` 失败，现在只记录 runtime mirror failure，不再错误返回 500；同时补充 API 回归测试覆盖该降级语义。
 - 补齐统一调度文档收口：将 APScheduler 设计文档改写为“已实施快照”语态，补充 README 中 `SchedulerRuntime/SchedulerRegistry/scheduler_daemon` 运行时结构与 callback 回流路径说明，并在调度回归中新增模块级断言防止 `SchedulerService` 旧边界回归。
 - 下线旧批量扫描遗留语义：补充 `PublishedJobService` 不再暴露 `trigger_due_jobs` 的回归断言，更新 scheduler/README/统一调度设计文档措辞，明确发布任务调度已统一为 APScheduler callback 单条触发边界。
 - 修复发布任务创建在非法 cron 下的脏写与错误码问题：`schedule_expr` 现在在 `PublishedJobService` 提交前校验，非法表达式返回 422 且不持久化 `published_jobs`；同时清理 `SchedulerRegistry` 未使用构造参数。

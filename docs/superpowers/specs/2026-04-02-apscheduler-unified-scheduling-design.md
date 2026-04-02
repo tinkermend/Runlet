@@ -229,17 +229,33 @@ flowchart TD
 - 初始化 APScheduler
 - 启动时从数据库恢复全部有效调度对象
 - 对接 API 写库后的增量注册/更新/移除
+- 通过 daemon 周期 `reload_all()` 从数据库重新收敛调度镜像
 - 在 job fire 时调用统一 callback
 
 ### 6.5 `scheduler daemon`
 
-`scheduler daemon` 是单实例常驻进程，负责启动 `SchedulerRuntime`。
+`scheduler daemon` 是单实例常驻进程，负责启动 `SchedulerRuntime`。当前实现通过 `runlet-scheduler` 入口拉起，并按 `scheduler_reload_interval_seconds` 周期执行 `reload_all()`，保证独立进程部署下也能从数据库真相源收敛最新调度状态。
 
 第一版只支持单实例部署，因此不要求：
 
 - leader 选举
 - 分布式锁
 - 多实例 job claim
+
+### 6.6 `worker daemon`
+
+`worker daemon` 当前通过 `runlet-worker` 入口拉起，负责持续消费 `queued_jobs`。该进程会组装：
+
+- `AuthService + PlaywrightBrowserLoginAdapter`
+- `CrawlerService + PlaywrightBrowserFactory`
+- `AssetCompilerService`
+- `RunnerService + PlaywrightRunnerRuntime`
+
+也就是说，调度 fire 后的正式执行链已经闭环为：
+
+`APScheduler callback -> queued_jobs -> worker daemon -> domain handler`
+
+其中 `run_check` 仍然优先执行 `module_plan`，认证由服务端 runtime 注入，而不是把 `script_renders` 当成唯一真相。
 
 ---
 
@@ -251,7 +267,7 @@ flowchart TD
 
 1. API 调用 `control_plane` 创建或更新 `published_job`
 2. 数据库成功持久化 `published_jobs`
-3. `SchedulerRegistry.upsert_published_job(...)` 把记录转换为 APScheduler job
+3. `SchedulerRegistry.upsert_published_job(...)` 最佳努力把记录转换为 APScheduler job；若镜像同步失败，只记录 runtime mirror failure，不回滚数据库提交
 4. APScheduler 使用 `CronTrigger` 注册 `published_job:<id>`
 
 到点触发时：
@@ -268,7 +284,7 @@ flowchart TD
 
 1. API 调用 `control_plane` 更新认证策略
 2. 数据库成功持久化 `system_auth_policies`
-3. `SchedulerRegistry.upsert_auth_policy(...)` 注册 `auth_policy:<system_id>`
+3. `SchedulerRegistry.upsert_auth_policy(...)` 最佳努力注册 `auth_policy:<system_id>`
 
 到点触发时：
 
@@ -284,7 +300,7 @@ flowchart TD
 
 1. API 调用 `control_plane` 更新采集策略
 2. 数据库成功持久化 `system_crawl_policies`
-3. `SchedulerRegistry.upsert_crawl_policy(...)` 注册 `crawl_policy:<system_id>`
+3. `SchedulerRegistry.upsert_crawl_policy(...)` 最佳努力注册 `crawl_policy:<system_id>`
 
 到点触发时：
 

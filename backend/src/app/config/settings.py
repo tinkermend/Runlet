@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
     scheduler_enabled: bool = Field(default=True)
     scheduler_timezone: str = Field(default="UTC")
+    scheduler_reload_interval_seconds: float = Field(default=30.0, ge=0.0)
     worker_poll_interval_ms: int = Field(default=500, ge=1)
 
     model_config = SettingsConfigDict(

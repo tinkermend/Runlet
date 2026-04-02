@@ -207,15 +207,33 @@ curl "http://127.0.0.1:8000/api/v1/published-jobs/<published-job-id>/runs"
 当前调度运行时由以下组件组成：
 
 - `SchedulerRuntime`（`src/app/runtime/scheduler_runtime.py`）：APScheduler 的进程内宿主，负责启动/停止、重载注册项，并在 job fire 后回调到平台 enqueue 边界。
-- `SchedulerRegistry`（`src/app/domains/control_plane/scheduler_registry.py`）：数据库真相到 APScheduler job 的映射层，负责 `published_job`、`auth_policy`、`crawl_policy` 的 upsert/remove。
-- `scheduler_daemon`（`src/app/runtime/scheduler_daemon.py`）：常驻进程入口，负责托管 `SchedulerRuntime` 生命周期。
+- `SchedulerRegistry`（`src/app/domains/control_plane/scheduler_registry.py`）：数据库真相到 APScheduler job 的映射层，负责 `published_job`、`auth_policy`、`crawl_policy` 的 upsert/remove；daemon 侧使用 fresh session 周期重载，避免长生命周期 session 缓存旧状态。
+- `scheduler_daemon`（`src/app/runtime/scheduler_daemon.py`）：常驻进程入口，负责托管 `SchedulerRuntime` 生命周期，并按 `scheduler_reload_interval_seconds` 周期从数据库收敛最新调度对象。
 
 当前触发链路：
 
-1. `control_plane` 写入 `published_jobs` 或 `runtime_policies` 后调用 `SchedulerRegistry` 注册/更新 APScheduler 触发器。
+1. `control_plane` 写入 `published_jobs` 或 `runtime_policies` 后最佳努力调用 `SchedulerRegistry` 注册/更新 APScheduler 触发器；若镜像同步失败，请求仍以数据库提交为准返回成功。
 2. APScheduler 到点 fire，`SchedulerRuntime` 监听调度事件并按 job kind 回调。
 3. `published_job` 回调重入 `PublishedJobService.trigger_scheduled_job(...)`，创建 `job_run` 并入队 `run_check`。
 4. `auth_policy`/`crawl_policy` 回调分别入队 `auth_refresh`/`crawl`，并写入 `policy_id`、`trigger_source=scheduler`、`scheduled_at` 审计字段。
+
+### 启动 scheduler daemon
+
+```bash
+cd backend
+uv run runlet-scheduler
+```
+
+该命令会构建独立的 `SchedulerRuntime` 进程，并定期执行 `reload_all()`，因此即使 API 进程内的热同步镜像失败或与 daemon 不在同一进程，运行中的调度器也会从数据库真相源收敛到最新状态。
+
+### 启动 worker daemon
+
+```bash
+cd backend
+uv run runlet-worker
+```
+
+该命令会构建正式 `WorkerRunner` 进程，接线 `auth_refresh`、`crawl`、`asset_compile`、`run_check` 四类 handler。`run_check` 现在默认使用 `PlaywrightRunnerRuntime`，由服务端注入认证态并消费 `module_plan`，不会直接把脚本文本当作唯一执行真相。
 
 ### APScheduler 回调触发
 

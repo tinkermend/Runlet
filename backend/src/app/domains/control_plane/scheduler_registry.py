@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+from collections.abc import Callable
 from uuid import UUID
 
 from apscheduler.jobstores.base import JobLookupError
@@ -42,27 +44,41 @@ class SchedulerRegistry:
     def __init__(
         self,
         *,
-        session: Session | AsyncSession,
+        session: Session | AsyncSession | None = None,
+        session_factory: Callable[[], Session | AsyncSession] | None = None,
         scheduler: BaseScheduler,
     ) -> None:
+        if session is None and session_factory is None:
+            raise ValueError("session or session_factory is required")
         self.session = session
+        self.session_factory = session_factory
         self.scheduler = scheduler
 
     async def load_all_from_db(self) -> None:
-        published_jobs = await self._exec_all(select(PublishedJob.id))
-        auth_policies = await self._exec_all(select(SystemAuthPolicy.id))
-        crawl_policies = await self._exec_all(select(SystemCrawlPolicy.id))
+        async def _run(session: Session | AsyncSession) -> None:
+            published_jobs = await self._exec_all(session, select(PublishedJob.id))
+            auth_policies = await self._exec_all(session, select(SystemAuthPolicy.id))
+            crawl_policies = await self._exec_all(session, select(SystemCrawlPolicy.id))
 
-        for row in published_jobs:
-            await self.upsert_published_job(row)
-        for row in auth_policies:
-            await self.upsert_auth_policy(row)
-        for row in crawl_policies:
-            await self.upsert_crawl_policy(row)
+            for row in published_jobs:
+                await self._upsert_published_job(session, row)
+            for row in auth_policies:
+                await self._upsert_auth_policy(session, row)
+            for row in crawl_policies:
+                await self._upsert_crawl_policy(session, row)
+
+        await self._with_session(_run)
 
     async def upsert_published_job(self, published_job_id: UUID) -> None:
+        await self._with_session(lambda session: self._upsert_published_job(session, published_job_id))
+
+    async def _upsert_published_job(
+        self,
+        session: Session | AsyncSession,
+        published_job_id: UUID,
+    ) -> None:
         job_id = build_published_job_id(published_job_id)
-        published_job = await self._get(PublishedJob, published_job_id)
+        published_job = await self._get(session, PublishedJob, published_job_id)
         if published_job is None:
             self.remove_job(job_id)
             return
@@ -79,7 +95,14 @@ class SchedulerRegistry:
         )
 
     async def upsert_auth_policy(self, policy_id: UUID) -> None:
-        policy = await self._get(SystemAuthPolicy, policy_id)
+        await self._with_session(lambda session: self._upsert_auth_policy(session, policy_id))
+
+    async def _upsert_auth_policy(
+        self,
+        session: Session | AsyncSession,
+        policy_id: UUID,
+    ) -> None:
+        policy = await self._get(session, SystemAuthPolicy, policy_id)
         if policy is None:
             return
         job_id = build_auth_policy_job_id(policy.system_id)
@@ -96,7 +119,14 @@ class SchedulerRegistry:
         )
 
     async def upsert_crawl_policy(self, policy_id: UUID) -> None:
-        policy = await self._get(SystemCrawlPolicy, policy_id)
+        await self._with_session(lambda session: self._upsert_crawl_policy(session, policy_id))
+
+    async def _upsert_crawl_policy(
+        self,
+        session: Session | AsyncSession,
+        policy_id: UUID,
+    ) -> None:
+        policy = await self._get(session, SystemCrawlPolicy, policy_id)
         if policy is None:
             return
         job_id = build_crawl_policy_job_id(policy.system_id)
@@ -118,6 +148,19 @@ class SchedulerRegistry:
         except JobLookupError:
             return
 
+    async def _with_session(self, operation):
+        if self.session is not None:
+            return await operation(self.session)
+
+        assert self.session_factory is not None
+        session = self.session_factory()
+        try:
+            return await operation(session)
+        finally:
+            closer = session.close()
+            if inspect.isawaitable(closer):
+                await closer
+
     def _upsert_job(
         self,
         *,
@@ -136,13 +179,13 @@ class SchedulerRegistry:
             kwargs={"kind": kind, "entity_id": entity_id},
         )
 
-    async def _get(self, model: type, identifier: UUID):
-        if isinstance(self.session, AsyncSession):
-            return await self.session.get(model, identifier)
-        return self.session.get(model, identifier)
+    async def _get(self, session: Session | AsyncSession, model: type, identifier: UUID):
+        if isinstance(session, AsyncSession):
+            return await session.get(model, identifier)
+        return session.get(model, identifier)
 
-    async def _exec_all(self, statement):
-        if isinstance(self.session, AsyncSession):
-            result = await self.session.exec(statement)
+    async def _exec_all(self, session: Session | AsyncSession, statement):
+        if isinstance(session, AsyncSession):
+            result = await session.exec(statement)
             return result.all()
-        return self.session.exec(statement).all()
+        return session.exec(statement).all()

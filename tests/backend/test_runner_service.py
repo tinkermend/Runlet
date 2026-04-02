@@ -55,6 +55,19 @@ class FakeRuntime:
         return True
 
 
+class LifecycleRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.base_url: str | None = None
+        self.closed = 0
+
+    def set_base_url(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
 @pytest.fixture
 def seeded_ready_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -179,6 +192,20 @@ async def test_run_page_check_supports_assert_page_ready_alias(runner_service, s
     result = await runner_service.run_page_check(page_check_id=seeded_page_open_check.id)
     assert result.status == "passed"
     assert result.execution_run_id is not None
+
+
+@pytest.mark.anyio
+async def test_run_page_check_configures_and_closes_runtime(db_session, seeded_ready_check, seeded_system):
+    from app.domains.runner_service.service import RunnerService
+
+    runtime = LifecycleRuntime()
+    service = RunnerService(session=db_session, runtime=runtime)
+
+    result = await service.run_page_check(page_check_id=seeded_ready_check.id)
+
+    assert result.status == "passed"
+    assert runtime.base_url == seeded_system.base_url
+    assert runtime.closed == 1
 
 
 @pytest.mark.anyio

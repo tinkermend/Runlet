@@ -17,6 +17,7 @@ from app.infrastructure.db.models.jobs import QueuedJob, utcnow
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
 from app.jobs.crawl_job import CrawlJobHandler
 from app.shared.enums import QueuedJobStatus
+from app.workers import runner as worker_runner_module
 from app.workers.runner import WorkerRunner, build_worker_handlers
 
 
@@ -296,3 +297,98 @@ async def test_worker_runner_run_forever_uses_configured_poll_interval_when_not_
 
     assert calls["count"] > 0
     assert sleep_seconds == [0.007]
+
+
+@pytest.mark.anyio
+async def test_run_worker_process_builds_runner_and_runs_forever(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class StubProcessRunner:
+        async def run_forever(
+            self,
+            poll_interval_ms: int | None = None,
+            stop_event: anyio.Event | None = None,
+        ) -> None:
+            captured["poll_interval_ms"] = poll_interval_ms
+            captured["stop_event"] = stop_event
+
+    def fake_build_worker_runner():
+        captured["built"] = True
+        return StubProcessRunner()
+
+    monkeypatch.setattr(
+        worker_runner_module,
+        "build_worker_runner",
+        fake_build_worker_runner,
+    )
+
+    stop_event = anyio.Event()
+    await worker_runner_module.run_worker_process(
+        stop_event=stop_event,
+        poll_interval_ms=123,
+    )
+
+    assert captured == {
+        "built": True,
+        "poll_interval_ms": 123,
+        "stop_event": stop_event,
+    }
+
+
+def test_build_worker_runner_wires_default_handlers(monkeypatch):
+    fake_session = object()
+
+    class StubSessionFactory:
+        def __call__(self):
+            return fake_session
+
+    monkeypatch.setattr(
+        worker_runner_module,
+        "create_session_factory",
+        lambda: StubSessionFactory(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "AuthService",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "CrawlerService",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "AssetCompilerService",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "RunnerService",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "PlaywrightBrowserLoginAdapter",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "PlaywrightBrowserFactory",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        worker_runner_module,
+        "PlaywrightRunnerRuntime",
+        lambda: object(),
+    )
+
+    runner = worker_runner_module.build_worker_runner()
+
+    assert runner.session is fake_session
+    assert set(runner.handlers) == {
+        AUTH_REFRESH_JOB_TYPE,
+        CRAWL_JOB_TYPE,
+        ASSET_COMPILE_JOB_TYPE,
+        RUN_CHECK_JOB_TYPE,
+    }

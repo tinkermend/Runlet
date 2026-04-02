@@ -8,11 +8,15 @@ from apscheduler.triggers.date import DateTrigger
 from sqlmodel import Session
 from sqlmodel import select
 
-from app.domains.control_plane.scheduler_registry import build_auth_policy_job_id, build_published_job_id
-from app.infrastructure.db.models.jobs import QueuedJob
+from app.domains.control_plane.scheduler_registry import (
+    SchedulerRegistry,
+    build_auth_policy_job_id,
+    build_published_job_id,
+)
+from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.runtime.scheduler_runtime import SchedulerRuntime
-from app.shared.enums import RuntimePolicyState
+from app.shared.enums import PublishedJobState, RuntimePolicyState
 
 
 @pytest.fixture
@@ -55,6 +59,43 @@ async def test_scheduler_runtime_restores_jobs_from_database(
         assert scheduler_runtime.scheduler.get_job(build_auth_policy_job_id(seeded_auth_policy.system_id)) is not None
     finally:
         await scheduler_runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_scheduler_runtime_reload_all_observes_external_database_updates(
+    db_session,
+    seeded_published_job,
+    scheduler,
+):
+    bind = db_session.bind
+
+    def session_factory():
+        return Session(bind=bind)
+
+    runtime = SchedulerRuntime(
+        scheduler_registry=SchedulerRegistry(
+            scheduler=scheduler,
+            session_factory=session_factory,
+        ),
+        session_factory=session_factory,
+    )
+
+    await runtime.start()
+    try:
+        assert runtime.scheduler.get_job(build_published_job_id(seeded_published_job.id)) is not None
+
+        with Session(bind=bind) as mutation_session:
+            mutated_job = mutation_session.get(PublishedJob, seeded_published_job.id)
+            assert mutated_job is not None
+            mutated_job.state = PublishedJobState.PAUSED.value
+            mutation_session.add(mutated_job)
+            mutation_session.commit()
+
+        await runtime.reload_all()
+
+        assert runtime.scheduler.get_job(build_published_job_id(seeded_published_job.id)) is None
+    finally:
+        await runtime.stop()
 
 
 @pytest.mark.anyio

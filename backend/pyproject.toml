@@ -29,5 +29,9 @@ dev = [
   "pytest>=8.3",
 ]
 
+[project.scripts]
+runlet-scheduler = "app.runtime.scheduler_daemon:main"
+runlet-worker = "app.workers.runner:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

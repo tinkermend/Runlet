@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import inspect
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel import Session, select
 
 from app.config.settings import settings
+from app.domains.asset_compiler.service import AssetCompilerService
+from app.domains.auth_service.browser_login import PlaywrightBrowserLoginAdapter
+from app.domains.auth_service.service import AuthService
+from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowserFactory
+from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+from app.domains.runner_service.service import RunnerService
 from app.infrastructure.db.models.jobs import QueuedJob
+from app.infrastructure.db.session import create_session_factory
 from app.shared.enums import QueuedJobStatus
 
 
@@ -131,3 +141,58 @@ def build_worker_handlers(
             runner_service=runner_service,
         )
     return handlers
+
+
+def build_worker_runner(
+    *,
+    session_factory: async_sessionmaker[AsyncSession] | Callable[[], Session | AsyncSession] | None = None,
+) -> WorkerRunner:
+    resolved_session_factory = session_factory or create_session_factory()
+    session = resolved_session_factory()
+    auth_service = AuthService(
+        session=session,
+        browser_login=PlaywrightBrowserLoginAdapter(),
+    )
+    crawler_service = CrawlerService(
+        session=session,
+        browser_factory=PlaywrightBrowserFactory(),
+    )
+    asset_compiler_service = AssetCompilerService(session=session)
+    runner_service = RunnerService(
+        session=session,
+        runtime=PlaywrightRunnerRuntime(),
+    )
+    return WorkerRunner(
+        session=session,
+        handlers=build_worker_handlers(
+            session=session,
+            auth_service=auth_service,
+            crawler_service=crawler_service,
+            asset_compiler_service=asset_compiler_service,
+            runner_service=runner_service,
+        ),
+    )
+
+
+async def run_worker_process(
+    *,
+    stop_event: anyio.Event | None = None,
+    poll_interval_ms: int | None = None,
+) -> None:
+    runner = build_worker_runner()
+    try:
+        await runner.run_forever(
+            poll_interval_ms=poll_interval_ms,
+            stop_event=stop_event,
+        )
+    finally:
+        session = getattr(runner, "session", None)
+        if session is None:
+            return
+        closer = session.close()
+        if inspect.isawaitable(closer):
+            await closer
+
+
+def main() -> None:
+    anyio.run(run_worker_process)
