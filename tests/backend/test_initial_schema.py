@@ -129,6 +129,9 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "job_type",
         "payload",
         "result_payload",
+        "policy_id",
+        "trigger_source",
+        "scheduled_at",
         "status",
         "created_at",
         "started_at",
@@ -154,6 +157,7 @@ def test_initial_schema_exposes_core_columns(db_engine):
     assert {
         "published_job_id",
         "execution_run_id",
+        "policy_id",
         "trigger_source",
         "run_status",
         "scheduled_at",
@@ -206,11 +210,70 @@ def test_runtime_policy_tables_exist(inspector):
     assert "system_auth_policies" in table_names
     assert "system_crawl_policies" in table_names
 
+    auth_policy_columns = {column["name"] for column in inspector.get_columns("system_auth_policies")}
+    assert {
+        "system_id",
+        "enabled",
+        "state",
+        "schedule_expr",
+        "auth_mode",
+        "captcha_provider",
+        "last_triggered_at",
+    } <= auth_policy_columns
+
+    crawl_policy_columns = {column["name"] for column in inspector.get_columns("system_crawl_policies")}
+    assert {
+        "system_id",
+        "enabled",
+        "state",
+        "schedule_expr",
+        "crawl_scope",
+        "last_triggered_at",
+    } <= crawl_policy_columns
+
+    auth_policy_indexes = inspector.get_indexes("system_auth_policies")
+    assert any(
+        index["name"] == "ix_system_auth_policies_system_id" and bool(index.get("unique"))
+        for index in auth_policy_indexes
+    )
+    crawl_policy_indexes = inspector.get_indexes("system_crawl_policies")
+    assert any(
+        index["name"] == "ix_system_crawl_policies_system_id" and bool(index.get("unique"))
+        for index in crawl_policy_indexes
+    )
+
+    auth_policy_foreign_keys = inspector.get_foreign_keys("system_auth_policies")
+    assert any(
+        fk["referred_table"] == "systems"
+        and fk["constrained_columns"] == ["system_id"]
+        and fk["referred_columns"] == ["id"]
+        for fk in auth_policy_foreign_keys
+    )
+    crawl_policy_foreign_keys = inspector.get_foreign_keys("system_crawl_policies")
+    assert any(
+        fk["referred_table"] == "systems"
+        and fk["constrained_columns"] == ["system_id"]
+        and fk["referred_columns"] == ["id"]
+        for fk in crawl_policy_foreign_keys
+    )
+
 
 def test_runtime_policy_models_expose_expected_fields():
     from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 
-    assert hasattr(SystemAuthPolicy, "schedule_expr")
-    assert hasattr(SystemAuthPolicy, "last_triggered_at")
-    assert hasattr(SystemCrawlPolicy, "crawl_scope")
-    assert hasattr(SystemCrawlPolicy, "enabled")
+    assert SystemAuthPolicy.__tablename__ == "system_auth_policies"
+    assert SystemCrawlPolicy.__tablename__ == "system_crawl_policies"
+
+    assert {"system_id", "schedule_expr", "last_triggered_at"} <= set(SystemAuthPolicy.model_fields)
+    assert {"system_id", "crawl_scope", "enabled"} <= set(SystemCrawlPolicy.model_fields)
+    assert SystemAuthPolicy.model_fields["enabled"].default is True
+    assert SystemAuthPolicy.model_fields["state"].default == "active"
+    assert SystemAuthPolicy.model_fields["captcha_provider"].default == "ddddocr"
+    assert SystemCrawlPolicy.model_fields["enabled"].default is True
+    assert SystemCrawlPolicy.model_fields["state"].default == "active"
+    assert SystemCrawlPolicy.model_fields["crawl_scope"].default == "full"
+
+    auth_table_columns = set(SystemAuthPolicy.__table__.columns.keys())
+    crawl_table_columns = set(SystemCrawlPolicy.__table__.columns.keys())
+    assert {"id", "system_id", "schedule_expr", "last_triggered_at"} <= auth_table_columns
+    assert {"id", "system_id", "crawl_scope", "last_triggered_at"} <= crawl_table_columns

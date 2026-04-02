@@ -84,7 +84,3 @@ class AuthState(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
-
-
-# Ensure system-scoped runtime policy tables are registered with metadata.
-from app.infrastructure.db.models import runtime_policies as _runtime_policies  # noqa: E402, F401
