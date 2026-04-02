@@ -1,6 +1,7 @@
 ## 2026-04-02
 
 - 补齐 runtime policy 的 worker 侧审计字段：`system_auth_policies/system_crawl_policies` 新增 `last_succeeded_at`、`last_failed_at`、`last_failure_message`，`auth_refresh` 与 `crawl` worker 在成功/失败后会回写绑定 policy 的执行结果。
+- 新增 `ddddocr` 验证码求解抽象与契约测试，首版支持图形验证码识别、滑块验证码偏移求解，并为短信验证码保留显式未实现入口与禁用态错误分流。
 - 补充仓库技术栈说明，并将 backend 依赖声明与本地锁文件对齐：为验证码能力显式加入 `ddddocr` 依赖，避免 `uv.lock` 与 `pyproject.toml` 不一致。
 - 补齐 worker 常驻进程入口：新增 `runlet-worker` 启动脚本，正式组装 `AuthService/CrawlerService/AssetCompilerService/RunnerService` 与四类队列 handler；同时新增 `PlaywrightRunnerRuntime`，让 `run_check` 在 worker 中可按 `module_plan` + 服务端认证注入执行。
 - 收口 APScheduler 运行闭环：新增 `runlet-scheduler` 正式入口，`scheduler_daemon` 现在会按 `scheduler_reload_interval_seconds` 周期 `reload_all()`，并把 `SchedulerRegistry` 改为支持 fresh session 重载，确保独立 daemon 进程能从数据库真相源持续收敛最新 `published_job/runtime_policy` 状态。
@@ -11,6 +12,7 @@
 - 新增 APScheduler registry（非持久化 job store）并接入 published job 创建链路：统一 `published_job/auth_policy/crawl_policy` job id 规范，发布任务创建后自动 upsert 触发器，`enabled=false`/非 active 状态时自动移除注册任务。
 - 收敛发布任务调度服务边界为 `PublishedJobService.trigger_scheduled_job`，补回按 `scheduled_at` 对 `schedule_expr` 的二次校验，并保留“同一分钟去重”，防止计划变更后的陈旧触发继续入队。
 - 新增 runtime policy schema 基线：增加 `system_auth_policies/system_crawl_policies` 模型与 `0006_runtime_policies_and_scheduler_runtime` 迁移，并为后续调度链路补齐 `queued_jobs/job_runs` 的 `policy_id` 及队列审计字段 `trigger_source/scheduled_at`。
+- 对齐 auth/crawl runtime 文档与 APScheduler 统一调度方案：auth/crawl 计划不再重复定义独立扫库式 scheduler 主链，改为依赖统一 `SchedulerRegistry + SchedulerRuntime + scheduler daemon`。
 - 新增 APScheduler 统一调度改造实施计划，按 `runtime_policies` schema、发布任务服务拆分、APScheduler registry、runtime policy API、scheduler runtime/daemon、旧扫描链清理六个任务拆分为可执行步骤。
 - 新增 APScheduler 统一调度改造设计文档，明确以数据库为调度真相、APScheduler 为统一触发器、`control_plane` 为调度运行归属，并给出 `published_jobs + runtime_policies` 的统一改造路径、阶段拆分与工作量评估。
 - 新增后端认证与采集运行闭环实施计划，按 runtime policy、control_plane daemon、`ddddocr` 验证码、真实 crawler extractor、调度扫描器与回归验证拆分为可执行任务。
