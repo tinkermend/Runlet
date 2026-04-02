@@ -43,7 +43,14 @@ class WorkerRunner:
             await self._commit()
             return True
 
-        await handler.run(job_id=job.id)
+        try:
+            await handler.run(job_id=job.id)
+        except Exception as exc:
+            job.status = QueuedJobStatus.FAILED.value
+            job.started_at = job.started_at or utcnow()
+            job.finished_at = utcnow()
+            job.failure_message = f"handler crashed: {exc}"
+            await self._commit()
         return True
 
     async def _next_accepted_job(self) -> QueuedJob | None:
@@ -70,15 +77,18 @@ def build_worker_handlers(
     auth_service=None,
     crawler_service=None,
     asset_compiler_service=None,
+    runner_service=None,
 ) -> dict[str, JobHandler]:
     from app.domains.control_plane.job_types import (
         ASSET_COMPILE_JOB_TYPE,
         AUTH_REFRESH_JOB_TYPE,
         CRAWL_JOB_TYPE,
+        RUN_CHECK_JOB_TYPE,
     )
     from app.jobs.asset_compile_job import AssetCompileJobHandler
     from app.jobs.auth_refresh_job import AuthRefreshJobHandler
     from app.jobs.crawl_job import CrawlJobHandler
+    from app.jobs.run_check_job import RunCheckJobHandler
 
     handlers: dict[str, JobHandler] = {}
     if auth_service is not None:
@@ -95,5 +105,10 @@ def build_worker_handlers(
         handlers[ASSET_COMPILE_JOB_TYPE] = AssetCompileJobHandler(
             session=session,
             asset_compiler_service=asset_compiler_service,
+        )
+    if runner_service is not None:
+        handlers[RUN_CHECK_JOB_TYPE] = RunCheckJobHandler(
+            session=session,
+            runner_service=runner_service,
         )
     return handlers
