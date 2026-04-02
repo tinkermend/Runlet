@@ -123,6 +123,23 @@ def test_create_disabled_published_job_unregisters_scheduler_job(client, rendere
     assert scheduler_job is None
 
 
+def test_create_published_job_rejects_invalid_cron_without_persisting_row(client, rendered_script, db_session):
+    response = client.post(
+        "/api/v1/published-jobs",
+        json={
+            "script_render_id": str(rendered_script.id),
+            "page_check_id": str(rendered_script.render_metadata["page_check_id"]),
+            "schedule_type": "cron",
+            "schedule_expr": "invalid cron expr",
+            "trigger_source": "platform",
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert db_session.exec(select(PublishedJob)).all() == []
+
+
 def test_trigger_published_job_enqueues_run_check(client, created_published_job, db_session, rendered_script):
     response = client.post(f"/api/v1/published-jobs/{created_published_job['published_job_id']}:trigger")
 

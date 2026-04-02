@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
@@ -19,6 +20,14 @@ def _validate_required_text(value: str) -> str:
     if not normalized:
         raise ValueError("value must not be empty")
     return normalized
+
+
+class PublishedJobNotFoundError(ValueError):
+    pass
+
+
+class InvalidPublishedJobScheduleError(ValueError):
+    pass
 
 
 class CreatePublishedJobRequest(BaseModel):
@@ -84,9 +93,11 @@ class PublishedJobService:
         *,
         payload: CreatePublishedJobRequest,
     ) -> PublishedJobCreated:
+        _validate_cron_expr(payload.schedule_expr)
+
         script_render = await self._get(ScriptRender, payload.script_render_id)
         if script_render is None:
-            raise ValueError(f"script render {payload.script_render_id} not found")
+            raise PublishedJobNotFoundError(f"script render {payload.script_render_id} not found")
 
         render_metadata = script_render.render_metadata or {}
         published_job = PublishedJob(
@@ -119,7 +130,7 @@ class PublishedJobService:
     ) -> PublishedJobTriggerAccepted:
         published_job = await self._get(PublishedJob, published_job_id)
         if published_job is None:
-            raise ValueError(f"published job {published_job_id} not found")
+            raise PublishedJobNotFoundError(f"published job {published_job_id} not found")
 
         job_run, queued_job_id = await self.trigger.trigger(
             published_job=published_job,
@@ -138,7 +149,7 @@ class PublishedJobService:
     ) -> PublishedJobRunsList:
         published_job = await self._get(PublishedJob, published_job_id)
         if published_job is None:
-            raise ValueError(f"published job {published_job_id} not found")
+            raise PublishedJobNotFoundError(f"published job {published_job_id} not found")
 
         statement = (
             select(JobRun)
@@ -246,6 +257,13 @@ def _optional_text(value: object) -> str | None:
 
 def _build_job_key(page_check_id: UUID, script_render_id: UUID) -> str:
     return f"{page_check_id.hex[:12]}_{script_render_id.hex[:12]}"
+
+
+def _validate_cron_expr(schedule_expr: str) -> None:
+    try:
+        CronTrigger.from_crontab(schedule_expr, timezone="UTC")
+    except ValueError as exc:
+        raise InvalidPublishedJobScheduleError(f"invalid schedule expression: {schedule_expr}") from exc
 
 
 def _state_value(value: PublishedJobState | str) -> str:

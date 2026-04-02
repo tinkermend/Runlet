@@ -261,14 +261,10 @@ def scheduler() -> BackgroundScheduler:
 @pytest.fixture
 def scheduler_registry(db_session: Session, scheduler: BackgroundScheduler):
     from app.domains.control_plane.scheduler_registry import SchedulerRegistry
-    from app.domains.runner_service.scheduler import PublishedJobService
-    from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 
-    dispatcher = SqlQueueDispatcher(db_session)
     return SchedulerRegistry(
         session=db_session,
         scheduler=scheduler,
-        published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
     )
 
 

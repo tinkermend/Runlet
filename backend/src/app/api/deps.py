@@ -34,7 +34,6 @@ async def get_control_plane_service(session: SessionDep) -> ControlPlaneService:
     scheduler_registry = SchedulerRegistry(
         session=session,
         scheduler=get_registry_scheduler(),
-        published_job_service=published_job_service,
     )
     return ControlPlaneService(
         repository=SqlControlPlaneRepository(session),

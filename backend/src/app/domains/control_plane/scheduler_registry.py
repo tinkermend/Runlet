@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from apscheduler.jobstores.base import JobLookupError
@@ -45,11 +44,9 @@ class SchedulerRegistry:
         *,
         session: Session | AsyncSession,
         scheduler: BaseScheduler,
-        published_job_service: Any | None = None,
     ) -> None:
         self.session = session
         self.scheduler = scheduler
-        self.published_job_service = published_job_service
 
     async def load_all_from_db(self) -> None:
         published_jobs = await self._exec_all(select(PublishedJob.id))

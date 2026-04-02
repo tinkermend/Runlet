@@ -27,7 +27,9 @@ from app.domains.control_plane.schemas import (
 from app.domains.runner_service.script_renderer import RenderScriptResult
 from app.domains.runner_service.scheduler import (
     CreatePublishedJobRequest,
+    InvalidPublishedJobScheduleError,
     PublishedJobCreated,
+    PublishedJobNotFoundError,
     PublishedJobRunsList,
     PublishedJobService,
     PublishedJobTriggerAccepted,
@@ -167,7 +169,9 @@ class ControlPlaneService:
             if self.scheduler_registry is not None:
                 await self.scheduler_registry.upsert_published_job(created.published_job_id)
             return created
-        except ValueError as exc:
+        except InvalidPublishedJobScheduleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PublishedJobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def trigger_published_job(
@@ -183,7 +187,7 @@ class ControlPlaneService:
                 published_job_id=published_job_id,
                 trigger_source=trigger_source,
             )
-        except ValueError as exc:
+        except PublishedJobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def list_published_job_runs(
@@ -197,7 +201,7 @@ class ControlPlaneService:
             return await self.published_job_service.list_published_job_runs(
                 published_job_id=published_job_id,
             )
-        except ValueError as exc:
+        except PublishedJobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def refresh_auth(self, *, system_id: UUID) -> AuthRefreshAccepted:
