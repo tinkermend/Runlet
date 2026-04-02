@@ -1,0 +1,538 @@
+# APScheduler 统一调度改造设计
+
+**日期：** 2026-04-02  
+**作者：** Codex  
+**状态：** Draft
+
+---
+
+## 1. 文档定位
+
+本文档定义后端调度能力从“自研 cron 扫描”改造为“数据库为真相、APScheduler 为统一触发器”的设计方案，覆盖以下两类调度对象：
+
+- `published_jobs`
+- `system_auth_policies` / `system_crawl_policies`
+
+本文档只描述设计，不包含实现提交。设计继续遵守仓库中的核心约束：
+
+- 检查资产是主模型
+- Playwright 脚本是派生产物
+- 正式执行统一走 `control_plane`
+- 认证注入必须由服务端统一处理
+- 平台默认调度对象是 `page_check`、`asset_version`、`runtime_policy`，不是孤立脚本文本
+
+---
+
+## 2. 背景与问题归因
+
+当前仓库在文档层与实现层之间存在明显漂移：
+
+1. 多份设计与实施计划把 `APScheduler` 写入技术栈。
+2. 实际后端依赖未引入 `apscheduler`。
+3. 当前落地的调度实现是自研数据库扫描：
+   - `published_jobs` 由 `SchedulerService.trigger_due_jobs()` 扫描并匹配 cron。
+   - `auth/crawl runtime policy` 还停留在 design/plan，相关 `runtime_scheduler.py`、`scheduler_daemon.py` 尚未实现。
+
+这说明当前状态并不是“APScheduler 已经被实现后又回退”，而是：
+
+- 第一阶段为了优先打通 `published_job -> queued_job -> worker` 主链，先落了最小可用的 cron 扫描实现；
+- 第二阶段 auth/crawl runtime 设计继续扩展了 `scheduler daemon`，但尚未实现；
+- 最终形成“文档定义 APScheduler、代码实际未接入”的漂移状态。
+
+---
+
+## 3. 目标与非目标
+
+### 3.1 目标
+
+本次改造目标如下：
+
+1. 统一使用 `APScheduler` 承载平台内部定时触发能力。
+2. 保持数据库仍为调度真相源，不把 APScheduler job store 作为业务真相。
+3. 把 `published_jobs`、`system_auth_policies`、`system_crawl_policies` 收口到同一套调度运行面。
+4. 保持“到点触发”和“正式执行”分离：
+   - APScheduler 只负责编排触发；
+   - 正式执行仍然走 `control_plane -> queued_jobs -> worker` 主链。
+5. 保持单实例调度器部署模型，避免第一版引入分布式锁与多实例 leader 选举复杂度。
+6. 在进程重启后，能够基于数据库全量恢复调度注册。
+
+### 3.2 非目标
+
+第一版明确不做以下内容：
+
+- 不让 APScheduler 直接执行浏览器动作或检查模块
+- 不把 APScheduler job store 作为主持久层
+- 不在 `auth_service`、`crawler_service`、`runner_service` 内各自维护独立调度器
+- 不支持多实例 scheduler 并发抢占
+- 不直接调度脚本文本文件路径作为平台主链
+- 不在本轮引入复杂的调度事件总线或分布式一致性机制
+
+---
+
+## 4. 方案选择
+
+### 4.1 备选方案
+
+#### 方案 A：数据库为真相，APScheduler 作为统一触发器
+
+- 业务真相保留在：
+  - `published_jobs`
+  - `system_auth_policies`
+  - `system_crawl_policies`
+- APScheduler 只负责把数据库中的启用策略注册为内存 job，并在到点后调用统一 enqueue 入口。
+
+优点：
+
+- 最符合现有数据模型与审计模型
+- 最符合“正式执行统一走 `control_plane`”的边界
+- 不会引入双真相源
+- 单实例下实现复杂度可控
+
+缺点：
+
+- 需要增加数据库策略与 APScheduler job 之间的同步层
+- 现有自研 cron 扫描逻辑需要拆分与退场
+
+#### 方案 B：让 APScheduler job store 成为主要调度真相
+
+优点：
+
+- 调度器概念上更集中
+
+缺点：
+
+- 会与现有业务表形成双写
+- 审计链和恢复逻辑复杂
+- 与现有架构约束冲突较大
+
+#### 方案 C：分阶段并存，两套调度体系暂时共存
+
+- `published_jobs` 保留当前扫描实现
+- `runtime_policies` 新增时直接接 APScheduler
+
+优点：
+
+- 初期接入成本较低
+
+缺点：
+
+- 两套调度实现并存，长期更难维护
+- 运维与排障路径分裂
+
+### 4.2 推荐结论
+
+采用 **方案 A**。
+
+理由如下：
+
+1. 与现有领域模型最一致，不需要推翻 `published_jobs` 与后续 `runtime_policies` 的数据定义。
+2. 与仓库中的架构约束一致，调度只负责触发，不直接越域执行业务。
+3. 单实例下足以满足当前阶段目标，后续如需多实例可以在 `SchedulerRuntime` 外围补 leader 选举，而不必重写领域接口。
+
+---
+
+## 5. 总体架构
+
+### 5.1 核心原则
+
+统一后的调度链遵守以下原则：
+
+1. 数据库是唯一调度真相源。
+2. APScheduler 只负责“什么时候触发”，不负责决定业务真相。
+3. `control_plane` 仍然是唯一跨域编排入口。
+4. scheduler callback 只做 enqueue，不直接执行浏览器逻辑。
+5. `worker` 仍然是唯一正式执行载体。
+
+### 5.2 架构图
+
+```mermaid
+flowchart TD
+    A["Policy / Published Job API"] --> B["control_plane service"]
+    B --> C[("published_jobs")]
+    B --> D[("system_auth_policies")]
+    B --> E[("system_crawl_policies")]
+    B --> F["SchedulerRegistry"]
+    G["scheduler daemon"] --> H["SchedulerRuntime"]
+    H --> F
+    F --> I["APScheduler"]
+    I --> J["trigger callback"]
+    J --> K[("queued_jobs")]
+    L["worker daemon"] --> K
+    L --> M["run_check"]
+    L --> N["auth_refresh"]
+    L --> O["crawl"]
+```
+
+### 5.3 边界归属
+
+- `control_plane`
+  - 管理发布任务与 runtime policy
+  - 提供统一 enqueue 入口
+  - 拥有 scheduler runtime
+- `runner_service`
+  - 只负责执行被批准的 `page_check/module_plan`
+  - 不再承担“扫描所有到点 cron 任务”的职责
+- `auth_service`
+  - 只处理认证刷新
+- `crawler_service`
+  - 只处理事实采集
+
+---
+
+## 6. 组件设计
+
+### 6.1 `PublishedJobService`
+
+该组件承接现有 `SchedulerService` 中与发布任务业务直接相关的职责：
+
+- 创建 `published_job`
+- 手动触发 `published_job`
+- 查询 `published_job` 运行记录
+- 触发单个 `published_job` 对应的 `job_run + queued_job`
+
+该组件不再承担以下职责：
+
+- 扫描全部发布任务
+- 判断哪些 cron 当前到点
+- 轮询数据库做统一触发
+
+建议将现有 `backend/src/app/domains/runner_service/scheduler.py` 拆分或改名，避免继续用 `scheduler` 命名承载非调度器业务。
+
+### 6.2 `RuntimePolicyService`
+
+该组件放在 `control_plane` 域下，负责：
+
+- 读取与更新 `system_auth_policies`
+- 读取与更新 `system_crawl_policies`
+- 根据策略状态决定是否需要注册或移除 APScheduler job
+
+该组件不直接执行业务，仅负责策略真相维护。
+
+### 6.3 `SchedulerRegistry`
+
+该组件是数据库真相与 APScheduler 之间的映射层，负责：
+
+- 将数据库对象转换为 APScheduler job
+- 维护统一 job id 规范
+- 对外提供：
+  - `load_all_from_db()`
+  - `upsert_published_job(...)`
+  - `upsert_auth_policy(...)`
+  - `upsert_crawl_policy(...)`
+  - `remove_job(...)`
+
+建议 job id 规范如下：
+
+- `published_job:<published_job_id>`
+- `auth_policy:<system_id>`
+- `crawl_policy:<system_id>`
+
+### 6.4 `SchedulerRuntime`
+
+该组件是 APScheduler 的进程内宿主，负责：
+
+- 初始化 APScheduler
+- 启动时从数据库恢复全部有效调度对象
+- 对接 API 写库后的增量注册/更新/移除
+- 在 job fire 时调用统一 callback
+
+### 6.5 `scheduler daemon`
+
+`scheduler daemon` 是单实例常驻进程，负责启动 `SchedulerRuntime`。
+
+第一版只支持单实例部署，因此不要求：
+
+- leader 选举
+- 分布式锁
+- 多实例 job claim
+
+---
+
+## 7. 数据流设计
+
+### 7.1 创建或更新 `published_job`
+
+流程如下：
+
+1. API 调用 `control_plane` 创建或更新 `published_job`
+2. 数据库成功持久化 `published_jobs`
+3. `SchedulerRegistry.upsert_published_job(...)` 把记录转换为 APScheduler job
+4. APScheduler 使用 `CronTrigger` 注册 `published_job:<id>`
+
+到点触发时：
+
+1. APScheduler fire
+2. callback 重新加载 `published_job`
+3. 检查状态仍为 `active`
+4. 调用单条触发逻辑，创建 `job_run`
+5. 入队 `run_check`
+
+### 7.2 创建或更新 `system_auth_policy`
+
+流程如下：
+
+1. API 调用 `control_plane` 更新认证策略
+2. 数据库成功持久化 `system_auth_policies`
+3. `SchedulerRegistry.upsert_auth_policy(...)` 注册 `auth_policy:<system_id>`
+
+到点触发时：
+
+1. APScheduler fire
+2. callback 重新加载 `system_auth_policy`
+3. 检查 `enabled + active`
+4. 入队 `auth_refresh`
+5. payload 附带 `policy_id`、`trigger_source="scheduler"`、`scheduled_at`
+
+### 7.3 创建或更新 `system_crawl_policy`
+
+流程如下：
+
+1. API 调用 `control_plane` 更新采集策略
+2. 数据库成功持久化 `system_crawl_policies`
+3. `SchedulerRegistry.upsert_crawl_policy(...)` 注册 `crawl_policy:<system_id>`
+
+到点触发时：
+
+1. APScheduler fire
+2. callback 重新加载 `system_crawl_policy`
+3. 检查 `enabled + active`
+4. 入队 `crawl`
+5. payload 附带 `policy_id`、`trigger_source="scheduler"`、`scheduled_at`
+
+### 7.4 删除、暂停与禁用
+
+统一规则如下：
+
+- 数据库状态优先
+- APScheduler 只做镜像
+
+因此在对象被暂停或禁用时：
+
+1. 先更新数据库
+2. 再调用 `SchedulerRegistry.remove_job(...)`
+
+如果 remove 失败，不回滚数据库真相；允许通过后续 `load_all_from_db()` 或显式 reload 修复运行时镜像。
+
+### 7.5 启动恢复
+
+`scheduler daemon` 启动后执行：
+
+1. 初始化 APScheduler
+2. 扫描数据库中的有效对象：
+   - `published_jobs.state = active`
+   - `system_auth_policies.enabled = true and state = active`
+   - `system_crawl_policies.enabled = true and state = active`
+3. 统一注册至 APScheduler
+
+该恢复机制保证：
+
+- 进程重启后不丢调度定义
+- 不依赖 APScheduler job store 持久化
+
+---
+
+## 8. 幂等与错误处理
+
+### 8.1 幂等策略
+
+虽然第一版是单实例 scheduler，但业务层仍必须保留去重语义：
+
+- `published_job`
+  - 同一分钟不重复创建 `job_run`
+- `system_auth_policy`
+  - 同一分钟同一 `policy_id` 不重复入队 `auth_refresh`
+- `system_crawl_policy`
+  - 同一分钟同一 `policy_id` 不重复入队 `crawl`
+
+即：
+
+- APScheduler 负责“尝试触发”
+- 数据库负责“本次触发是否有效”
+
+### 8.2 错误处理分层
+
+#### 调度注册错误
+
+例如：
+
+- cron 表达式非法
+- APScheduler 注册失败
+- job id 冲突
+
+处理原则：
+
+- API 写库前先校验 cron
+- 写库成功后注册失败时，应显式返回或记录错误
+- 第一版允许通过重载修复，不引入复杂补偿事务
+
+#### 触发回调错误
+
+例如：
+
+- 到点后对象被删除
+- 状态已禁用
+- callback enqueue 失败
+
+处理原则：
+
+- 不在 callback 内直接执行业务
+- 记录失败日志或轻量审计信息
+- 后续调度周期仍可继续尝试
+
+#### 执行链错误
+
+例如：
+
+- `run_check` 执行失败
+- `auth_refresh` 执行失败
+- `crawl` 执行失败
+
+这类错误继续由现有 worker 与 job handler 负责，不上提到 APScheduler 层。
+
+---
+
+## 9. 文件与模块调整建议
+
+### 9.1 新增文件
+
+- `backend/src/app/domains/control_plane/runtime_policies.py`
+- `backend/src/app/domains/control_plane/scheduler_registry.py`
+- `backend/src/app/runtime/scheduler_runtime.py`
+- `backend/src/app/runtime/scheduler_daemon.py`
+- `tests/backend/test_runtime_policies_api.py`
+- `tests/backend/test_runtime_scheduler.py`
+- `tests/backend/test_runtime_daemons.py`
+
+### 9.2 修改文件
+
+- `backend/pyproject.toml`
+  - 新增 `apscheduler`
+- `backend/src/app/domains/control_plane/service.py`
+  - 接入 policy 管理与 scheduler registry 调用
+- `backend/src/app/api/deps.py`
+  - 注入 scheduler runtime 相关依赖
+- `backend/src/app/infrastructure/db/models/runtime_policies.py`
+  - 落地系统级策略表
+- `backend/src/app/jobs/auth_refresh_job.py`
+  - 增加 policy-trigger payload 审计字段
+- `backend/src/app/jobs/crawl_job.py`
+  - 增加 policy-trigger payload 审计字段
+
+### 9.3 拆分或重命名文件
+
+- `backend/src/app/domains/runner_service/scheduler.py`
+
+建议拆分为：
+
+- `published_jobs.py` 或等价命名
+- 去掉 `trigger_due_jobs()` 这类扫描所有任务的逻辑
+
+---
+
+## 10. 迁移策略
+
+### 10.1 分阶段实施
+
+建议按以下顺序推进：
+
+1. 先抽离现有 `published_jobs` 业务能力
+2. 再落地 `runtime_policies` 模型与 API
+3. 再接入 `SchedulerRegistry + SchedulerRuntime + APScheduler`
+4. 最后下线旧扫描主链、补齐回归测试与文档
+
+### 10.2 兼容期策略
+
+在 APScheduler 主链切稳之前，可短暂保留旧扫描逻辑作为开发兼容，但必须满足：
+
+- 生产默认不开启旧扫描入口
+- 文档明确旧逻辑为过渡态
+- 旧入口完成迁移后应删除，避免长期双链路
+
+---
+
+## 11. 测试与验收设计
+
+### 11.1 单元测试
+
+覆盖以下内容：
+
+- cron 表达式到 `CronTrigger` 的转换
+- 非法 cron 校验
+- job id 生成规则
+- `SchedulerRegistry` 的 upsert / remove 行为
+
+### 11.2 集成测试
+
+覆盖以下内容：
+
+- 创建 `published_job` 后成功注册 APScheduler job
+- `published_job` 到点后创建 `job_run` 并投递 `run_check`
+- `auth_policy` 到点后投递 `auth_refresh`
+- `crawl_policy` 到点后投递 `crawl`
+- 同一分钟重复 fire 不会重复入队
+
+### 11.3 运行时测试
+
+覆盖以下内容：
+
+- `scheduler daemon` 启动时能从数据库恢复全部有效 job
+- 停用对象后对应 APScheduler job 被移除
+- 重启后恢复的 job 与数据库状态一致
+
+### 11.4 验收标准
+
+满足以下条件后，方可认为改造完成：
+
+1. 后端依赖中已正式接入 `apscheduler`
+2. `published_jobs` 不再依赖全量扫库来判定是否到点
+3. `runtime_policies` 能通过统一调度运行面触发
+4. 到点触发仍然回到 `queued_jobs -> worker` 主链
+5. 文档、计划、实现三者重新对齐
+
+---
+
+## 12. 工作量评估
+
+基于当前仓库状态，工作量评估如下：
+
+- 抽离 `published_jobs` 业务服务：0.5 到 1 天
+- 落地 `runtime_policies` 模型、仓储与 API：2 到 4 天
+- 引入 `APScheduler` 与统一 runtime：2 到 3 天
+- 回归测试、README、CHANGELOG、收尾清理：1 到 2 天
+
+总体预计：
+
+- 保守估计 7 到 10 个工作日
+- 如果 auth/crawl runtime 相关配套实现仍有较多缺口，则可能延伸到 10 到 12 个工作日
+
+---
+
+## 13. 风险与后续边界
+
+### 13.1 主要风险
+
+- `runtime_policies` 尚未落地，实际改造范围会大于“只替换调度器”
+- 当前 `runner_service/scheduler.py` 命名与职责混杂，拆分时容易影响既有 API 与测试
+- 如果过渡期保留双链路过久，文档与实现会再次漂移
+
+### 13.2 后续可扩展方向
+
+本设计故意为后续能力留出位置，但不在本轮实现：
+
+- 多实例 scheduler 的 leader 选举
+- 调度触发事件表
+- APScheduler 持久化 job store 作为运维视图
+- 更丰富的 event trigger 模式
+
+---
+
+## 14. 结论
+
+本次改造不应被理解为“简单替换一个库”，而是一次调度运行面的统一收口：
+
+- 数据库继续做真相
+- APScheduler 做统一触发器
+- `control_plane` 继续做跨域编排
+- `worker` 继续做正式执行
+
+在这一前提下，`published_jobs` 与未来的 `runtime_policies` 才能落到同一套稳定、可审计、可恢复的调度框架中，并消除当前“文档定义 APScheduler、代码实际未使用”的漂移问题。
