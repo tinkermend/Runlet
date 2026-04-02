@@ -5,7 +5,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.config.settings import settings
 from app.infrastructure.db.base import BaseModel
+from app.infrastructure.db.alembic_config import resolve_alembic_database_url
 from app.infrastructure.db.models import assets, crawl, execution, jobs, systems  # noqa: F401
 
 config = context.config
@@ -14,12 +16,16 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = BaseModel.metadata
+resolved_database_url = resolve_alembic_database_url(
+    configured_url=config.get_main_option("sqlalchemy.url"),
+    runtime_url=settings.database_url,
+)
+config.set_main_option("sqlalchemy.url", resolved_database_url)
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=resolved_database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

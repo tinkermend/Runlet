@@ -27,6 +27,9 @@ cd backend
 uv run alembic upgrade head
 ```
 
+默认会读取 `backend/.env` 中的 `DATABASE_URL` 作为迁移目标，并自动把运行时 async URL 转换成 Alembic 所需的 sync URL。
+只有在测试或显式覆盖 `sqlalchemy.url` 时，才会改用外部指定的数据库连接。
+
 ## 启动 API
 
 ```bash

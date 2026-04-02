@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 修正 Alembic 与真实运行环境的数据库接线：迁移现在默认复用 `backend/.env` 中的 `DATABASE_URL`，并自动把 async URL 转为 Alembic 使用的 sync URL，避免误把升级跑到本地 SQLite 而非真实 `runlet` schema。
 - 新增 `asset_compiler` 域，支持基于 crawl snapshot 计算稳定页面指纹、结构 diff 分数，以及 `safe/suspect/stale` 漂移状态映射。
 - 新增 `module_plans` 与 `asset_snapshots` 资产层模型及 `0003_asset_compiler_and_drift` 迁移，并把 `queued_jobs.result_payload` 用于持久化 compile job 输出摘要。
 - 新增标准检查模板与模块计划构建逻辑，当前可为页面生成 `page_open`、`table_render`、`open_create_modal` 等检查及确定性步骤计划。
