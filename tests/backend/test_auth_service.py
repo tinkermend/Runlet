@@ -33,6 +33,8 @@ def test_auth_and_crawl_models_expose_runtime_fields():
     assert hasattr(AuthState, "storage_state")
     assert hasattr(AuthState, "status")
     assert hasattr(CrawlSnapshot, "quality_score")
+    assert hasattr(CrawlSnapshot, "failure_reason")
+    assert hasattr(CrawlSnapshot, "warning_messages")
     assert hasattr(MenuNode, "playwright_locator")
     assert hasattr(Page, "page_summary")
     assert hasattr(PageElement, "playwright_locator")
@@ -60,6 +62,8 @@ def test_auth_and_crawl_migration_exposes_runtime_fields(tmp_path):
             "quality_score",
             "degraded",
             "framework_detected",
+            "failure_reason",
+            "warning_messages",
         } <= crawl_snapshot_columns
 
         menu_node_columns = {column["name"] for column in inspector.get_columns("menu_nodes")}

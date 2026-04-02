@@ -169,6 +169,15 @@ def test_initial_schema_exposes_core_columns(db_engine):
     auth_state_columns = {column["name"] for column in inspector.get_columns("auth_states")}
     assert {"storage_state", "validated_at", "expires_at", "status"} <= auth_state_columns
 
+    crawl_snapshot_columns = {column["name"] for column in inspector.get_columns("crawl_snapshots")}
+    assert {
+        "framework_detected",
+        "quality_score",
+        "degraded",
+        "failure_reason",
+        "warning_messages",
+    } <= crawl_snapshot_columns
+
     menu_node_columns = {column["name"] for column in inspector.get_columns("menu_nodes")}
     assert {"system_id", "snapshot_id", "label", "playwright_locator"} <= menu_node_columns
 

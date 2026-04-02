@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
-from app.domains.crawler_service.schemas import CrawlExtractionResult
+from app.domains.crawler_service.schemas import CrawlExtractionResult, PageCandidate
 
 
 class RouterRuntimeExtractor(Protocol):
@@ -25,3 +25,75 @@ class NullRouterRuntimeExtractor:
     ) -> CrawlExtractionResult:
         del browser_session, system, crawl_scope
         return CrawlExtractionResult()
+
+
+class RuntimeRouteHintExtractor:
+    async def extract(
+        self,
+        *,
+        browser_session,
+        system,
+        crawl_scope: str,
+    ) -> CrawlExtractionResult:
+        del system
+        warnings: list[str] = []
+        failure_reason: str | None = None
+        pages: list[PageCandidate] = []
+        try:
+            route_hints = await self._collect_route_hints(
+                browser_session=browser_session,
+                crawl_scope=crawl_scope,
+            )
+        except Exception as exc:  # pragma: no cover - exercised via service tests
+            route_hints = []
+            failure_reason = f"runtime route hint extraction failed: {exc}"
+            warnings.append(f"route hints degraded: {exc}")
+
+        seen: set[str] = set()
+        for hint in route_hints:
+            route_path = self._normalize_path(hint.get("path") or hint.get("route_path"))
+            if route_path is None or route_path in seen:
+                continue
+            seen.add(route_path)
+            page_title = self._to_clean_text(hint.get("title") or hint.get("label") or hint.get("name"))
+            pages.append(PageCandidate(route_path=route_path, page_title=page_title))
+
+        quality_score = min(1.0, 0.6 + (0.1 * len(pages))) if pages else 0.0
+        return CrawlExtractionResult(
+            framework_detected=self._to_clean_text(getattr(browser_session, "framework_hint", None)),
+            quality_score=quality_score,
+            pages=pages,
+            failure_reason=failure_reason,
+            warning_messages=warnings,
+            degraded=len(pages) == 0,
+        )
+
+    async def _collect_route_hints(self, *, browser_session, crawl_scope: str) -> list[dict[str, Any]]:
+        collector = getattr(browser_session, "collect_route_hints", None)
+        if callable(collector):
+            collected = await collector(crawl_scope=crawl_scope)
+            return self._ensure_dict_list(collected)
+        return self._ensure_dict_list(getattr(browser_session, "route_hints", []))
+
+    def _ensure_dict_list(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                result.append(item)
+        return result
+
+    def _normalize_path(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        path = value.strip()
+        if not path or not path.startswith("/"):
+            return None
+        return path
+
+    def _to_clean_text(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None

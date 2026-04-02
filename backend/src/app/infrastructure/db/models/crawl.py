@@ -26,6 +26,14 @@ class CrawlSnapshot(BaseModel, table=True):
     framework_detected: str | None = Field(default=None, max_length=32)
     quality_score: float | None = Field(default=None)
     degraded: bool = Field(default=False)
+    failure_reason: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    warning_messages: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False, server_default=sa.text("'[]'")),
+    )
     structure_hash: str | None = Field(default=None, max_length=255)
     started_at: datetime = Field(
         default_factory=utcnow,

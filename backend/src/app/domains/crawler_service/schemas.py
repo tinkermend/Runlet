@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PageCandidate(BaseModel):
@@ -36,9 +36,12 @@ class ElementCandidate(BaseModel):
 class CrawlExtractionResult(BaseModel):
     framework_detected: str | None = None
     quality_score: float | None = None
-    pages: list[PageCandidate] = []
-    menus: list[MenuCandidate] = []
-    elements: list[ElementCandidate] = []
+    pages: list[PageCandidate] = Field(default_factory=list)
+    menus: list[MenuCandidate] = Field(default_factory=list)
+    elements: list[ElementCandidate] = Field(default_factory=list)
+    failure_reason: str | None = None
+    warning_messages: list[str] = Field(default_factory=list)
+    degraded: bool = False
 
 
 class CrawlRunResult(BaseModel):
@@ -49,3 +52,6 @@ class CrawlRunResult(BaseModel):
     menus_saved: int = 0
     elements_saved: int = 0
     message: str | None = None
+    failure_reason: str | None = None
+    warning_messages: list[str] = Field(default_factory=list)
+    degraded: bool = False

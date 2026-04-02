@@ -11,10 +11,10 @@ from sqlmodel import Session, select
 
 from app.domains.crawler_service.extractors.dom_menu import (
     DomMenuExtractor,
-    NullDomMenuExtractor,
+    DomMenuTraversalExtractor,
 )
 from app.domains.crawler_service.extractors.router_runtime import (
-    NullRouterRuntimeExtractor,
+    RuntimeRouteHintExtractor,
     RouterRuntimeExtractor,
 )
 from app.domains.crawler_service.schemas import (
@@ -34,6 +34,14 @@ def utcnow() -> datetime:
 
 
 class BrowserSession(Protocol):
+    framework_hint: str | None
+
+    async def collect_route_hints(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
+    async def collect_dom_menu_nodes(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
+    async def collect_dom_elements(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
     async def close(self) -> None: ...
 
 
@@ -47,6 +55,160 @@ class BrowserFactory(Protocol):
 
 
 class PlaywrightBrowserFactory:
+    _ROUTE_HINTS_SCRIPT = """
+() => {
+  const __RUNLET_ROUTE_HINTS__ = true;
+  const seen = new Set();
+  const candidates = [];
+  const pushCandidate = (path, title) => {
+    if (typeof path !== "string") return;
+    const cleanPath = path.trim();
+    if (!cleanPath || !cleanPath.startsWith("/") || seen.has(cleanPath)) return;
+    seen.add(cleanPath);
+    candidates.push({
+      path: cleanPath,
+      title: typeof title === "string" ? title.trim() || null : null,
+    });
+  };
+
+  pushCandidate(window.location.pathname, document.title);
+
+  const nextDataPath = window.__NEXT_DATA__?.page;
+  if (typeof nextDataPath === "string") {
+    pushCandidate(nextDataPath, document.title);
+  }
+
+  const nuxtPath = window.__NUXT__?.data?.[0]?.routePath || window.__NUXT__?.routePath;
+  if (typeof nuxtPath === "string") {
+    pushCandidate(nuxtPath, document.title);
+  }
+
+  const statePath = window.__INITIAL_STATE__?.router?.location?.pathname;
+  if (typeof statePath === "string") {
+    pushCandidate(statePath, document.title);
+  }
+
+  const runtimeRouteTables = [
+    window.__NEXT_DATA__?.props?.pageProps?.routes,
+    window.__INITIAL_STATE__?.router?.routes,
+    window.__VUE_ROUTER__?.options?.routes,
+    window.$router?.options?.routes,
+  ];
+
+  for (const table of runtimeRouteTables) {
+    if (!Array.isArray(table)) continue;
+    for (const route of table) {
+      if (!route || typeof route !== "object") continue;
+      pushCandidate(route.path, route.meta?.title || route.name || route.title || null);
+      if (Array.isArray(route.children)) {
+        for (const child of route.children) {
+          if (!child || typeof child !== "object") continue;
+          pushCandidate(child.path, child.meta?.title || child.name || child.title || null);
+        }
+      }
+    }
+  }
+
+  for (const node of Array.from(document.querySelectorAll("a[href], [data-route-path], [data-path]"))) {
+    const raw = node.getAttribute("href")
+      || node.getAttribute("data-route-path")
+      || node.getAttribute("data-path");
+    if (!raw) continue;
+    try {
+      const url = raw.startsWith("/") ? new URL(raw, window.location.origin) : new URL(raw, window.location.href);
+      pushCandidate(url.pathname, node.textContent || node.getAttribute("aria-label"));
+    } catch {
+      continue;
+    }
+  }
+
+  return candidates;
+}
+"""
+    _MENU_NODES_SCRIPT = """
+() => {
+  const __RUNLET_MENU_NODES__ = true;
+  const result = [];
+  const selectors = [
+    '[role="menuitem"]',
+    'nav a',
+    'aside a',
+    '[data-menu-item]',
+    '.menu a'
+  ];
+  const nodes = document.querySelectorAll(selectors.join(','));
+  Array.from(nodes).forEach((node, index) => {
+    const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
+    if (!text) return;
+    const href = node.getAttribute('href');
+    let routePath = null;
+    if (href) {
+      try {
+        routePath = new URL(href, window.location.origin).pathname;
+      } catch {
+        routePath = null;
+      }
+    }
+    const parentMenu = node.closest('[role="menu"], nav, aside');
+    const depth = parentMenu ? parentMenu.querySelectorAll('[role="menu"], ul, ol').length - 1 : 0;
+    result.push({
+      label: text,
+      route_path: routePath,
+      page_route_path: routePath,
+      depth: depth > 0 ? depth : 0,
+      order: index,
+      role: node.getAttribute('role') || 'menuitem',
+      aria_label: node.getAttribute('aria-label'),
+    });
+  });
+  return result;
+}
+"""
+    _DOM_ELEMENTS_SCRIPT = """
+() => {
+  const __RUNLET_PAGE_ELEMENTS__ = true;
+  const result = [];
+  const selectors = [
+    'button',
+    '[role="button"]',
+    'input',
+    'select',
+    'textarea',
+    'table',
+    '[role="tab"]',
+    '[role="searchbox"]',
+    '[data-testid]'
+  ];
+  const nodes = document.querySelectorAll(selectors.join(','));
+  Array.from(nodes).forEach((node) => {
+    const tagName = (node.tagName || '').toLowerCase();
+    const role = node.getAttribute('role');
+    const text = (node.textContent || node.getAttribute('aria-label') || node.getAttribute('placeholder') || '').trim();
+    const elementType = role === 'tab'
+      ? 'tab'
+      : tagName === 'table'
+      ? 'table'
+      : tagName || role || 'element';
+    if (!elementType) return;
+    result.push({
+      page_route_path: window.location.pathname,
+      element_type: elementType,
+      role: role || null,
+      text: text || null,
+      aria_label: node.getAttribute('aria-label'),
+      attributes: {
+        name: node.getAttribute('name'),
+        type: node.getAttribute('type'),
+        placeholder: node.getAttribute('placeholder'),
+        data_testid: node.getAttribute('data-testid'),
+      },
+      usage_description: text || null,
+    });
+  });
+  return result;
+}
+"""
+
     async def open_context(
         self,
         *,
@@ -64,9 +226,38 @@ class PlaywrightBrowserFactory:
             base_url=base_url,
             storage_state=storage_state,
         )
+        page = await context.new_page()  # pragma: no cover
+        await page.goto(base_url, wait_until="domcontentloaded")  # pragma: no cover
 
         class _Session:
+            framework_hint = None
+
+            async def collect_route_hints(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                return await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
+
+            async def collect_dom_menu_nodes(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                return await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+
+            async def collect_dom_elements(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                return await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
+
             async def close(self_nonlocal) -> None:
+                await page.close()
                 await context.close()
                 await browser.close()
                 await playwright.stop()
@@ -85,8 +276,8 @@ class CrawlerService:
     ) -> None:
         self.session = session
         self.browser_factory = browser_factory
-        self.router_extractor = router_extractor or NullRouterRuntimeExtractor()
-        self.dom_menu_extractor = dom_menu_extractor or NullDomMenuExtractor()
+        self.router_extractor = router_extractor or RuntimeRouteHintExtractor()
+        self.dom_menu_extractor = dom_menu_extractor or DomMenuTraversalExtractor()
 
     async def run_crawl(
         self,
@@ -163,6 +354,9 @@ class CrawlerService:
             pages_saved=len(page_map),
             menus_saved=len(combined.menus),
             elements_saved=len(combined.elements),
+            failure_reason=combined.failure_reason,
+            warning_messages=combined.warning_messages,
+            degraded=combined.degraded,
         )
 
     def _combine_results(
@@ -187,6 +381,9 @@ class CrawlerService:
 
         quality_candidates = [value for value in (runtime.quality_score, dom.quality_score) if value is not None]
         quality_score = max(quality_candidates) if quality_candidates else None
+        failure_reason = runtime.failure_reason or dom.failure_reason
+        warning_messages = [*runtime.warning_messages, *dom.warning_messages]
+        degraded = runtime.degraded or dom.degraded or len(page_candidates) == 0
 
         return CrawlExtractionResult(
             framework_detected=runtime.framework_detected or dom.framework_detected or system.framework_type,
@@ -194,6 +391,9 @@ class CrawlerService:
             pages=list(page_candidates.values()),
             menus=dom.menus,
             elements=dom.elements,
+            failure_reason=failure_reason,
+            warning_messages=warning_messages,
+            degraded=degraded,
         )
 
     def _build_snapshot(
@@ -213,7 +413,9 @@ class CrawlerService:
             crawl_type=crawl_scope,
             framework_detected=extraction.framework_detected or system_framework,
             quality_score=extraction.quality_score,
-            degraded=len(extraction.pages) == 0,
+            degraded=extraction.degraded,
+            failure_reason=extraction.failure_reason,
+            warning_messages=extraction.warning_messages,
             structure_hash=structure_hash,
         )
 
