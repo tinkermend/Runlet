@@ -1,5 +1,11 @@
 ## 2026-04-02
 
+- 新增 `runner_service` 域与确定性 `module_executor`，支持在服务端注入认证后消费 `module_plan` 执行 `auth.inject_state`、`nav.menu_chain`、`page.wait_ready`、`assert.table_visible`、`assert.page_open` 等模块步骤，并持久化 `execution_runs/execution_artifacts`。
+- 新增 `run_check` worker 链路，worker 现在可以正式消费 `run_check` 队列任务、回写运行状态，并把执行结果与 `execution_run`、`job_run` 审计链路关联起来。
+- 新增 Playwright 脚本渲染能力与 `/api/v1/page-checks/{page_check_id}:render-script` 接口，支持按 `runtime/published` 模式生成稳定脚本并持久化 `script_renders` 与渲染元数据。
+- 新增 `published_jobs/job_runs` 调度模型的 API 与服务编排，暴露创建发布任务、手动触发发布任务、查询运行记录三条路径，并保持调度主对象为 `page_check + asset_version + runtime_policy`。
+- 新增 `SchedulerService` 与 `PublishedJobTrigger`，支持扫描到期 cron 任务、创建 `job_run`、投递 `run_check`，并补充同一分钟去重、共享调度时间与 payload 审计快照，降低重复触发与追溯不完整风险。
+- 更新 backend 文档，补充 `run_check` 执行流、脚本渲染接口、发布任务与 cron/manual 触发说明，以及 runner/render/scheduling 回归测试入口。
 - 修正 Alembic 与真实运行环境的数据库接线：迁移现在默认复用 `backend/.env` 中的 `DATABASE_URL`，并自动把 async URL 转为 Alembic 使用的 sync URL，避免误把升级跑到本地 SQLite 而非真实 `runlet` schema。
 - 新增 `asset_compiler` 域，支持基于 crawl snapshot 计算稳定页面指纹、结构 diff 分数，以及 `safe/suspect/stale` 漂移状态映射。
 - 新增 `module_plans` 与 `asset_snapshots` 资产层模型及 `0003_asset_compiler_and_drift` 迁移，并把 `queued_jobs.result_payload` 用于持久化 compile job 输出摘要。
