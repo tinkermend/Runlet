@@ -140,3 +140,66 @@ async def test_published_job_service_skips_paused_job(
     assert triggered is False
     assert db_session.exec(select(JobRun)).all() == []
     assert db_session.exec(select(QueuedJob)).all() == []
+
+
+@pytest.mark.anyio
+async def test_published_job_service_skips_day_of_month_mismatch(
+    published_job_service,
+    seeded_published_job,
+    db_session,
+):
+    seeded_published_job.schedule_expr = "0 8 3 * *"
+    db_session.add(seeded_published_job)
+    db_session.commit()
+    db_session.refresh(seeded_published_job)
+
+    triggered = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=datetime(2026, 4, 2, 8, 0, tzinfo=UTC),
+    )
+
+    assert triggered is False
+    assert db_session.exec(select(JobRun)).all() == []
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+@pytest.mark.anyio
+async def test_published_job_service_skips_weekday_mismatch(
+    published_job_service,
+    seeded_published_job,
+    db_session,
+):
+    seeded_published_job.schedule_expr = "0 8 * * 5"
+    db_session.add(seeded_published_job)
+    db_session.commit()
+    db_session.refresh(seeded_published_job)
+
+    triggered = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=datetime(2026, 4, 2, 8, 0, tzinfo=UTC),
+    )
+
+    assert triggered is False
+    assert db_session.exec(select(JobRun)).all() == []
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+@pytest.mark.anyio
+async def test_published_job_service_matches_cron_weekday_mapping(
+    published_job_service,
+    seeded_published_job,
+    db_session,
+):
+    seeded_published_job.schedule_expr = "0 8 * * 4"
+    db_session.add(seeded_published_job)
+    db_session.commit()
+    db_session.refresh(seeded_published_job)
+
+    triggered = await published_job_service.trigger_scheduled_job(
+        published_job_id=seeded_published_job.id,
+        scheduled_at=datetime(2026, 4, 2, 8, 0, tzinfo=UTC),
+    )
+
+    assert triggered is True
+    assert len(db_session.exec(select(JobRun)).all()) == 1
+    assert len(db_session.exec(select(QueuedJob)).all()) == 1

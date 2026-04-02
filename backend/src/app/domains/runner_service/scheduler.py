@@ -261,9 +261,42 @@ def _cron_matches(*, schedule_expr: str, scheduled_at: datetime) -> bool:
     parts = schedule_expr.split()
     if len(parts) != 5:
         return False
-    minute, hour, _day, _month, _weekday = parts
+    minute, hour, day_of_month, month, weekday = parts
     trigger_time = _minute_key(scheduled_at)
-    return _cron_field_matches(minute, trigger_time.minute) and _cron_field_matches(hour, trigger_time.hour)
+    minute_matches = _cron_field_matches(minute, trigger_time.minute)
+    hour_matches = _cron_field_matches(hour, trigger_time.hour)
+    month_matches = _cron_field_matches(month, trigger_time.month)
+    day_of_month_matches = _cron_field_matches(day_of_month, trigger_time.day)
+    weekday_matches = _cron_weekday_matches(weekday, _cron_weekday(trigger_time))
+    day_matches = _cron_day_matches(
+        day_of_month=day_of_month,
+        day_of_month_matches=day_of_month_matches,
+        weekday=weekday,
+        weekday_matches=weekday_matches,
+    )
+    return minute_matches and hour_matches and month_matches and day_matches
+
+
+def _cron_day_matches(
+    *,
+    day_of_month: str,
+    day_of_month_matches: bool,
+    weekday: str,
+    weekday_matches: bool,
+) -> bool:
+    # Cron semantics: when both DOM and DOW are restricted, either may match.
+    if day_of_month == "*" and weekday == "*":
+        return True
+    if day_of_month == "*":
+        return weekday_matches
+    if weekday == "*":
+        return day_of_month_matches
+    return day_of_month_matches or weekday_matches
+
+
+def _cron_weekday(value: datetime) -> int:
+    # Python weekday(): Monday=0..Sunday=6; cron: Sunday=0 (or 7), Monday=1..Saturday=6.
+    return (value.weekday() + 1) % 7
 
 
 def _cron_field_matches(field: str, value: int) -> bool:
@@ -279,3 +312,23 @@ def _cron_field_matches(field: str, value: int) -> bool:
         return int(field) == value
     except ValueError:
         return False
+
+
+def _cron_weekday_matches(field: str, value: int) -> bool:
+    if field == "*":
+        return True
+    if field.startswith("*/"):
+        try:
+            interval = int(field[2:])
+        except ValueError:
+            return False
+        return interval > 0 and value % interval == 0
+    try:
+        expected = int(field)
+    except ValueError:
+        return False
+    if expected == 7:
+        expected = 0
+    if expected < 0 or expected > 6:
+        return False
+    return expected == value
