@@ -1,5 +1,6 @@
 ## 2026-04-02
 
+- 补齐 runtime policy 的 worker 侧审计字段：`system_auth_policies/system_crawl_policies` 新增 `last_succeeded_at`、`last_failed_at`、`last_failure_message`，`auth_refresh` 与 `crawl` worker 在成功/失败后会回写绑定 policy 的执行结果。
 - 补充仓库技术栈说明，并将 backend 依赖声明与本地锁文件对齐：为验证码能力显式加入 `ddddocr` 依赖，避免 `uv.lock` 与 `pyproject.toml` 不一致。
 - 补齐 worker 常驻进程入口：新增 `runlet-worker` 启动脚本，正式组装 `AuthService/CrawlerService/AssetCompilerService/RunnerService` 与四类队列 handler；同时新增 `PlaywrightRunnerRuntime`，让 `run_check` 在 worker 中可按 `module_plan` + 服务端认证注入执行。
 - 收口 APScheduler 运行闭环：新增 `runlet-scheduler` 正式入口，`scheduler_daemon` 现在会按 `scheduler_reload_interval_seconds` 周期 `reload_all()`，并把 `SchedulerRegistry` 改为支持 fresh session 重载，确保独立 daemon 进程能从数据库真相源持续收敛最新 `published_job/runtime_policy` 状态。

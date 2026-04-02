@@ -219,6 +219,9 @@ def test_runtime_policy_tables_exist(inspector):
         "auth_mode",
         "captcha_provider",
         "last_triggered_at",
+        "last_succeeded_at",
+        "last_failed_at",
+        "last_failure_message",
     } <= auth_policy_columns
 
     crawl_policy_columns = {column["name"] for column in inspector.get_columns("system_crawl_policies")}
@@ -229,6 +232,9 @@ def test_runtime_policy_tables_exist(inspector):
         "schedule_expr",
         "crawl_scope",
         "last_triggered_at",
+        "last_succeeded_at",
+        "last_failed_at",
+        "last_failure_message",
     } <= crawl_policy_columns
 
     auth_policy_indexes = inspector.get_indexes("system_auth_policies")
@@ -264,7 +270,14 @@ def test_runtime_policy_models_expose_expected_fields():
     assert SystemAuthPolicy.__tablename__ == "system_auth_policies"
     assert SystemCrawlPolicy.__tablename__ == "system_crawl_policies"
 
-    assert {"system_id", "schedule_expr", "last_triggered_at"} <= set(SystemAuthPolicy.model_fields)
+    assert {
+        "system_id",
+        "schedule_expr",
+        "last_triggered_at",
+        "last_succeeded_at",
+        "last_failed_at",
+        "last_failure_message",
+    } <= set(SystemAuthPolicy.model_fields)
     assert {"system_id", "crawl_scope", "enabled"} <= set(SystemCrawlPolicy.model_fields)
     assert SystemAuthPolicy.model_fields["enabled"].default is True
     assert SystemAuthPolicy.model_fields["state"].default == "active"
@@ -275,5 +288,21 @@ def test_runtime_policy_models_expose_expected_fields():
 
     auth_table_columns = set(SystemAuthPolicy.__table__.columns.keys())
     crawl_table_columns = set(SystemCrawlPolicy.__table__.columns.keys())
-    assert {"id", "system_id", "schedule_expr", "last_triggered_at"} <= auth_table_columns
-    assert {"id", "system_id", "crawl_scope", "last_triggered_at"} <= crawl_table_columns
+    assert {
+        "id",
+        "system_id",
+        "schedule_expr",
+        "last_triggered_at",
+        "last_succeeded_at",
+        "last_failed_at",
+        "last_failure_message",
+    } <= auth_table_columns
+    assert {
+        "id",
+        "system_id",
+        "crawl_scope",
+        "last_triggered_at",
+        "last_succeeded_at",
+        "last_failed_at",
+        "last_failure_message",
+    } <= crawl_table_columns

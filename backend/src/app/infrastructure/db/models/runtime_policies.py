@@ -24,6 +24,18 @@ class SystemAuthPolicy(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
+    last_succeeded_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    last_failed_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    last_failure_message: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
 
 
 class SystemCrawlPolicy(BaseModel, table=True):
@@ -38,4 +50,16 @@ class SystemCrawlPolicy(BaseModel, table=True):
     last_triggered_at: datetime | None = Field(
         default=None,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    last_succeeded_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    last_failed_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    last_failure_message: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
     )

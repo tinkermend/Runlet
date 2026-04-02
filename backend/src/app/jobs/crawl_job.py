@@ -4,10 +4,11 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.domains.control_plane.job_types import ASSET_COMPILE_JOB_TYPE
 from app.infrastructure.db.models.jobs import QueuedJob
+from app.infrastructure.db.models.runtime_policies import SystemCrawlPolicy
 from app.shared.enums import QueuedJobStatus
 
 
@@ -26,13 +27,22 @@ class CrawlJobHandler:
             raise ValueError(f"queued job {job_id} not found")
 
         self._apply_queue_audit_fields(job)
+        policy = await self._resolve_policy(job)
         system_id = job.payload.get("system_id")
         crawl_scope = job.payload.get("crawl_scope", "full")
         if not isinstance(system_id, str):
-            await self._mark_failed(job, message="missing system_id in crawl job payload")
+            await self._mark_failed(
+                job,
+                message="missing system_id in crawl job payload",
+                policy=policy,
+            )
             return
         if not isinstance(crawl_scope, str) or not crawl_scope.strip():
-            await self._mark_failed(job, message="missing crawl_scope in crawl job payload")
+            await self._mark_failed(
+                job,
+                message="missing crawl_scope in crawl job payload",
+                policy=policy,
+            )
             return
 
         job.status = QueuedJobStatus.RUNNING.value
@@ -45,11 +55,15 @@ class CrawlJobHandler:
                 crawl_scope=crawl_scope,
             )
         except Exception as exc:
-            await self._mark_failed(job, message=str(exc))
+            await self._mark_failed(job, message=str(exc), policy=policy)
             return
 
         if result.status != "success" or result.snapshot_id is None:
-            await self._mark_failed(job, message=result.message or result.status)
+            await self._mark_failed(
+                job,
+                message=result.message or result.status,
+                policy=policy,
+            )
             return
 
         compile_job = QueuedJob(
@@ -63,13 +77,25 @@ class CrawlJobHandler:
         job.status = QueuedJobStatus.COMPLETED.value
         job.failure_message = None
         job.finished_at = utcnow()
+        if policy is not None:
+            policy.last_succeeded_at = utcnow()
+            policy.last_failure_message = None
         await self._commit()
 
-    async def _mark_failed(self, job: QueuedJob, *, message: str | None) -> None:
+    async def _mark_failed(
+        self,
+        job: QueuedJob,
+        *,
+        message: str | None,
+        policy: SystemCrawlPolicy | None = None,
+    ) -> None:
         job.status = QueuedJobStatus.FAILED.value
         job.started_at = job.started_at or utcnow()
         job.finished_at = utcnow()
         job.failure_message = message
+        if policy is not None:
+            policy.last_failed_at = utcnow()
+            policy.last_failure_message = message
         await self._commit()
 
     async def _get(self, model, identifier):
@@ -82,6 +108,28 @@ class CrawlJobHandler:
             await self.session.commit()
             return
         self.session.commit()
+
+    async def _resolve_policy(self, job: QueuedJob) -> SystemCrawlPolicy | None:
+        policy_identifier = _parse_uuid(job.payload.get("policy_id"))
+        if policy_identifier is not None:
+            policy = await self._get(SystemCrawlPolicy, policy_identifier)
+            if policy is not None:
+                return policy
+            policy = await self._get_policy_by_system_id(system_id=policy_identifier)
+            if policy is not None:
+                return policy
+
+        system_identifier = _parse_uuid(job.payload.get("system_id"))
+        if system_identifier is None:
+            return None
+        return await self._get_policy_by_system_id(system_id=system_identifier)
+
+    async def _get_policy_by_system_id(self, *, system_id: UUID) -> SystemCrawlPolicy | None:
+        statement = select(SystemCrawlPolicy).where(SystemCrawlPolicy.system_id == system_id)
+        if isinstance(self.session, AsyncSession):
+            result = await self.session.exec(statement)
+            return result.first()
+        return self.session.exec(statement).first()
 
     def _apply_queue_audit_fields(self, job: QueuedJob) -> None:
         policy_id = _parse_uuid(job.payload.get("policy_id"))

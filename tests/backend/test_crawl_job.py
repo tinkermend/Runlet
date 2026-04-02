@@ -6,6 +6,7 @@ from sqlmodel import select
 from app.domains.control_plane.job_types import ASSET_COMPILE_JOB_TYPE, CRAWL_JOB_TYPE
 from app.domains.crawler_service.schemas import CrawlRunResult
 from app.infrastructure.db.models.jobs import QueuedJob
+from app.infrastructure.db.models.runtime_policies import SystemCrawlPolicy
 from app.jobs.crawl_job import CrawlJobHandler
 from app.workers.runner import WorkerRunner
 
@@ -20,10 +21,14 @@ class StubCrawlerService:
         return self.result
 
 
-def _create_crawl_job(db_session, *, system_id, crawl_scope="full") -> QueuedJob:
+def _create_crawl_job(db_session, *, system_id, crawl_scope="full", policy_id=None) -> QueuedJob:
+    payload = {"system_id": str(system_id), "crawl_scope": crawl_scope}
+    if policy_id is not None:
+        payload["policy_id"] = str(policy_id)
+
     job = QueuedJob(
         job_type=CRAWL_JOB_TYPE,
-        payload={"system_id": str(system_id), "crawl_scope": crawl_scope},
+        payload=payload,
     )
     db_session.add(job)
     db_session.commit()
@@ -31,12 +36,31 @@ def _create_crawl_job(db_session, *, system_id, crawl_scope="full") -> QueuedJob
     return job
 
 
+def _create_crawl_policy(db_session, *, system_id, crawl_scope="full") -> SystemCrawlPolicy:
+    policy = SystemCrawlPolicy(
+        system_id=system_id,
+        enabled=True,
+        state="active",
+        schedule_expr="*/15 * * * *",
+        crawl_scope=crawl_scope,
+    )
+    db_session.add(policy)
+    db_session.commit()
+    db_session.refresh(policy)
+    return policy
+
+
 @pytest.mark.anyio
 async def test_crawl_job_persists_snapshot_and_enqueues_compile(
     db_session,
     seeded_system,
 ):
-    queued_crawl_job = _create_crawl_job(db_session, system_id=seeded_system.id)
+    policy = _create_crawl_policy(db_session, system_id=seeded_system.id)
+    queued_crawl_job = _create_crawl_job(
+        db_session,
+        system_id=seeded_system.id,
+        policy_id=policy.id,
+    )
     crawler_service = StubCrawlerService(
         CrawlRunResult(
             system_id=seeded_system.id,
@@ -69,13 +93,24 @@ async def test_crawl_job_persists_snapshot_and_enqueues_compile(
     assert compile_jobs[0].payload["snapshot_id"] == str(crawler_service.result.snapshot_id)
     assert compile_jobs[0].payload["compile_scope"] == "impacted_pages_only"
 
+    refreshed_policy = db_session.get(SystemCrawlPolicy, policy.id)
+    assert refreshed_policy is not None
+    assert refreshed_policy.last_succeeded_at is not None
+    assert refreshed_policy.last_failed_at is None
+    assert refreshed_policy.last_failure_message is None
+
 
 @pytest.mark.anyio
 async def test_crawl_job_marks_failure_without_compile_handoff_when_crawl_fails(
     db_session,
     seeded_system,
 ):
-    queued_crawl_job = _create_crawl_job(db_session, system_id=seeded_system.id)
+    policy = _create_crawl_policy(db_session, system_id=seeded_system.id)
+    queued_crawl_job = _create_crawl_job(
+        db_session,
+        system_id=seeded_system.id,
+        policy_id=seeded_system.id,
+    )
     crawler_service = StubCrawlerService(
         CrawlRunResult(
             system_id=seeded_system.id,
@@ -104,3 +139,9 @@ async def test_crawl_job_marks_failure_without_compile_handoff_when_crawl_fails(
     assert refreshed_job.status == "failed"
     assert refreshed_job.failure_message == "auth required"
     assert compile_jobs == []
+
+    refreshed_policy = db_session.get(SystemCrawlPolicy, policy.id)
+    assert refreshed_policy is not None
+    assert refreshed_policy.last_succeeded_at is None
+    assert refreshed_policy.last_failed_at is not None
+    assert refreshed_policy.last_failure_message == "auth required"
