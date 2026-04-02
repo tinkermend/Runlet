@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 from alembic import command
@@ -315,3 +316,18 @@ def test_runtime_policy_models_expose_expected_fields():
         "last_failed_at",
         "last_failure_message",
     } <= crawl_table_columns
+
+
+def test_alembic_revision_ids_fit_version_table_limit():
+    project_root = Path(__file__).resolve().parents[2]
+    versions_dir = project_root / "backend" / "alembic" / "versions"
+    revision_pattern = re.compile(r'^revision\s*=\s*"([^"]+)"', re.MULTILINE)
+
+    revision_ids: list[str] = []
+    for path in sorted(versions_dir.glob("*.py")):
+        match = revision_pattern.search(path.read_text(encoding="utf-8"))
+        assert match is not None, f"missing revision id in {path.name}"
+        revision_ids.append(match.group(1))
+
+    assert revision_ids
+    assert all(len(revision_id) <= 32 for revision_id in revision_ids)

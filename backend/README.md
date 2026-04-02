@@ -39,14 +39,21 @@ uv run uvicorn app.main:create_app --factory --reload
 
 ## 运行 Worker
 
-当前阶段还没有独立 CLI，最小运行方式是创建 `WorkerRunner`，注册：
+当前已经提供正式 worker daemon 入口：
 
-- `AuthRefreshJobHandler`
-- `CrawlJobHandler`
-- `AssetCompileJobHandler`
-- `RunCheckJobHandler`
+```bash
+cd backend
+./.venv/bin/runlet-worker
+```
 
-然后在循环中调用 `await worker.run_once()`。
+或使用你本地的工具链包装：
+
+```bash
+cd backend
+uv run runlet-worker
+```
+
+如果 worker 未启动，`auth_refresh`、`crawl`、`asset_compile`、`run_check` 任务只会停留在 `queued_jobs.status=accepted`，不会被实际消费。
 
 ## 触发认证刷新
 

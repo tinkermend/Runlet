@@ -1,7 +1,7 @@
 """crawl runtime failure metadata
 
-Revision ID: 0008_crawl_runtime_failure_metadata
-Revises: 0007_runtime_policy_worker_audit
+Revision ID: 0008_crawl_failure_metadata
+Revises: 0007_policy_worker_audit
 Create Date: 2026-04-03 11:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0008_crawl_runtime_failure_metadata"
-down_revision = "0007_runtime_policy_worker_audit"
+revision = "0008_crawl_failure_metadata"
+down_revision = "0007_policy_worker_audit"
 branch_labels = None
 depends_on = None
 

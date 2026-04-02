@@ -1,7 +1,7 @@
 """runtime policy worker audit fields
 
-Revision ID: 0007_runtime_policy_worker_audit
-Revises: 0006_runtime_policies_and_scheduler_runtime
+Revision ID: 0007_policy_worker_audit
+Revises: 0006_runtime_policies_sched
 Create Date: 2026-04-03 10:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0007_runtime_policy_worker_audit"
-down_revision = "0006_runtime_policies_and_scheduler_runtime"
+revision = "0007_policy_worker_audit"
+down_revision = "0006_runtime_policies_sched"
 branch_labels = None
 depends_on = None
 

@@ -55,6 +55,7 @@ class BrowserFactory(Protocol):
 
 
 class PlaywrightBrowserFactory:
+    _INITIAL_SETTLE_MS = 5000
     _ROUTE_HINTS_SCRIPT = """
 () => {
   const __RUNLET_ROUTE_HINTS__ = true;
@@ -231,6 +232,13 @@ class PlaywrightBrowserFactory:
 
         class _Session:
             framework_hint = None
+            _settled = False
+
+            async def _ensure_settled(self_nonlocal) -> None:
+                if self_nonlocal._settled:
+                    return
+                await page.wait_for_timeout(PlaywrightBrowserFactory._INITIAL_SETTLE_MS)
+                self_nonlocal._settled = True
 
             async def collect_route_hints(
                 self_nonlocal,
@@ -238,6 +246,7 @@ class PlaywrightBrowserFactory:
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
                 del crawl_scope
+                await self_nonlocal._ensure_settled()
                 return await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
 
             async def collect_dom_menu_nodes(
@@ -246,6 +255,7 @@ class PlaywrightBrowserFactory:
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
                 del crawl_scope
+                await self_nonlocal._ensure_settled()
                 return await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
 
             async def collect_dom_elements(
@@ -254,6 +264,7 @@ class PlaywrightBrowserFactory:
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
                 del crawl_scope
+                await self_nonlocal._ensure_settled()
                 return await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
 
             async def close(self_nonlocal) -> None:

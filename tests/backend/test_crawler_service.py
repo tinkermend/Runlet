@@ -58,12 +58,21 @@ class FakeBrowserFactory:
 class FakeCrawlerPage:
     def __init__(self) -> None:
         self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
         self.closed = False
+        self.settled = False
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         self.goto_calls.append((url, wait_until))
 
     async def evaluate(self, script: str):
+        if not self.settled:
+            if "__RUNLET_ROUTE_HINTS__" in script:
+                return [{"path": "/", "title": "加载中"}]
+            if "__RUNLET_MENU_NODES__" in script:
+                return []
+            if "__RUNLET_PAGE_ELEMENTS__" in script:
+                return []
         if "__RUNLET_ROUTE_HINTS__" in script:
             assert "__NEXT_DATA__" in script
             assert "__NUXT__" in script
@@ -87,6 +96,11 @@ class FakeCrawlerPage:
                 }
             ]
         raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
 
     async def close(self) -> None:
         self.closed = True
@@ -399,6 +413,7 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert menu_nodes[1]["label"] == "用户管理"
     assert dom_elements[0]["element_type"] == "button"
     assert page.goto_calls == [("https://erp.example.com", "domcontentloaded")]
+    assert page.wait_for_timeout_calls == [5000]
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True

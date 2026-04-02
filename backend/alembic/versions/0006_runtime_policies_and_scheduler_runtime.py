@@ -1,6 +1,6 @@
 """runtime policies and scheduler runtime
 
-Revision ID: 0006_runtime_policies_and_scheduler_runtime
+Revision ID: 0006_runtime_policies_sched
 Revises: 0005_job_run_audit_linkage
 Create Date: 2026-04-02 21:45:00.000000
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0006_runtime_policies_and_scheduler_runtime"
+revision = "0006_runtime_policies_sched"
 down_revision = "0005_job_run_audit_linkage"
 branch_labels = None
 depends_on = None
