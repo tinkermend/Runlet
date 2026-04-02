@@ -2,6 +2,7 @@
 
 - 修正真实 PostgreSQL 环境的运行闭环阻塞点：缩短 `0006/0007/0008` Alembic revision id，避免 `alembic_version.version_num` 32 位上限导致迁移停在 `0005_job_run_audit_linkage`，并补充对应回归测试。
 - 修正 SPA 采集时机过早问题：`PlaywrightBrowserFactory` 首次采集前增加一次性 settle 等待，dpm 真实采集结果从仅 `1 page / 0 menu / 0 element` 恢复到 `23 pages / 25 menus / 27 elements`。
+- 修正运行时路由与 DOM 菜单脱节导致的资产导航空链问题：当菜单节点缺少 `route_path` 时，crawler 会基于 runtime page title 回填菜单路由与页面关联，使 dpm 这类站点编译出的 `module_plan.nav.menu_chain` 不再为空。
 - crawler 默认提取链路切换为真实 runtime route hints + DOM traversal：`CrawlerService` 不再默认返回空快照，`PlaywrightBrowserFactory` 会实际打开页面并采集路由提示、菜单节点、页面元素，同时把降级失败原因与 warning 贯通到 `crawl_snapshots` 和 crawl 结果。
 - 补齐 runtime policy 的 worker 侧审计字段：`system_auth_policies/system_crawl_policies` 新增 `last_succeeded_at`、`last_failed_at`、`last_failure_message`，`auth_refresh` 与 `crawl` worker 在成功/失败后会回写绑定 policy 的执行结果。
 - 认证刷新链路升级为验证码感知登录流程：`auth_type` 统一规范化为 `none/image_captcha/slider_captcha/sms_captcha`，支持按 `PLAYWRIGHT_HEADLESS` 启动浏览器、图形验证码回填、滑块验证码拖拽求解，并对 `sms_captcha` 返回显式 `not_implemented`。

@@ -395,6 +395,40 @@ async def test_run_crawl_persists_failure_warning_and_degraded_metadata(
 
 
 @pytest.mark.anyio
+async def test_run_crawl_enriches_menu_routes_from_runtime_titles(
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    browser_factory.session.route_hints = [
+        {"path": "/front/database/allInstance", "title": "总览_智慧运维管理平台"},
+        {"path": "/front/alerter", "title": "告警中心"},
+    ]
+    browser_factory.session.dom_menu_nodes = [
+        {"label": "总览", "depth": 0, "order": 0, "role": "menuitem"},
+        {"label": "告警中心", "depth": 0, "order": 1, "role": "menuitem"},
+    ]
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    menus = db_session.exec(select(MenuNode).order_by(MenuNode.sort_order, MenuNode.id)).all()
+    pages = db_session.exec(select(Page).order_by(Page.route_path, Page.id)).all()
+    page_by_route = {page.route_path: page for page in pages}
+
+    assert len(menus) == 2
+    assert menus[0].route_path == "/front/database/allInstance"
+    assert menus[0].page_id == page_by_route["/front/database/allInstance"].id
+    assert menus[1].route_path == "/front/alerter"
+    assert menus[1].page_id == page_by_route["/front/alerter"].id
+
+
+@pytest.mark.anyio
 async def test_playwright_browser_factory_session_collects_runtime_facts(monkeypatch):
     page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
     factory = PlaywrightBrowserFactory()

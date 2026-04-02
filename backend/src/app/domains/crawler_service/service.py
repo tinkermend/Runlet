@@ -381,7 +381,26 @@ class CrawlerService:
         for candidate in runtime.pages + dom.pages:
             page_candidates[candidate.route_path] = candidate
 
+        title_route_map = self._build_title_route_map(page_candidates.values())
+
+        normalized_dom_menus: list[MenuCandidate] = []
         for menu in dom.menus:
+            route_path = menu.route_path
+            page_route_path = menu.page_route_path
+            if route_path is None:
+                route_path = title_route_map.get(self._normalize_title_key(menu.label))
+            if page_route_path is None:
+                page_route_path = route_path
+            normalized_dom_menus.append(
+                menu.model_copy(
+                    update={
+                        "route_path": route_path,
+                        "page_route_path": page_route_path,
+                    }
+                )
+            )
+
+        for menu in normalized_dom_menus:
             route_path = menu.page_route_path or menu.route_path
             if route_path and route_path not in page_candidates:
                 page_candidates[route_path] = PageCandidate(route_path=route_path, page_title=menu.label)
@@ -400,12 +419,35 @@ class CrawlerService:
             framework_detected=runtime.framework_detected or dom.framework_detected or system.framework_type,
             quality_score=quality_score,
             pages=list(page_candidates.values()),
-            menus=dom.menus,
+            menus=normalized_dom_menus,
             elements=dom.elements,
             failure_reason=failure_reason,
             warning_messages=warning_messages,
             degraded=degraded,
         )
+
+    def _build_title_route_map(self, pages: list[PageCandidate] | object) -> dict[str, str]:
+        title_route_map: dict[str, str] = {}
+        for page in pages:
+            if not isinstance(page, PageCandidate):
+                continue
+            if page.page_title is None:
+                continue
+            normalized_title = self._normalize_title_key(page.page_title)
+            if normalized_title and normalized_title not in title_route_map:
+                title_route_map[normalized_title] = page.route_path
+        return title_route_map
+
+    def _normalize_title_key(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        for separator in ("_", "|", "-", "—"):
+            if separator in normalized:
+                normalized = normalized.split(separator, 1)[0].strip()
+        return normalized or None
 
     def _build_snapshot(
         self,
