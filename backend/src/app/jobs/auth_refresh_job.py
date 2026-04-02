@@ -24,6 +24,7 @@ class AuthRefreshJobHandler:
         if job is None:
             raise ValueError(f"queued job {job_id} not found")
 
+        self._apply_queue_audit_fields(job)
         system_id = job.payload.get("system_id")
         if not isinstance(system_id, str):
             await self._mark_failed(job, message="missing system_id in auth refresh job payload")
@@ -69,3 +70,37 @@ class AuthRefreshJobHandler:
             await self.session.commit()
             return
         self.session.commit()
+
+    def _apply_queue_audit_fields(self, job: QueuedJob) -> None:
+        policy_id = _parse_uuid(job.payload.get("policy_id"))
+        if policy_id is not None:
+            job.policy_id = policy_id
+
+        trigger_source = job.payload.get("trigger_source")
+        if isinstance(trigger_source, str) and trigger_source.strip():
+            job.trigger_source = trigger_source.strip()
+
+        scheduled_at = _parse_datetime(job.payload.get("scheduled_at"))
+        if scheduled_at is not None:
+            job.scheduled_at = scheduled_at
+
+
+def _parse_uuid(value: object) -> UUID | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

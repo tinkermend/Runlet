@@ -1,16 +1,20 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import anyio
 import pytest
 
 from app.domains.auth_service.schemas import AuthRefreshResult
 from app.domains.control_plane.job_types import (
     AUTH_REFRESH_JOB_TYPE,
     ASSET_COMPILE_JOB_TYPE,
+    CRAWL_JOB_TYPE,
     RUN_CHECK_JOB_TYPE,
 )
+from app.domains.crawler_service.schemas import CrawlRunResult
 from app.infrastructure.db.models.jobs import QueuedJob, utcnow
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
+from app.jobs.crawl_job import CrawlJobHandler
 from app.shared.enums import QueuedJobStatus
 from app.workers.runner import WorkerRunner, build_worker_handlers
 
@@ -28,6 +32,16 @@ class StubAuthService:
 class ExplodingHandler:
     async def run(self, *, job_id):
         raise RuntimeError(f"boom for {job_id}")
+
+
+class StubCrawlerService:
+    def __init__(self, result: CrawlRunResult) -> None:
+        self.result = result
+        self.calls = []
+
+    async def run_crawl(self, *, system_id, crawl_scope: str) -> CrawlRunResult:
+        self.calls.append({"system_id": system_id, "crawl_scope": crawl_scope})
+        return self.result
 
 
 def _create_auth_job(db_session, *, system_id, created_at) -> QueuedJob:
@@ -141,3 +155,115 @@ async def test_worker_runner_marks_job_failed_when_handler_raises(
     assert refreshed is not None
     assert refreshed.status == QueuedJobStatus.FAILED.value
     assert refreshed.failure_message.startswith("handler crashed: boom for")
+
+
+@pytest.mark.anyio
+async def test_worker_runner_run_forever_stops_on_signal(db_session):
+    runner = WorkerRunner(session=db_session, handlers={})
+    stop_event = anyio.Event()
+    calls = {"count": 0}
+
+    async def fake_run_once() -> bool:
+        calls["count"] += 1
+        return False
+
+    runner.run_once = fake_run_once  # type: ignore[assignment]
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(runner.run_forever, 5, stop_event)
+        await anyio.sleep(0.02)
+        stop_event.set()
+
+    assert calls["count"] > 0
+
+
+@pytest.mark.anyio
+async def test_worker_runner_persists_auth_policy_trigger_audit_fields(
+    db_session,
+    seeded_system,
+):
+    scheduled_at = datetime(2026, 4, 2, 8, 0, tzinfo=UTC)
+    policy_id = uuid4()
+    job = QueuedJob(
+        job_type=AUTH_REFRESH_JOB_TYPE,
+        payload={
+            "system_id": str(seeded_system.id),
+            "policy_id": str(policy_id),
+            "trigger_source": "scheduler",
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    auth_service = StubAuthService(
+        AuthRefreshResult(
+            system_id=seeded_system.id,
+            status="success",
+            auth_state_id=uuid4(),
+        )
+    )
+    runner = WorkerRunner(
+        session=db_session,
+        handlers={
+            AUTH_REFRESH_JOB_TYPE: AuthRefreshJobHandler(
+                session=db_session,
+                auth_service=auth_service,
+            )
+        },
+    )
+
+    await runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, job.id)
+    assert refreshed is not None
+    assert refreshed.policy_id == policy_id
+    assert refreshed.trigger_source == "scheduler"
+    assert refreshed.scheduled_at.replace(tzinfo=UTC) == scheduled_at
+
+
+@pytest.mark.anyio
+async def test_worker_runner_persists_crawl_policy_trigger_audit_fields(
+    db_session,
+    seeded_system,
+):
+    scheduled_at = datetime(2026, 4, 2, 8, 0, tzinfo=UTC)
+    policy_id = uuid4()
+    job = QueuedJob(
+        job_type=CRAWL_JOB_TYPE,
+        payload={
+            "system_id": str(seeded_system.id),
+            "crawl_scope": "incremental",
+            "policy_id": str(policy_id),
+            "trigger_source": "scheduler",
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    crawler_service = StubCrawlerService(
+        CrawlRunResult(
+            system_id=seeded_system.id,
+            status="success",
+            snapshot_id=uuid4(),
+            pages_saved=1,
+        )
+    )
+    runner = WorkerRunner(
+        session=db_session,
+        handlers={
+            CRAWL_JOB_TYPE: CrawlJobHandler(
+                session=db_session,
+                crawler_service=crawler_service,
+            )
+        },
+    )
+
+    await runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, job.id)
+    assert refreshed is not None
+    assert refreshed.policy_id == policy_id
+    assert refreshed.trigger_source == "scheduler"
+    assert refreshed.scheduled_at.replace(tzinfo=UTC) == scheduled_at

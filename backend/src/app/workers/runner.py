@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
+import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
@@ -52,6 +53,22 @@ class WorkerRunner:
             job.failure_message = f"handler crashed: {exc}"
             await self._commit()
         return True
+
+    async def run_forever(
+        self,
+        poll_interval_ms: int = 500,
+        stop_event: anyio.Event | None = None,
+    ) -> None:
+        interval_seconds = max(poll_interval_ms, 1) / 1000
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                return
+            handled = await self.run_once()
+            if handled:
+                continue
+            if stop_event is not None and stop_event.is_set():
+                return
+            await anyio.sleep(interval_seconds)
 
     async def _next_accepted_job(self) -> QueuedJob | None:
         statement = (

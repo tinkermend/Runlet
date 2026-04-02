@@ -68,6 +68,8 @@ class PublishedJobTrigger:
         job_run.queued_job_id = queued_job_id
         queued_job = await self._get(QueuedJob, queued_job_id)
         if queued_job is not None:
+            queued_job.trigger_source = trigger_source
+            queued_job.scheduled_at = run_scheduled_at
             queued_job.payload = {**queued_job.payload, "queued_job_id": str(queued_job_id)}
         await self._commit()
         await self._refresh(job_run)

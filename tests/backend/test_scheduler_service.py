@@ -97,6 +97,8 @@ async def test_published_job_service_triggers_single_job_once_per_minute(
     assert len(job_runs) == 1
     assert job_runs[0].scheduled_at.replace(tzinfo=UTC) == fixed_now
     assert any(job.job_type == "run_check" for job in queued_jobs)
+    assert queued_jobs[0].trigger_source == "scheduler"
+    assert queued_jobs[0].scheduled_at.replace(tzinfo=UTC) == fixed_now
     assert queued_jobs[0].payload["scheduled_at"] == fixed_now.isoformat()
 
 
