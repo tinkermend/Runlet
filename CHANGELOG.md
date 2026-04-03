@@ -2,7 +2,6 @@
 
 - 新增后端检查执行与受控实时探测实施计划，按 TDD 拆分双轨受理、完整 runtime、统一结果查询、probe 反馈回写与从成功检查晋升为调度对象的后端落地步骤。
 - 新增后端检查执行与受控实时探测设计文档，明确企业级 To B 巡检平台继续采用“资产优先 + 页面级受控降级 + 元素级缺失直接失败”的后端演进原则，并收口 `skill/control_plane/runner_service/script_renderer` 的职责边界。
-- 扩展 runner 执行结果契约：引入 `FailureCategory` 枚举，让 `RunPageCheckResult` 暴露 `failure_category`、`final_url`、`page_title` 等页面上下文字段，`execution_runs.failure_category` 改为枚举存储，`ExecutionArtifact.payload` 也预置 `page_context` 与 `screenshots` 占位元数据。
 - 修正真实站点滑块登录链路：`auth_service.browser_login` 为 `slider_captcha` 新增 `drag` 模式，并在 `slider_piece == slider_handle` 时自动识别为拖条验证码，支持 Vben Admin 这类“拖到最右侧解锁”站点，不再误走 `ddddocr` 拼图偏移求解。
 - 修补浏览器登录假成功问题：提交表单后的认证刷新现在会在抓取 `storage_state` 前校验登录表单是否仍可见，若页面仍停留在登录态则返回 `login_not_completed`，避免把主题/埋点类本地状态误存为有效认证。
 - 增强 Vben Admin 登录稳定性：`browser_login` 现在会在填充表单前执行登录页就绪轮询与重开重试，并在拖条验证码完成后增加短暂 settle 等待，降低静态资源 503 或拖条验证未稳定时直接提交导致的 `Page.fill timeout` / `login_not_completed`。
