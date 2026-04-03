@@ -70,6 +70,10 @@ def _serialize_compile_result(result) -> dict[str, object]:
     payload["snapshot_id"] = str(payload["snapshot_id"])
     payload["asset_ids"] = [str(asset_id) for asset_id in payload["asset_ids"]]
     payload["check_ids"] = [str(check_id) for check_id in payload["check_ids"]]
+    payload["alias_ids_to_disable"] = [str(alias_id) for alias_id in payload["alias_ids_to_disable"]]
+    payload["published_job_ids_to_pause"] = [
+        str(job_id) for job_id in payload["published_job_ids_to_pause"]
+    ]
     drift_state = payload.get("drift_state")
     if isinstance(drift_state, AssetStatus):
         payload["drift_state"] = drift_state.value

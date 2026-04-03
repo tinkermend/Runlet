@@ -1,12 +1,13 @@
 from pathlib import Path
 import re
+from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlmodel import create_engine, inspect
+from sqlmodel import Session, create_engine, inspect
 
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
@@ -188,6 +189,7 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "snapshot_id",
         "retired_asset_ids",
         "retired_check_ids",
+        "disabled_alias_ids",
         "retire_reasons",
         "paused_published_job_ids",
         "created_at",
@@ -348,6 +350,7 @@ def test_initial_schema_exposes_reconciliation_audit_table(db_engine):
         "snapshot_id",
         "retired_asset_ids",
         "retired_check_ids",
+        "disabled_alias_ids",
         "retire_reasons",
         "paused_published_job_ids",
         "created_at",
@@ -367,6 +370,52 @@ def test_initial_schema_exposes_reconciliation_audit_table(db_engine):
         and fk["referred_columns"] == ["id"]
         for fk in crawl_policy_foreign_keys
     )
+
+
+def test_reconciliation_audit_persists_non_empty_identifier_lists(db_engine):
+    from app.infrastructure.db.models.assets import AssetReconciliationAudit
+    from app.infrastructure.db.models.crawl import CrawlSnapshot
+    from app.infrastructure.db.models.systems import System
+
+    retired_asset_id = uuid4()
+    retired_check_id = uuid4()
+    alias_id = uuid4()
+    paused_job_id = uuid4()
+
+    with Session(db_engine) as session:
+        system = System(
+            code="audit",
+            name="Audit",
+            base_url="https://audit.example.com",
+            framework_type="react",
+        )
+        session.add(system)
+        session.flush()
+
+        snapshot = CrawlSnapshot(
+            system_id=system.id,
+            crawl_type="full",
+            framework_detected=system.framework_type,
+        )
+        session.add(snapshot)
+        session.flush()
+
+        audit = AssetReconciliationAudit(
+            snapshot_id=snapshot.id,
+            retired_asset_ids=[retired_asset_id],
+            retired_check_ids=[retired_check_id],
+            disabled_alias_ids=[alias_id],
+            retire_reasons=[{"category": "retired_missing", "asset_id": str(retired_asset_id)}],
+            paused_published_job_ids=[paused_job_id],
+        )
+        session.add(audit)
+        session.commit()
+        session.refresh(audit)
+
+        assert audit.retired_asset_ids == [str(retired_asset_id)]
+        assert audit.retired_check_ids == [str(retired_check_id)]
+        assert audit.disabled_alias_ids == [str(alias_id)]
+        assert audit.paused_published_job_ids == [str(paused_job_id)]
 
 
 def test_runtime_policy_models_expose_expected_fields():

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
+from pydantic import field_validator
 from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
@@ -29,7 +31,30 @@ def asset_lifecycle_status_enum() -> sa.Enum:
     )
 
 
-json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    return value
+
+
+class UUIDSafeJSONType(sa.TypeDecorator):
+    impl = sa.JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(postgresql.JSONB(astext_type=sa.Text()))
+        return dialect.type_descriptor(sa.JSON())
+
+    def process_bind_param(self, value: Any, dialect) -> Any:
+        return _json_safe(value)
+
+
+json_type = UUIDSafeJSONType()
 
 
 def utcnow() -> datetime:
@@ -158,11 +183,15 @@ class AssetReconciliationAudit(BaseModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
-    retired_asset_ids: list[UUID] = Field(
+    retired_asset_ids: list[str] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
-    retired_check_ids: list[UUID] = Field(
+    retired_check_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+    disabled_alias_ids: list[str] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
@@ -170,7 +199,7 @@ class AssetReconciliationAudit(BaseModel, table=True):
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
-    paused_published_job_ids: list[UUID] = Field(
+    paused_published_job_ids: list[str] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
@@ -178,3 +207,18 @@ class AssetReconciliationAudit(BaseModel, table=True):
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
+
+    @field_validator(
+        "retired_asset_ids",
+        "retired_check_ids",
+        "disabled_alias_ids",
+        "paused_published_job_ids",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_uuid_list(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError("expected list for identifier audit fields")
+        return [str(item) for item in value]

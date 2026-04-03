@@ -1,10 +1,16 @@
+import json
+from uuid import uuid4
+
 import pytest
 from sqlmodel import select
 
+from app.domains.asset_compiler.schemas import CompileSnapshotResult
 from app.domains.control_plane.job_types import ASSET_COMPILE_JOB_TYPE
 from app.infrastructure.db.models.assets import PageAsset
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.infrastructure.db.models.jobs import QueuedJob
+from app.jobs.asset_compile_job import _serialize_compile_result
+from app.shared.enums import AssetStatus
 from app.workers.runner import WorkerRunner
 
 
@@ -112,3 +118,25 @@ async def test_asset_compile_job_completes_and_persists_assets(
     assert refreshed.result_payload is not None
     assert refreshed.result_payload["status"] == "success"
     assert assets
+
+
+def test_serialize_compile_result_json_safely_handles_reconciliation_uuid_lists():
+    alias_id = uuid4()
+    published_job_id = uuid4()
+    result = CompileSnapshotResult(
+        snapshot_id=uuid4(),
+        status="success",
+        assets_created=1,
+        checks_created=1,
+        drift_state=AssetStatus.SAFE,
+        asset_ids=[uuid4()],
+        check_ids=[uuid4()],
+        alias_ids_to_disable=[alias_id],
+        published_job_ids_to_pause=[published_job_id],
+    )
+
+    payload = _serialize_compile_result(result)
+
+    assert payload["alias_ids_to_disable"] == [str(alias_id)]
+    assert payload["published_job_ids_to_pause"] == [str(published_job_id)]
+    json.dumps(payload)
