@@ -128,6 +128,7 @@ class PlaywrightRunnerRuntime:
 
         context_mismatch = False
         ambiguous_match = False
+        element_became_hidden = False
         any_context_matched = False
         base_constraints = context_constraints if isinstance(context_constraints, dict) else {}
 
@@ -158,6 +159,7 @@ class PlaywrightRunnerRuntime:
                 try:
                     await target.wait_for(state="visible")
                 except Exception:
+                    element_became_hidden = True
                     continue
                 return {
                     "matched": True,
@@ -182,6 +184,12 @@ class PlaywrightRunnerRuntime:
                 failure_category="ambiguous_match",
                 context_mismatch=context_mismatch,
                 ambiguous_match=True,
+            )
+        if any_context_matched and element_became_hidden:
+            return _build_locator_failure(
+                failure_category="element_became_hidden",
+                context_mismatch=context_mismatch,
+                ambiguous_match=ambiguous_match,
             )
         return _build_locator_failure(
             failure_category="locator_all_failed",

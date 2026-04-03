@@ -1097,7 +1097,7 @@ async def test_playwright_runtime_resolve_locator_bundle_returns_ambiguous_match
 
 
 @pytest.mark.anyio
-async def test_playwright_runtime_resolve_locator_bundle_invisible_element_is_locator_all_failed():
+async def test_playwright_runtime_resolve_locator_bundle_invisible_element_is_element_became_hidden():
     from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
 
     runtime = PlaywrightRunnerRuntime()
@@ -1116,7 +1116,7 @@ async def test_playwright_runtime_resolve_locator_bundle_invisible_element_is_lo
     )
 
     assert result["matched"] is False
-    assert result["failure_category"] == "locator_all_failed"
+    assert result["failure_category"] == "element_became_hidden"
 
 
 @pytest.mark.anyio
