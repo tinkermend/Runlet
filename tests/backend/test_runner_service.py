@@ -5,22 +5,37 @@ from uuid import UUID
 import pytest
 from sqlmodel import select
 
+from app.domains.runner_service.failure_categories import FailureCategory
 from app.infrastructure.db.models.assets import ModulePlan, PageCheck
 from app.infrastructure.db.models.execution import ExecutionArtifact, ExecutionRun
+from pydantic.fields import PydanticUndefined
 
 
 @pytest.mark.anyio
-async def test_run_page_check_result_includes_failure_category_and_page_context():
+async def test_run_page_check_result_fields_match_failure_category_contract():
     from app.domains.runner_service.schemas import RunPageCheckResult
 
-    assert "failure_category" in RunPageCheckResult.model_fields
-    assert "final_url" in RunPageCheckResult.model_fields
-    assert "page_title" in RunPageCheckResult.model_fields
+    fields = RunPageCheckResult.model_fields
+    failure_field = fields["failure_category"]
+    final_url_field = fields["final_url"]
+    page_title_field = fields["page_title"]
+
+    assert failure_field.annotation == FailureCategory | None
+    assert failure_field.default is None
+
+    assert final_url_field.annotation == str | None
+    assert final_url_field.default is None
+
+    assert page_title_field.annotation == str | None
+    assert page_title_field.default is None
 
 
 @pytest.mark.anyio
-async def test_execution_run_schema_exposes_failure_category_field():
-    assert hasattr(ExecutionRun, "failure_category")
+async def test_execution_run_failure_category_field_stays_string_backed():
+    field = ExecutionRun.model_fields["failure_category"]
+    assert field.annotation == str | None
+    assert field.sa_column is PydanticUndefined
+    assert any(getattr(metadata, "max_length", None) == 64 for metadata in field.metadata)
 
 
 class FakeRuntime:
