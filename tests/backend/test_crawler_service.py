@@ -68,9 +68,11 @@ class FakeCrawlerPage:
         self.wait_for_timeout_calls: list[int] = []
         self.closed = False
         self.settled = False
+        self.current_url = "about:blank"
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         self.goto_calls.append((url, wait_until))
+        self.current_url = url
 
     async def evaluate(self, script: str):
         if not self.settled:
@@ -117,10 +119,15 @@ class FakeCrawlerPage:
         if "__RUNLET_NETWORK_REQUESTS__" in script:
             return [{"path": "/dashboard", "source": "network_request"}]
         if "__RUNLET_PAGE_METADATA__" in script:
-            return [
-                {"route_path": "/dashboard", "page_title": "仪表盘", "reachable": True, "status_code": 200},
-                {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200},
-            ]
+            if self.current_url.endswith("/users"):
+                return [
+                    {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200},
+                ]
+            if self.current_url.endswith("/dashboard"):
+                return [
+                    {"route_path": "/dashboard", "page_title": "仪表盘", "reachable": True, "status_code": 200},
+                ]
+            return [{"route_path": "/", "page_title": "首页", "reachable": True, "status_code": 200}]
         raise AssertionError(f"unexpected script: {script[:80]}")
 
     async def wait_for_timeout(self, timeout: int) -> None:
@@ -761,7 +768,8 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert network_route_configs[0]["route_path"] == "/reports"
     assert network_resource_hints[0]["route_path"] == "/users"
     assert network_requests[0]["path"] == "/dashboard"
-    assert page_metadata[0]["route_path"] == "/dashboard"
+    assert len(page_metadata) == 1
+    assert page_metadata[0]["route_path"] == "/users"
     assert page_metadata[0]["status_code"] == 200
     assert page.goto_calls == [
         ("https://erp.example.com", "domcontentloaded"),
@@ -774,3 +782,23 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert context.closed is True
     assert browser.closed is True
     assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_metadata_reports_current_page_only(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    # Drive route transitions first, then collect metadata for current loaded page only.
+    await session.collect_dom_elements(crawl_scope="full")
+    page_metadata = await session.collect_page_metadata(crawl_scope="full")
+    await session.close()
+
+    assert page_metadata == [
+        {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200}
+    ]

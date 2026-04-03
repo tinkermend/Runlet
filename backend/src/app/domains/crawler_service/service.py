@@ -381,58 +381,25 @@ class PlaywrightBrowserFactory:
     _PAGE_METADATA_SCRIPT = """
 () => {
   const __RUNLET_PAGE_METADATA__ = true;
-  const seen = new Set();
-  const result = [];
-  const pushMetadata = (path, title) => {
-    if (typeof path !== 'string') return;
-    const cleanPath = path.trim();
-    if (!cleanPath || !cleanPath.startsWith('/') || seen.has(cleanPath)) return;
-    seen.add(cleanPath);
-    result.push({
-      route_path: cleanPath,
-      page_title: typeof title === 'string' ? title.trim() || null : null,
+  const path = typeof window.location.pathname === "string" ? window.location.pathname.trim() : "";
+  if (!path || !path.startsWith("/")) {
+    return [];
+  }
+
+  const navEntry = performance.getEntriesByType("navigation")[0];
+  let statusCode = null;
+  if (navEntry && typeof navEntry.responseStatus === "number" && Number.isFinite(navEntry.responseStatus)) {
+    statusCode = navEntry.responseStatus;
+  }
+
+  return [
+    {
+      route_path: path,
+      page_title: typeof document.title === "string" ? document.title.trim() || null : null,
       reachable: true,
-      status_code: 200,
-    });
-  };
-
-  pushMetadata(window.location.pathname, document.title);
-
-  const routeTables = [
-    window.__NEXT_DATA__?.props?.pageProps?.routes,
-    window.__INITIAL_STATE__?.router?.routes,
-    window.__VUE_ROUTER__?.options?.routes,
-    window.$router?.options?.routes,
+      status_code: statusCode,
+    },
   ];
-
-  for (const table of routeTables) {
-    if (!Array.isArray(table)) continue;
-    for (const route of table) {
-      if (!route || typeof route !== 'object') continue;
-      pushMetadata(route.path, route.meta?.title || route.name || route.title || null);
-      if (Array.isArray(route.children)) {
-        for (const child of route.children) {
-          if (!child || typeof child !== 'object') continue;
-          pushMetadata(child.path, child.meta?.title || child.name || child.title || null);
-        }
-      }
-    }
-  }
-
-  for (const node of Array.from(document.querySelectorAll("a[href], [data-route-path], [data-path]"))) {
-    const raw = node.getAttribute("href")
-      || node.getAttribute("data-route-path")
-      || node.getAttribute("data-path");
-    if (!raw) continue;
-    try {
-      const url = raw.startsWith("/") ? new URL(raw, window.location.origin) : new URL(raw, window.location.href);
-      pushMetadata(url.pathname, node.textContent || node.getAttribute("aria-label"));
-    } catch {
-      continue;
-    }
-  }
-
-  return result;
 }
 """
 
