@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 完成 Task 1 采集事实契约发布：为 `pages/menu_nodes/page_elements` 扩展状态与上下文字段契约，`CrawlerService` 持久化链路补齐 `discovery_sources/entry_candidates/context_constraints/state_signature/state_context/locator_candidates` 回写，`0011_crawl_state_and_locator_evidence` 迁移 JSON 列与 ORM `json_type`（PostgreSQL JSONB 变体）对齐，并补充 crawler round-trip 持久化断言覆盖。
 - 新增 Vue/React Web 系统采集完整性增强实施计划，按事实层扩展、页面发现、状态探测、locator bundle 编译、runner telemetry 与回归验收六个任务拆解后端落地步骤。
 - 新增 Vue/React Web 系统采集完整性增强设计文档，明确以“页面发现高召回 + 状态探测高精度”为核心策略，补充受控交互采集、多重定位证据与 locator bundle 资产化方案，并定义完整性指标与验收口径。
 - 新增 Web 测试系统接入与删除实施计划，拆分 YAML 清单建模、`.env` 密钥加密、后端系统治理服务、同步正式链路编排、彻底删除与 CLI 命令接线五个任务，为后续 `openweb web-system add/remove` 落地提供可执行步骤。
