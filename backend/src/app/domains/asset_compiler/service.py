@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.domains.asset_compiler.check_templates import build_standard_checks
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint, compare_fingerprints
+from app.domains.asset_compiler.locator_bundles import build_locator_bundle
 from app.domains.asset_compiler.module_plan_builder import build_module_plan
 from app.domains.asset_compiler.reconciliation import (
     ActiveCheckTruth,
@@ -21,7 +22,7 @@ from app.domains.asset_compiler.reconciliation import (
     evaluate_retirement_quality_gate,
     reconcile_retirement_decisions,
 )
-from app.domains.asset_compiler.schemas import CompileSnapshotResult
+from app.domains.asset_compiler.schemas import CompileSnapshotResult, LocatorBundle
 from app.infrastructure.db.models.assets import (
     AssetReconciliationAudit,
     AssetSnapshot,
@@ -101,6 +102,14 @@ class AssetCompilerService:
         )
 
         for page in pages:
+            default_state_signature = _build_default_state_signature(page.route_path)
+            normalized_elements = [
+                _build_normalized_element(
+                    element=element,
+                    default_state_signature=default_state_signature,
+                )
+                for element in elements_by_page.get(page.id, [])
+            ]
             page_payload = {
                 "page": {
                     "route_path": page.route_path,
@@ -116,17 +125,7 @@ class AssetCompilerService:
                     }
                     for menu in menus_by_page.get(page.id, [])
                 ],
-                "elements": [
-                    {
-                        "element_type": element.element_type,
-                        "element_role": element.element_role,
-                        "element_text": element.element_text,
-                        "attributes": element.attributes or {},
-                        "playwright_locator": element.playwright_locator,
-                        "usage_description": element.usage_description,
-                    }
-                    for element in elements_by_page.get(page.id, [])
-                ],
+                "elements": normalized_elements,
             }
             fingerprint = build_page_fingerprint(page_payload)
 
@@ -177,10 +176,13 @@ class AssetCompilerService:
             )
             self.session.add(asset_snapshot)
 
-            has_table = any(element.element_type == "table" for element in elements_by_page.get(page.id, []))
+            has_table = any(
+                _normalize_text(element.get("element_type")) == "table"
+                for element in normalized_elements
+            )
             has_create_action = any(
-                _suggests_create_action(element.element_text)
-                for element in elements_by_page.get(page.id, [])
+                _suggests_create_action(_normalize_text(element.get("element_text")))
+                for element in normalized_elements
             )
             page_context = {
                 "system_code": system.code,
@@ -188,17 +190,29 @@ class AssetCompilerService:
                 "route_path": page.route_path,
                 "menu_chain": [menu.label for menu in menus_by_page.get(page.id, []) if menu.label],
                 "has_table": has_table,
+                "default_state_signature": default_state_signature,
             }
             standard_checks = build_standard_checks(
                 page_summary=page.page_summary,
                 has_table=has_table,
                 has_create_action=has_create_action,
+                representative_states=_collect_representative_states(normalized_elements),
+                default_state_signature=default_state_signature,
             )
 
             for check_definition in standard_checks:
+                check_state_signature = check_definition.state_signature or default_state_signature
+                locator_bundle = _select_locator_bundle_for_check(
+                    check_code=check_definition.check_code,
+                    state_signature=check_state_signature,
+                    default_state_signature=default_state_signature,
+                    elements=normalized_elements,
+                )
                 module_plan_draft = build_module_plan(
                     check_code=check_definition.check_code,
                     page_context=page_context,
+                    state_signature=check_state_signature,
+                    locator_bundle={"candidates": locator_bundle.candidates},
                 )
                 module_plan = ModulePlan(
                     page_asset_id=page_asset.id,
@@ -224,7 +238,10 @@ class AssetCompilerService:
                     await self._flush()
 
                 page_check.goal = check_definition.goal
-                page_check.input_schema = check_definition.input_schema
+                page_check.input_schema = {
+                    **(check_definition.input_schema or {}),
+                    "state_signature": check_state_signature,
+                }
                 page_check.assertion_schema = check_definition.assertion_schema
                 page_check.module_plan_id = module_plan.id
                 page_check.blocking_dependency_json = build_blocking_dependency_json(
@@ -690,6 +707,152 @@ def _suggests_create_action(label: str | None) -> bool:
     return any(keyword in label for keyword in ("新增", "新建", "创建"))
 
 
+def _build_default_state_signature(route_path: str) -> str:
+    route_segments = [segment for segment in route_path.strip("/").split("/") if segment]
+    page_key = route_segments[-1] if route_segments else "page"
+    return f"{page_key}:default"
+
+
+def _build_normalized_element(
+    *,
+    element: PageElement,
+    default_state_signature: str,
+) -> dict[str, object]:
+    raw_candidates = list(element.locator_candidates or [])
+    if not raw_candidates and element.playwright_locator:
+        raw_candidates = [
+            {
+                "strategy_type": _infer_strategy_type(element.playwright_locator),
+                "selector": element.playwright_locator,
+            }
+        ]
+    state_signature = _normalize_text(element.state_signature) or default_state_signature
+    state_context = dict(element.state_context or {})
+    locator_bundle = build_locator_bundle(
+        locator_candidates=raw_candidates,
+        state_context=state_context,
+    )
+    return {
+        "element_type": _normalize_text(element.element_type),
+        "element_role": _normalize_text(element.element_role),
+        "element_text": _normalize_text(element.element_text),
+        "attributes": element.attributes or {},
+        "playwright_locator": _normalize_text(element.playwright_locator),
+        "usage_description": _normalize_text(element.usage_description),
+        "state_signature": state_signature,
+        "state_context": state_context,
+        "locator_bundle": {"candidates": locator_bundle.candidates},
+    }
+
+
+def _collect_representative_states(
+    elements: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    states: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for element in elements:
+        state_signature = _normalize_text(element.get("state_signature"))
+        state_context = element.get("state_context")
+        context = state_context if isinstance(state_context, dict) else {}
+        entry_type = _normalize_text(context.get("entry_type"))
+        if not state_signature or not entry_type:
+            continue
+        signature = (state_signature, entry_type)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        states.append({"state_signature": state_signature, "entry_type": entry_type})
+    return states
+
+
+def _select_locator_bundle_for_check(
+    *,
+    check_code: str,
+    state_signature: str,
+    default_state_signature: str,
+    elements: list[dict[str, object]],
+) -> LocatorBundle:
+    expected_element_type = _expected_element_type_for_check(check_code)
+    preferred_states = [state_signature]
+    if state_signature != default_state_signature:
+        preferred_states.append(default_state_signature)
+
+    for candidate_state in preferred_states:
+        matched = _find_element_bundle(
+            elements=elements,
+            element_type=expected_element_type,
+            state_signature=candidate_state,
+        )
+        if matched is not None:
+            return matched
+
+    fallback = _find_element_bundle(
+        elements=elements,
+        element_type=expected_element_type,
+        state_signature="",
+    )
+    if fallback is not None:
+        return fallback
+    return LocatorBundle(candidates=[])
+
+
+def _find_element_bundle(
+    *,
+    elements: list[dict[str, object]],
+    element_type: str | None,
+    state_signature: str,
+) -> LocatorBundle | None:
+    for element in elements:
+        current_state = _normalize_text(element.get("state_signature"))
+        if state_signature and current_state != state_signature:
+            continue
+        current_type = _normalize_text(element.get("element_type"))
+        if element_type and current_type != element_type:
+            continue
+        locator_bundle = element.get("locator_bundle")
+        if not isinstance(locator_bundle, dict):
+            continue
+        candidates = locator_bundle.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            continue
+        return LocatorBundle(candidates=[_normalize_locator_candidate(row) for row in candidates])
+    return None
+
+
+def _normalize_locator_candidate(candidate: object) -> dict[str, object]:
+    payload = candidate if isinstance(candidate, dict) else {}
+    return {
+        "strategy_type": _normalize_text(payload.get("strategy_type")),
+        "selector": _normalize_text(payload.get("selector")),
+        "context_constraints": payload.get("context_constraints") if isinstance(payload.get("context_constraints"), dict) else {},
+        "stability_score": _normalize_float(payload.get("stability_score")),
+        "specificity_score": _normalize_float(payload.get("specificity_score")),
+        "observed_success_count": _normalize_int(payload.get("observed_success_count")),
+        "fallback_rank": _normalize_int(payload.get("fallback_rank")),
+    }
+
+
+def _expected_element_type_for_check(check_code: str) -> str | None:
+    if check_code in {"table_render", "tab_switch_render"}:
+        return "table"
+    if check_code == "open_create_modal":
+        return "button"
+    return None
+
+
+def _infer_strategy_type(playwright_locator: str) -> str:
+    locator = _normalize_text(playwright_locator).lower()
+    if "get_by_role" in locator or locator.startswith("role="):
+        return "semantic"
+    if "get_by_label" in locator or locator.startswith("label="):
+        return "label"
+    if "testid" in locator or "data-testid" in locator:
+        return "testid"
+    if "get_by_text" in locator or locator.startswith("text="):
+        return "text_anchor"
+    return "css"
+
+
 def previous_snapshot_to_dict(previous_snapshot: AssetSnapshot | None) -> dict[str, str] | None:
     if previous_snapshot is None:
         return None
@@ -709,6 +872,28 @@ def _max_drift_state(states: list[AssetStatus]) -> AssetStatus:
     if AssetStatus.SUSPECT in states:
         return AssetStatus.SUSPECT
     return AssetStatus.SAFE
+
+
+def _normalize_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    return 0
+
+
+def _normalize_float(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    return 0.0
 
 
 def _normalize_route_path(route_path: object) -> str:

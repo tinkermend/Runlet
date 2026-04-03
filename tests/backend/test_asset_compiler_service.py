@@ -26,18 +26,45 @@ def test_build_standard_checks_for_table_page_returns_page_open_and_table_render
     assert {"page_open", "table_render"} <= {check.check_code for check in checks}
 
 
+def test_build_standard_checks_adds_representative_state_checks():
+    from app.domains.asset_compiler.check_templates import build_standard_checks
+
+    checks = build_standard_checks(
+        page_summary="用户管理",
+        has_table=True,
+        representative_states=[
+            {"state_signature": "users:tab=disabled", "entry_type": "tab_switch"},
+            {"state_signature": "users:modal=create", "entry_type": "open_modal"},
+        ],
+    )
+
+    assert {"tab_switch_render", "open_create_modal"} <= {check.check_code for check in checks}
+
+
 def test_build_module_plan_for_table_render_contains_expected_steps():
     from app.domains.asset_compiler.module_plan_builder import build_module_plan
 
+    locator_bundle = {
+        "candidates": [
+            {"strategy_type": "semantic", "selector": "role=table[name='用户列表']"},
+            {"strategy_type": "css", "selector": ".users-table"},
+        ]
+    }
     page_context = {
         "system_code": "erp",
         "page_title": "用户管理",
         "route_path": "/users",
         "menu_chain": ["系统管理", "用户管理"],
         "has_table": True,
+        "default_state_signature": "users:default",
     }
 
-    plan = build_module_plan(check_code="table_render", page_context=page_context)
+    plan = build_module_plan(
+        check_code="table_render",
+        page_context=page_context,
+        state_signature="users:tab=disabled",
+        locator_bundle=locator_bundle,
+    )
 
     assert plan.plan_version == "v1"
     assert plan.steps_json[0]["module"] == "auth.inject_state"
@@ -45,8 +72,10 @@ def test_build_module_plan_for_table_render_contains_expected_steps():
         "auth.inject_state",
         "nav.menu_chain",
         "page.wait_ready",
-        "assert.table_visible",
+        "state.enter",
+        "locator.assert",
     ]
+    assert plan.steps_json[-1]["params"]["locator_bundle"] == locator_bundle
 
 
 @pytest.fixture
@@ -317,6 +346,88 @@ def seeded_previous_snapshot(db_session, seeded_system):
     return current_snapshot
 
 
+@pytest.fixture
+def seeded_stateful_crawl_snapshot(db_session, seeded_system):
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="系统管理",
+            depth=0,
+            sort_order=1,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=1,
+            sort_order=1,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="启用用户列表",
+            playwright_locator="get_by_role('table', name='启用用户列表')",
+            state_signature="users:default",
+            state_context={"active_tab": "enabled"},
+            locator_candidates=[
+                {"strategy_type": "semantic", "selector": "role=table[name='启用用户列表']"},
+                {"strategy_type": "css", "selector": ".users-table"},
+            ],
+            usage_description="展示用户列表",
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="禁用用户列表",
+            playwright_locator="get_by_role('table', name='禁用用户列表')",
+            state_signature="users:tab=disabled",
+            state_context={"active_tab": "disabled", "entry_type": "tab_switch"},
+            locator_candidates=[
+                {"strategy_type": "semantic", "selector": "role=table[name='禁用用户列表']"},
+                {"strategy_type": "label", "selector": "label=禁用用户"},
+            ],
+            usage_description="展示禁用用户列表",
+        )
+    )
+    db_session.commit()
+    db_session.refresh(snapshot)
+    return snapshot
+
+
 @pytest.mark.anyio
 async def test_compile_snapshot_creates_page_assets_and_checks(
     asset_compiler_service,
@@ -337,6 +448,35 @@ async def test_compile_snapshot_marks_asset_suspect_when_drift_is_medium(
     result = await asset_compiler_service.compile_snapshot(snapshot_id=seeded_previous_snapshot.id)
 
     assert result.drift_state in {AssetStatus.SAFE, AssetStatus.SUSPECT, AssetStatus.STALE}
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_builds_state_signature_module_plan_with_locator_bundle(
+    db_session,
+    asset_compiler_service,
+    seeded_stateful_crawl_snapshot,
+):
+    await asset_compiler_service.compile_snapshot(snapshot_id=seeded_stateful_crawl_snapshot.id)
+
+    stateful_plan = db_session.exec(
+        select(ModulePlan)
+        .where(ModulePlan.check_code == "tab_switch_render")
+        .order_by(ModulePlan.id.desc())
+    ).first()
+
+    assert stateful_plan is not None
+    assert [step["module"] for step in stateful_plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "state.enter",
+        "locator.assert",
+    ]
+    assert (
+        stateful_plan.steps_json[-1]["params"]["locator_bundle"]["candidates"][0]["strategy_type"]
+        == "semantic"
+    )
+    assert stateful_plan.steps_json[3]["params"]["state_signature"] == "users:tab=disabled"
 
 
 def test_compile_snapshot_result_exposes_reconciliation_counts():

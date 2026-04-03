@@ -80,3 +80,52 @@ def test_diff_score_increases_when_key_locators_change():
     assert diff.score > 0
     assert diff.changed_components == {"key_locator_hash", "structure_hash"}
     assert diff.status in {AssetStatus.SAFE, AssetStatus.SUSPECT, AssetStatus.STALE}
+
+
+def test_build_page_fingerprint_uses_locator_bundle_summary_instead_of_single_locator():
+    from app.domains.asset_compiler.fingerprints import build_page_fingerprint
+
+    baseline_payload = {
+        "page": {
+            "route_path": "/users",
+            "page_title": "用户管理",
+            "page_summary": "用户管理列表",
+        },
+        "menus": [],
+        "elements": [
+            {
+                "element_type": "button",
+                "element_role": "button",
+                "element_text": "新增用户",
+                "playwright_locator": "locator-a",
+                "state_signature": "users:default",
+                "locator_bundle": {
+                    "candidates": [
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='新增用户']",
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    locator_only_changed_payload = {
+        "page": baseline_payload["page"],
+        "menus": [],
+        "elements": [
+            {
+                "element_type": "button",
+                "element_role": "button",
+                "element_text": "新增用户",
+                "playwright_locator": "locator-b",
+                "state_signature": "users:default",
+                "locator_bundle": baseline_payload["elements"][0]["locator_bundle"],
+            }
+        ],
+    }
+
+    baseline = build_page_fingerprint(baseline_payload)
+    locator_only_changed = build_page_fingerprint(locator_only_changed_payload)
+
+    assert baseline["key_locator_hash"] == locator_only_changed["key_locator_hash"]

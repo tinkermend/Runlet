@@ -7,11 +7,18 @@ from app.shared.enums import AssetStatus
 
 
 @dataclass(frozen=True)
+class LocatorBundle:
+    candidates: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
 class StandardCheckDefinition:
     check_code: str
     goal: str
     input_schema: dict[str, object] | None = None
     assertion_schema: dict[str, object] | None = None
+    state_signature: str | None = None
+    locator_bundle: LocatorBundle | None = None
 
 
 @dataclass(frozen=True)

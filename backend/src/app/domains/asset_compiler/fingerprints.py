@@ -45,7 +45,8 @@ def build_page_fingerprint(page_payload: dict[str, object]) -> dict[str, str]:
             {
                 "element_type": element["element_type"],
                 "element_role": element["element_role"],
-                "playwright_locator": element["playwright_locator"],
+                "state_signature": element["state_signature"],
+                "locator_bundle_summary": element["locator_bundle_summary"],
                 "attributes": element["attributes"],
             }
             for element in normalized_elements
@@ -159,8 +160,10 @@ def _normalize_elements(elements: object) -> list[dict[str, object]]:
                 "element_role": _clean_text(item.get("element_role")),
                 "element_text": _clean_text(item.get("element_text")),
                 "playwright_locator": _clean_text(item.get("playwright_locator")),
+                "state_signature": _clean_text(item.get("state_signature")),
                 "usage_description": _clean_text(item.get("usage_description")),
                 "attributes": _normalize_attributes(item.get("attributes")),
+                "locator_bundle_summary": _normalize_locator_bundle_summary(item.get("locator_bundle")),
             }
         )
 
@@ -170,9 +173,38 @@ def _normalize_elements(elements: object) -> list[dict[str, object]]:
             item["element_type"],
             item["element_role"],
             item["element_text"],
-            item["playwright_locator"],
+            item["state_signature"],
+            _stable_hash(item["locator_bundle_summary"]),
         ),
     )
+
+
+def _normalize_locator_bundle_summary(value: object) -> dict[str, object]:
+    bundle = value if isinstance(value, dict) else {}
+    candidates = bundle.get("candidates")
+    if not isinstance(candidates, list):
+        return {"candidate_count": 0, "strategies": [], "selectors": []}
+
+    normalized_candidates = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        strategy_type = _clean_text(item.get("strategy_type"))
+        selector = _clean_text(item.get("selector"))
+        if not strategy_type and not selector:
+            continue
+        normalized_candidates.append(
+            {
+                "strategy_type": strategy_type,
+                "selector": selector,
+            }
+        )
+
+    return {
+        "candidate_count": len(normalized_candidates),
+        "strategies": [item["strategy_type"] for item in normalized_candidates],
+        "selectors": [item["selector"] for item in normalized_candidates],
+    }
 
 
 def _normalize_attributes(value: object) -> dict[str, object]:
