@@ -1353,3 +1353,68 @@ async def test_run_crawl_merges_same_element_from_dom_and_probe_with_enriched_me
     ]
     assert elements[0].attributes == {"data_testid": "create-user", "aria_label": "新增用户"}
     assert elements[0].state_context == {"active_tab": "default", "modal_title": "create"}
+
+
+@pytest.mark.anyio
+async def test_task6_crawl_baseline_state_signature_elements_keep_locator_candidates(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[PageCandidate(route_path="/users", page_title="用户管理")],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")],
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="table",
+                    state_signature="users:default",
+                    state_context={"entry_type": "default"},
+                    element_role="table",
+                    element_text="用户列表",
+                    playwright_locator="role=table[name='用户列表']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=table[name='用户列表']"},
+                    ],
+                ),
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="dialog",
+                    state_signature="users:modal=create",
+                    state_context={"entry_type": "open_modal"},
+                    element_role="dialog",
+                    element_text="新增用户",
+                    playwright_locator="role=dialog[name='新增用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=dialog[name='新增用户']"},
+                    ],
+                ),
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 2
+
+    elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
+    assert all(element.locator_candidates for element in elements)
+    assert elements[0].locator_candidates[0]["strategy_type"] == "semantic"

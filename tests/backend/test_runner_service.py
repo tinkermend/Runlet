@@ -781,6 +781,78 @@ async def test_run_page_check_records_context_mismatch_telemetry(
 
 
 @pytest.mark.anyio
+async def test_task6_runner_baseline_records_primary_and_fallback_locator_telemetry(
+    db_session,
+    seeded_locator_bundle_check,
+):
+    from app.domains.runner_service.service import RunnerService
+
+    service = RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(
+            locator_outcomes=[
+                {
+                    "matched": True,
+                    "matched_rank": 1,
+                    "strategy_type": "semantic",
+                    "failure_category": None,
+                    "context_mismatch": False,
+                    "ambiguous_match": False,
+                },
+                {
+                    "matched": True,
+                    "matched_rank": 2,
+                    "strategy_type": "css",
+                    "failure_category": None,
+                    "context_mismatch": False,
+                    "ambiguous_match": False,
+                },
+            ]
+        ),
+    )
+
+    first_result = await service.run_page_check(page_check_id=seeded_locator_bundle_check.id)
+    second_result = await service.run_page_check(page_check_id=seeded_locator_bundle_check.id)
+
+    first_artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == first_result.execution_run_id)
+    ).all()
+    second_artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == second_result.execution_run_id)
+    ).all()
+    first_module = next(artifact for artifact in first_artifacts if artifact.artifact_kind == "module_execution")
+    second_module = next(artifact for artifact in second_artifacts if artifact.artifact_kind == "module_execution")
+
+    first_locator_telemetry = first_module.payload["locator_telemetry"]
+    second_locator_telemetry = second_module.payload["locator_telemetry"]
+
+    assert first_locator_telemetry["locator_primary_hit"] is True
+    assert first_locator_telemetry["locator_fallback_used"] is False
+    assert first_locator_telemetry["matched_rank"] == 1
+    assert second_locator_telemetry["locator_primary_hit"] is False
+    assert second_locator_telemetry["locator_fallback_used"] is True
+    assert second_locator_telemetry["matched_rank"] == 2
+    assert first_locator_telemetry["context_mismatch"] is False
+    assert second_locator_telemetry["context_mismatch"] is False
+    assert first_locator_telemetry["ambiguous_match"] is False
+    assert second_locator_telemetry["ambiguous_match"] is False
+
+
+def test_task6_primary_locator_hit_rate_baseline_threshold_constants():
+    thresholds = {
+        "main_nav_coverage": 0.95,
+        "representative_state_coverage": 0.80,
+        "key_element_precision": 0.90,
+        "primary_locator_hit_rate": 0.85,
+    }
+
+    assert thresholds["main_nav_coverage"] == 0.95
+    assert thresholds["representative_state_coverage"] == 0.80
+    assert thresholds["key_element_precision"] == 0.90
+    assert thresholds["primary_locator_hit_rate"] == 0.85
+
+
+@pytest.mark.anyio
 async def test_run_page_check_records_state_not_reached_detail_when_enter_state_fails(
     db_session,
     seeded_locator_bundle_check,

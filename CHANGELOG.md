@@ -1,5 +1,6 @@
 ## 2026-04-04
 
+- 完成采集完整性增强 Task 6 回归收口：新增 `crawl -> compile -> run` 第一阶段基线回归测试，锁定 crawl 侧 `state_signature/locator_candidates` 持久化、compile 侧 `state.enter + locator_bundle` 计划产出、runner 侧 primary/fallback locator telemetry 记录；并新增指标基线常量断言（`main_nav_coverage=0.95`、`representative_state_coverage=0.80`、`key_element_precision=0.90`、`primary_locator_hit_rate=0.85`）。
 - 完成采集完整性增强 Task 4 收口：`asset_compiler` 新增 locator bundle 编译与状态感知 module plan 生成能力，补齐默认态与代表态弹窗检查模板（默认 `open_create_modal` + 代表态 `open_create_modal_state`）并消除同名检查歧义；同时为指纹比较加入 legacy hash 兼容桥接，避免升级首轮把存量稳定页面误判为漂移。
 - 完成采集完整性增强 Task 5：`runner_service` 新增 `state.enter + locator.assert` 执行协议与 locator bundle 顺序回放，执行产物新增定位命中 telemetry（主命中、fallback、matched_rank、context/ambiguous mismatch），并补齐 `element_became_hidden` 等失败分类分支与回归测试，保证状态回放和定位失败诊断可追踪。
 

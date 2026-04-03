@@ -610,6 +610,47 @@ async def test_compile_snapshot_builds_state_signature_module_plan_with_locator_
 
 
 @pytest.mark.anyio
+async def test_task6_compile_baseline_locator_bundle_plan_keeps_state_enter_step(
+    db_session,
+    asset_compiler_service,
+    seeded_stateful_crawl_snapshot,
+):
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=seeded_stateful_crawl_snapshot.id)
+
+    assert result.status == "success"
+    assert result.assets_created >= 1
+    assert result.checks_created >= 1
+
+    stateful_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "tab_switch_render")
+        .order_by(PageCheck.id.desc())
+    ).first()
+    assert stateful_check is not None
+    assert (stateful_check.input_schema or {}).get("state_signature") == "users:tab=disabled"
+
+    stateful_plan = db_session.exec(
+        select(ModulePlan)
+        .where(ModulePlan.id == stateful_check.module_plan_id)
+        .order_by(ModulePlan.id.desc())
+    ).one()
+    assert [step["module"] for step in stateful_plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "state.enter",
+        "locator.assert",
+    ]
+
+    locator_step = stateful_plan.steps_json[-1]
+    locator_candidates = locator_step["params"]["locator_bundle"]["candidates"]
+    assert locator_step["module"] == "locator.assert"
+    assert locator_candidates
+    assert locator_candidates[0]["strategy_type"] == "semantic"
+    assert locator_candidates[0]["selector"] == "role=table[name='禁用用户列表']"
+
+
+@pytest.mark.anyio
 async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_modal_locator(
     db_session,
     asset_compiler_service,
