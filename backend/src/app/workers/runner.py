@@ -106,6 +106,7 @@ def build_worker_handlers(
     auth_service=None,
     crawler_service=None,
     asset_compiler_service=None,
+    control_plane_service=None,
     runner_service=None,
 ) -> dict[str, JobHandler]:
     from app.domains.control_plane.job_types import (
@@ -134,6 +135,7 @@ def build_worker_handlers(
         handlers[ASSET_COMPILE_JOB_TYPE] = AssetCompileJobHandler(
             session=session,
             asset_compiler_service=asset_compiler_service,
+            control_plane_service=control_plane_service,
         )
     if runner_service is not None:
         handlers[RUN_CHECK_JOB_TYPE] = RunCheckJobHandler(
@@ -149,6 +151,17 @@ def build_worker_runner(
 ) -> WorkerRunner:
     resolved_session_factory = session_factory or create_session_factory()
     session = resolved_session_factory()
+    from app.domains.control_plane.repository import SqlControlPlaneRepository
+    from app.domains.control_plane.service import ControlPlaneService
+    from app.domains.runner_service.scheduler import PublishedJobService
+    from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
+
+    dispatcher = SqlQueueDispatcher(session)
+    control_plane_service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(session),
+        dispatcher=dispatcher,
+        published_job_service=PublishedJobService(session=session, dispatcher=dispatcher),
+    )
     auth_service = AuthService(
         session=session,
         browser_login=PlaywrightBrowserLoginAdapter(),
@@ -169,6 +182,7 @@ def build_worker_runner(
             auth_service=auth_service,
             crawler_service=crawler_service,
             asset_compiler_service=asset_compiler_service,
+            control_plane_service=control_plane_service,
             runner_service=runner_service,
         ),
     )

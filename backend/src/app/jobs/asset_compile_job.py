@@ -16,9 +16,16 @@ def utcnow() -> datetime:
 
 
 class AssetCompileJobHandler:
-    def __init__(self, *, session: Session | AsyncSession, asset_compiler_service) -> None:
+    def __init__(
+        self,
+        *,
+        session: Session | AsyncSession,
+        asset_compiler_service,
+        control_plane_service=None,
+    ) -> None:
         self.session = session
         self.asset_compiler_service = asset_compiler_service
+        self.control_plane_service = control_plane_service
 
     async def run(self, *, job_id: UUID) -> None:
         job = await self._get(QueuedJob, job_id)
@@ -36,6 +43,15 @@ class AssetCompileJobHandler:
 
         try:
             result = await self.asset_compiler_service.compile_snapshot(snapshot_id=UUID(snapshot_id))
+            cascade_result = None
+            if self.control_plane_service is not None:
+                cascade_result = await self.control_plane_service.apply_reconciliation_cascades(
+                    snapshot_id=result.snapshot_id,
+                    alias_ids_to_disable=result.alias_ids_to_disable,
+                    retired_page_check_ids=_extract_retired_page_check_ids(result),
+                    alias_disable_decision_count=result.alias_disable_decision_count,
+                    published_job_pause_decision_count=result.published_job_pause_decision_count,
+                )
         except Exception as exc:
             await self._mark_failed(job, message=str(exc))
             return
@@ -44,6 +60,9 @@ class AssetCompileJobHandler:
         job.finished_at = utcnow()
         job.failure_message = None
         job.result_payload = _serialize_compile_result(result)
+        if cascade_result is not None:
+            job.result_payload["aliases_disabled"] = cascade_result.aliases_disabled
+            job.result_payload["published_jobs_paused"] = cascade_result.published_jobs_paused
         await self._commit()
 
     async def _mark_failed(self, job: QueuedJob, *, message: str | None) -> None:
@@ -100,3 +119,22 @@ def _json_safe(value):
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
     return value
+
+
+def _extract_retired_page_check_ids(result) -> list[UUID]:
+    retired_page_check_ids: list[UUID] = []
+    seen: set[UUID] = set()
+    for reason in result.retire_reasons:
+        if not isinstance(reason, dict):
+            continue
+        check_ids = reason.get("page_check_ids")
+        if not isinstance(check_ids, list):
+            continue
+        for check_id in check_ids:
+            if not isinstance(check_id, UUID):
+                continue
+            if check_id in seen:
+                continue
+            seen.add(check_id)
+            retired_page_check_ids.append(check_id)
+    return retired_page_check_ids
