@@ -138,6 +138,38 @@ curl -X POST "http://127.0.0.1:8000/api/v1/snapshots/<snapshot-id>/compile-asset
 
 当前 `RunCheckJobHandler` 也会在调度场景下把 `published_job_id`、`job_run_id`、`script_render_id`、`asset_version`、`runtime_policy`、`schedule_expr` 等上下文写入 `result_payload`，便于后续审计。
 
+### 双轨受理语义
+
+`check_request` 当前只有两条正式后端轨道：
+
+- `precompiled`：命中 `page_check` 后直接按现有 `module_plan` 执行
+- `realtime_probe`：仅在页面或菜单未命中时触发页面级受控探测
+
+边界约束如下：
+
+- 页面或菜单未命中：允许走 `realtime_probe`
+- 页面已命中但元素资产缺失：直接返回 `409 element asset is missing`
+- `realtime_probe` 仍由服务端注入认证并回写正式执行记录，不允许变成自由脚本执行旁路
+
+### 查询统一结果
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/check-requests/<request-id>/result"
+```
+
+返回结构会统一汇总：
+
+- `request_id/plan_id/page_check_id/execution_track`
+- `execution_summary`：最新一次执行的 `status/auth_status/duration_ms/failure_category/final_url/page_title/asset_version`
+- `artifacts`：当前执行对应的 `module_execution`、`screenshot` 等工件
+- `needs_recrawl/needs_recompile`：供上层决定是否补采集或补编译
+
+其中：
+
+- `execution_track` 对外只暴露 `precompiled` 或 `realtime_probe`
+- `artifacts[].artifact_uri` 可用于获取截图等外部产物路径
+- `realtime_probe` 成功后，如已恢复到现有页面资产，会在结果中给出后续补编译提示
+
 ## 渲染 Playwright 脚本
 
 渲染接口：
@@ -187,6 +219,26 @@ curl -X POST "http://127.0.0.1:8000/api/v1/published-jobs" \
 - `schedule_expr`
 
 平台的主调度对象仍然是 `published_job/page_check/asset_version/runtime_policy` 组合，而不是单独调度脚本文本。
+
+### 从成功检查直接发布
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/check-requests/<request-id>:publish" \
+  -H "content-type: application/json" \
+  -d '{
+    "schedule_expr":"0 */2 * * *",
+    "trigger_source":"platform",
+    "enabled":true
+  }'
+```
+
+该入口只允许晋升“最新一次执行成功”的检查请求，并遵守以下规则：
+
+- 只接受存在 `page_check` 的成功执行上下文
+- 优先复用已经绑定到该 `execution_plan` 的 `published` 模式 `script_render`
+- 如果还没有发布脚本，则按当前 `page_check` 现状即时渲染一份 `published` 脚本再创建 `published_job`
+
+也就是说，发布动作仍然建立在 `page_check + asset_version + runtime_policy` 上，脚本文本只是派生产物，不是调度真相。
 
 ### 手动触发发布任务
 
@@ -289,9 +341,11 @@ runner/render/scheduling 相关测试集：
 ```bash
 cd backend
 uv run pytest \
+  ../tests/backend/test_check_results_api.py \
   ../tests/backend/test_runner_service.py \
   ../tests/backend/test_run_check_job.py \
   ../tests/backend/test_script_renderer.py \
+  ../tests/backend/test_publish_from_execution_api.py \
   ../tests/backend/test_published_jobs_api.py \
   ../tests/backend/test_scheduler_service.py -v
 ```

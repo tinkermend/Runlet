@@ -2,6 +2,7 @@
 
 - 新增后端检查执行与受控实时探测实施计划，按 TDD 拆分双轨受理、完整 runtime、统一结果查询、probe 反馈回写与从成功检查晋升为调度对象的后端落地步骤。
 - 新增后端检查执行与受控实时探测设计文档，明确企业级 To B 巡检平台继续采用“资产优先 + 页面级受控降级 + 元素级缺失直接失败”的后端演进原则，并收口 `skill/control_plane/runner_service/script_renderer` 的职责边界。
+- 补齐 `check_request` 统一结果与发布闭环：新增 `GET /api/v1/check-requests/{request_id}/result` 与 `POST /api/v1/check-requests/{request_id}:publish`，可返回最新执行摘要、截图/模块产物、`needs_recrawl/needs_recompile` 提示，并把成功执行晋升为绑定 `page_check + asset_version + runtime_policy` 的 `published_job`。
 - 补齐 `realtime_probe` 成功反馈：持久化 route_hint 别名映射，运行产物回写 `needs_recrawl/needs_recompile` 提示，并在结果视图中解析输出。
 - 修正真实站点滑块登录链路：`auth_service.browser_login` 为 `slider_captcha` 新增 `drag` 模式，并在 `slider_piece == slider_handle` 时自动识别为拖条验证码，支持 Vben Admin 这类“拖到最右侧解锁”站点，不再误走 `ddddocr` 拼图偏移求解。
 - 修补浏览器登录假成功问题：提交表单后的认证刷新现在会在抓取 `storage_state` 前校验登录表单是否仍可见，若页面仍停留在登录态则返回 `login_not_completed`，避免把主题/埋点类本地状态误存为有效认证。
