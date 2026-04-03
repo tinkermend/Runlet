@@ -80,6 +80,56 @@ class MetadataFailureDiscoverySession(FakeDiscoverySession):
         raise RuntimeError("metadata collector unavailable")
 
 
+class PartialNetworkFailureDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.route_hints = [{"path": "/dashboard", "title": "仪表盘"}]
+        self.dom_menu_nodes = [{"label": "用户管理", "route_path": "/users", "role": "menuitem"}]
+        self.network_route_config_calls = 0
+        self.network_resource_hints_calls = 0
+        self.network_requests_calls = 0
+
+    async def collect_network_route_configs(self, *, crawl_scope: str) -> list[dict[str, object]]:
+        del crawl_scope
+        self.network_route_config_calls += 1
+        raise RuntimeError("network route config unavailable")
+
+    async def collect_network_resource_hints(self, *, crawl_scope: str) -> list[dict[str, object]]:
+        del crawl_scope
+        self.network_resource_hints_calls += 1
+        return [{"route_path": "/reports"}]
+
+    async def collect_network_requests(self, *, crawl_scope: str) -> list[dict[str, object]]:
+        del crawl_scope
+        self.network_requests_calls += 1
+        return [{"path": "/alerts"}]
+
+
+class MetadataEnrichmentDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.route_hints = [{"path": "/users", "title": "用户管理"}]
+        self.dom_menu_nodes = []
+        self.network_route_configs = []
+
+    async def collect_page_metadata(self, *, crawl_scope: str) -> list[dict[str, object]]:
+        del crawl_scope
+        return [
+            {
+                "route_path": "/users",
+                "page_title": "用户管理-元数据",
+                "reachable": True,
+                "status_code": 200,
+            },
+            {
+                "route_path": "/metadata-only",
+                "page_title": "仅元数据页面",
+                "reachable": True,
+                "status_code": 200,
+            },
+        ]
+
+
 @pytest.mark.anyio
 async def test_page_discovery_merges_route_nav_and_network_signals():
     extractor = PageDiscoveryExtractor()
@@ -126,7 +176,7 @@ async def test_page_discovery_keeps_failure_reason_empty_when_optional_network_s
     assert {page.route_path for page in result.pages} >= {"/dashboard", "/users", "/reports"}
     assert result.degraded is False
     assert result.failure_reason is None
-    assert any("network signals degraded" in message for message in result.warning_messages)
+    assert any("network route config signals degraded" in message for message in result.warning_messages)
 
 
 @pytest.mark.anyio
@@ -155,3 +205,33 @@ async def test_page_discovery_metadata_failure_only_adds_warning_when_pages_are_
     assert result.degraded is False
     assert result.failure_reason is None
     assert any("page metadata validation degraded" in message for message in result.warning_messages)
+
+
+@pytest.mark.anyio
+async def test_page_discovery_network_subsignals_degrade_independently():
+    browser_session = PartialNetworkFailureDiscoverySession()
+    result = await PageDiscoveryExtractor().extract(
+        browser_session=browser_session,
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert {page.route_path for page in result.pages} >= {"/dashboard", "/users", "/reports", "/alerts"}
+    assert browser_session.network_route_config_calls == 1
+    assert browser_session.network_resource_hints_calls == 1
+    assert browser_session.network_requests_calls == 1
+    assert result.failure_reason is None
+    assert any("network route config signals degraded" in message for message in result.warning_messages)
+
+
+@pytest.mark.anyio
+async def test_page_discovery_metadata_enriches_existing_pages_without_creating_new_pages():
+    result = await PageDiscoveryExtractor().extract(
+        browser_session=MetadataEnrichmentDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert {page.route_path for page in result.pages} == {"/users"}
+    users_page = result.pages[0]
+    assert users_page.context_constraints == {"reachable": True, "status_code": 200}

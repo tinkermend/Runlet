@@ -86,6 +86,8 @@ class FakeCrawlerPage:
                 return []
             if "__RUNLET_NETWORK_REQUESTS__" in script:
                 return []
+            if "__RUNLET_PAGE_METADATA__" in script:
+                return []
         if "__RUNLET_ROUTE_HINTS__" in script:
             assert "__NEXT_DATA__" in script
             assert "__NUXT__" in script
@@ -114,6 +116,11 @@ class FakeCrawlerPage:
             return [{"route_path": "/users", "source": "network_resource"}]
         if "__RUNLET_NETWORK_REQUESTS__" in script:
             return [{"path": "/dashboard", "source": "network_request"}]
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return [
+                {"route_path": "/dashboard", "page_title": "仪表盘", "reachable": True, "status_code": 200},
+                {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200},
+            ]
         raise AssertionError(f"unexpected script: {script[:80]}")
 
     async def wait_for_timeout(self, timeout: int) -> None:
@@ -745,6 +752,7 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     network_route_configs = await session.collect_network_route_configs(crawl_scope="full")
     network_resource_hints = await session.collect_network_resource_hints(crawl_scope="full")
     network_requests = await session.collect_network_requests(crawl_scope="full")
+    page_metadata = await session.collect_page_metadata(crawl_scope="full")
     await session.close()
 
     assert route_hints[0]["path"] == "/dashboard"
@@ -753,6 +761,8 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert network_route_configs[0]["route_path"] == "/reports"
     assert network_resource_hints[0]["route_path"] == "/users"
     assert network_requests[0]["path"] == "/dashboard"
+    assert page_metadata[0]["route_path"] == "/dashboard"
+    assert page_metadata[0]["status_code"] == 200
     assert page.goto_calls == [
         ("https://erp.example.com", "domcontentloaded"),
         ("https://erp.example.com/dashboard", "domcontentloaded"),

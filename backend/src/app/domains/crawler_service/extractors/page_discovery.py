@@ -66,12 +66,9 @@ class PageDiscoveryExtractor:
             label="navigation signals",
             warnings=warnings,
         )
-        network_signals = await self._collect_with_degrade(
-            collector=lambda: self._collect_network_signals(
-                browser_session=browser_session,
-                crawl_scope=crawl_scope,
-            ),
-            label="network signals",
+        network_signals = await self._collect_network_signals(
+            browser_session=browser_session,
+            crawl_scope=crawl_scope,
             warnings=warnings,
         )
         metadata_signals = await self._collect_with_degrade(
@@ -251,27 +248,40 @@ class PageDiscoveryExtractor:
         *,
         browser_session,
         crawl_scope: str,
+        warnings: list[str],
     ) -> list[dict[str, Any]]:
-        route_configs = await self._collect_session_facts(
-            browser_session=browser_session,
-            crawl_scope=crawl_scope,
-            method_name="collect_network_route_configs",
-            attr_name="network_route_configs",
-            source="network_route_config",
+        route_configs = await self._collect_with_degrade(
+            collector=lambda: self._collect_session_facts(
+                browser_session=browser_session,
+                crawl_scope=crawl_scope,
+                method_name="collect_network_route_configs",
+                attr_name="network_route_configs",
+                source="network_route_config",
+            ),
+            label="network route config signals",
+            warnings=warnings,
         )
-        resource_hints = await self._collect_session_facts(
-            browser_session=browser_session,
-            crawl_scope=crawl_scope,
-            method_name="collect_network_resource_hints",
-            attr_name="network_resource_hints",
-            source="network_resource",
+        resource_hints = await self._collect_with_degrade(
+            collector=lambda: self._collect_session_facts(
+                browser_session=browser_session,
+                crawl_scope=crawl_scope,
+                method_name="collect_network_resource_hints",
+                attr_name="network_resource_hints",
+                source="network_resource",
+            ),
+            label="network resource signals",
+            warnings=warnings,
         )
-        request_hints = await self._collect_session_facts(
-            browser_session=browser_session,
-            crawl_scope=crawl_scope,
-            method_name="collect_network_requests",
-            attr_name="network_requests",
-            source="network_request",
+        request_hints = await self._collect_with_degrade(
+            collector=lambda: self._collect_session_facts(
+                browser_session=browser_session,
+                crawl_scope=crawl_scope,
+                method_name="collect_network_requests",
+                attr_name="network_requests",
+                source="network_request",
+            ),
+            label="network request signals",
+            warnings=warnings,
         )
         return self._ensure_dict_list([*route_configs, *resource_hints, *request_hints])
 
