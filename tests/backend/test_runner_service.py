@@ -52,12 +52,14 @@ class FakeRuntime:
         fail_action: str | None = None,
         raise_on_inject: bool = False,
         locator_outcomes: list[dict[str, object]] | None = None,
+        enter_state_error: str | None = None,
     ) -> None:
         self.calls: list[dict[str, object]] = []
         self.inject_outcome = inject_outcome
         self.fail_action = fail_action
         self.raise_on_inject = raise_on_inject
         self.locator_outcomes = list(locator_outcomes or [])
+        self.enter_state_error = enter_state_error
         self.final_url = "https://erp.example.com/users"
         self.page_title = "用户管理"
         self.screenshot_bytes = b"fake-screenshot-png"
@@ -110,6 +112,8 @@ class FakeRuntime:
 
     async def enter_state(self, *, state_signature: str) -> bool:
         self.calls.append({"action": "enter_state", "state_signature": state_signature})
+        if self.enter_state_error is not None:
+            raise RuntimeError(self.enter_state_error)
         if self.fail_action == "enter_state":
             return False
         return True
@@ -175,12 +179,16 @@ class FakeVisibleLocator:
         count: int = 1,
         visible: bool = True,
         count_fn: Callable[[], int] | None = None,
+        visible_fn: Callable[[], bool] | None = None,
         on_click: Callable[[], None] | None = None,
+        fail_when_hidden: bool = False,
     ) -> None:
         self._count = count
         self._visible = visible
         self._count_fn = count_fn
+        self._visible_fn = visible_fn
         self._on_click = on_click
+        self._fail_when_hidden = fail_when_hidden
         self.wait_for_calls: list[dict[str, object]] = []
         self.click_calls = 0
 
@@ -195,8 +203,12 @@ class FakeVisibleLocator:
 
     async def wait_for(self, *, state: str, timeout: int | None = None) -> None:
         self.wait_for_calls.append({"state": state, "timeout": timeout})
+        if state == "visible" and self._fail_when_hidden and not await self.is_visible():
+            raise RuntimeError("locator is not visible")
 
     async def is_visible(self) -> bool:
+        if self._visible_fn is not None:
+            return self._visible_fn()
         return self._visible
 
     async def click(self) -> None:
@@ -322,6 +334,69 @@ class FakeOpenCreateModalPage:
         if role == "dialog":
             return self.dialog
         return FakeVisibleLocator(count=0)
+
+
+class FakeBundlePlaybackPage:
+    def __init__(
+        self,
+        *,
+        selector_locators: dict[str, FakeVisibleLocator],
+        dialog_count: int = 0,
+        named_dialog_counts: dict[str, int] | None = None,
+    ) -> None:
+        self.locator_calls: list[str] = []
+        self.selector_locators = selector_locators
+        self.dialog_count = dialog_count
+        self.named_dialog_counts = named_dialog_counts or {}
+
+    def locator(self, selector: str) -> FakeVisibleLocator:
+        self.locator_calls.append(selector)
+        return self.selector_locators.get(selector, FakeVisibleLocator(count=0))
+
+    def get_by_role(self, role: str, *, name=None, exact: bool = False) -> FakeVisibleLocator:
+        del exact
+        if role != "dialog":
+            return FakeVisibleLocator(count=0)
+        if isinstance(name, str):
+            return FakeVisibleLocator(count=self.named_dialog_counts.get(name, 0))
+        return FakeVisibleLocator(count=self.dialog_count, visible=self.dialog_count > 0)
+
+
+class FakeStateEnterPage:
+    def __init__(
+        self,
+        *,
+        initial_modal_title: str,
+        modal_title_after_click: str,
+        click_opens_modal: bool = True,
+    ) -> None:
+        self.modal_title = initial_modal_title
+        self.dialog_count = 1 if initial_modal_title else 0
+        self.click_opens_modal = click_opens_modal
+        self.modal_title_after_click = modal_title_after_click
+        self.button_trigger = FakeVisibleLocator(count=1, on_click=self._open_target_modal)
+        self.link_trigger = FakeVisibleLocator(count=0)
+        self.dialog_locator = FakeVisibleLocator(
+            count_fn=lambda: self.dialog_count,
+            visible_fn=lambda: bool(self.modal_title),
+        )
+
+    def _open_target_modal(self) -> None:
+        if self.click_opens_modal:
+            self.modal_title = self.modal_title_after_click
+            self.dialog_count = max(self.dialog_count, 1) + 1
+
+    def get_by_role(self, role: str, *, name=None, exact: bool = False) -> FakeVisibleLocator:
+        if role == "button":
+            return self.button_trigger
+        if role == "link":
+            return self.link_trigger
+        if role != "dialog":
+            return FakeVisibleLocator(count=0)
+        if isinstance(name, str):
+            matched = self.modal_title == name if exact else (name in self.modal_title)
+            return FakeVisibleLocator(count=1 if matched else 0, visible=matched)
+        return self.dialog_locator
 
 
 @pytest.fixture
@@ -706,6 +781,32 @@ async def test_run_page_check_records_context_mismatch_telemetry(
 
 
 @pytest.mark.anyio
+async def test_run_page_check_records_state_not_reached_detail_when_enter_state_fails(
+    db_session,
+    seeded_locator_bundle_check,
+):
+    from app.domains.runner_service.service import RunnerService
+
+    service = RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(enter_state_error="state_not_reached: target modal=create not reached"),
+    )
+
+    result = await service.run_page_check(page_check_id=seeded_locator_bundle_check.id)
+
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
+    failed_step = module_artifact.payload["step_results"][-1]
+
+    assert result.status == "failed"
+    assert failed_step["module"] == "state.enter"
+    assert failed_step["output"]["failure_category"] == "state_not_reached"
+    assert "modal=create" in failed_step["detail"]
+
+
+@pytest.mark.anyio
 async def test_run_page_check_configures_and_closes_runtime(db_session, seeded_ready_check, seeded_system):
     from app.domains.runner_service.service import RunnerService
 
@@ -889,6 +990,133 @@ async def test_playwright_runtime_open_create_modal_rejects_when_dialog_state_do
 
     with pytest.raises(RuntimeError, match="did not change dialog state"):
         await runtime.open_create_modal()
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_enter_state_requires_target_modal_not_any_dialog():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeStateEnterPage(
+        initial_modal_title="编辑用户",
+        modal_title_after_click="新增用户",
+        click_opens_modal=True,
+    )
+
+    result = await runtime.enter_state(state_signature="users:modal=新增用户")
+
+    assert result is True
+    assert runtime._page.button_trigger.click_calls == 1
+    assert runtime._page.modal_title == "新增用户"
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_resolve_locator_bundle_stops_after_first_hit():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeBundlePlaybackPage(
+        selector_locators={
+            "role=dialog[name='新增用户']": FakeVisibleLocator(count=0),
+            ".fallback-modal": FakeVisibleLocator(count=1, visible=True),
+            ".should-not-run": FakeVisibleLocator(count=1, visible=True),
+        }
+    )
+
+    result = await runtime.resolve_locator_bundle(
+        locator_bundle={
+            "candidates": [
+                {"strategy_type": "semantic", "selector": "role=dialog[name='新增用户']", "fallback_rank": 1},
+                {"strategy_type": "css", "selector": ".fallback-modal", "fallback_rank": 2},
+                {"strategy_type": "css", "selector": ".should-not-run", "fallback_rank": 3},
+            ]
+        }
+    )
+
+    assert result["matched"] is True
+    assert result["matched_rank"] == 2
+    assert runtime._page.locator_calls == [
+        "role=dialog[name='新增用户']",
+        ".fallback-modal",
+    ]
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_resolve_locator_bundle_returns_context_mismatch():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeBundlePlaybackPage(
+        selector_locators={"role=dialog[name='新增用户']": FakeVisibleLocator(count=1)},
+        dialog_count=0,
+    )
+
+    result = await runtime.resolve_locator_bundle(
+        locator_bundle={
+            "candidates": [
+                {
+                    "strategy_type": "semantic",
+                    "selector": "role=dialog[name='新增用户']",
+                    "context_constraints": {"entry_type": "open_modal"},
+                    "fallback_rank": 1,
+                }
+            ]
+        }
+    )
+
+    assert result["matched"] is False
+    assert result["failure_category"] == "context_mismatch"
+    assert result["context_mismatch"] is True
+    assert runtime._page.locator_calls == []
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_resolve_locator_bundle_returns_ambiguous_match():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeBundlePlaybackPage(
+        selector_locators={
+            ".duplicate-dialog": FakeVisibleLocator(count=2),
+            ".missing": FakeVisibleLocator(count=0),
+        }
+    )
+
+    result = await runtime.resolve_locator_bundle(
+        locator_bundle={
+            "candidates": [
+                {"strategy_type": "css", "selector": ".duplicate-dialog", "fallback_rank": 1},
+                {"strategy_type": "css", "selector": ".missing", "fallback_rank": 2},
+            ]
+        }
+    )
+
+    assert result["matched"] is False
+    assert result["failure_category"] == "ambiguous_match"
+    assert result["ambiguous_match"] is True
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_resolve_locator_bundle_invisible_element_is_locator_all_failed():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeBundlePlaybackPage(
+        selector_locators={
+            ".hidden-dialog": FakeVisibleLocator(count=1, visible=False, fail_when_hidden=True),
+        }
+    )
+
+    result = await runtime.resolve_locator_bundle(
+        locator_bundle={
+            "candidates": [
+                {"strategy_type": "css", "selector": ".hidden-dialog", "fallback_rank": 1},
+            ]
+        }
+    )
+
+    assert result["matched"] is False
+    assert result["failure_category"] == "locator_all_failed"
 
 
 @pytest.mark.anyio

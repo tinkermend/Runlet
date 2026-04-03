@@ -153,10 +153,43 @@ class ModuleExecutor:
                     )
                 elif module == "state.enter":
                     state_signature = str(params.get("state_signature") or "")
-                    await self._expect_truthy(
-                        module=module,
-                        outcome=await self.runtime.enter_state(state_signature=state_signature),
-                    )
+                    try:
+                        reached = await self.runtime.enter_state(state_signature=state_signature)
+                    except Exception as exc:
+                        detail = str(exc).strip() or "state_not_reached"
+                        step_results.append(
+                            StepExecutionResult(
+                                module=module,
+                                status=RunnerRunStatus.FAILED,
+                                detail=detail,
+                                output={
+                                    "state_signature": state_signature,
+                                    "failure_category": "state_not_reached",
+                                },
+                            )
+                        )
+                        return ModuleExecutionResult(
+                            status=RunnerRunStatus.FAILED,
+                            auth_status=auth_status,
+                            step_results=step_results,
+                        )
+                    if not reached:
+                        step_results.append(
+                            StepExecutionResult(
+                                module=module,
+                                status=RunnerRunStatus.FAILED,
+                                detail=f"state_not_reached: state signature {state_signature} was not reached",
+                                output={
+                                    "state_signature": state_signature,
+                                    "failure_category": "state_not_reached",
+                                },
+                            )
+                        )
+                        return ModuleExecutionResult(
+                            status=RunnerRunStatus.FAILED,
+                            auth_status=auth_status,
+                            step_results=step_results,
+                        )
                     step_results.append(
                         StepExecutionResult(
                             module=module,

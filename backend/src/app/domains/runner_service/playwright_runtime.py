@@ -104,19 +104,16 @@ class PlaywrightRunnerRuntime:
         return True
 
     async def enter_state(self, *, state_signature: str) -> bool:
-        normalized = str(state_signature or "").strip().lower()
-        if not normalized:
-            return True
-        if "modal=" not in normalized:
+        modal_target = _extract_modal_target(state_signature)
+        if modal_target is None:
             return True
         page = self._require_page()
-        dialogs = page.get_by_role("dialog")
-        if await dialogs.count() > 0 and await dialogs.first.is_visible():
+        if await self._is_target_modal_visible(page=page, modal_target=modal_target):
             return True
-        try:
-            return await self.open_create_modal()
-        except Exception:
-            return False
+        await self.open_create_modal()
+        if await self._is_target_modal_visible(page=page, modal_target=modal_target):
+            return True
+        raise RuntimeError(f"state_not_reached: target modal={modal_target} not reached")
 
     async def resolve_locator_bundle(
         self,
@@ -151,11 +148,17 @@ class PlaywrightRunnerRuntime:
                 continue
             any_context_matched = True
 
-            resolved = page.locator(selector)
-            count = await resolved.count()
+            try:
+                resolved = page.locator(selector)
+                count = await resolved.count()
+            except Exception:
+                continue
             if count == 1:
                 target = resolved.first
-                await target.wait_for(state="visible")
+                try:
+                    await target.wait_for(state="visible")
+                except Exception:
+                    continue
                 return {
                     "matched": True,
                     "matched_rank": rank,
@@ -268,9 +271,39 @@ class PlaywrightRunnerRuntime:
 
         return True
 
+    async def _is_target_modal_visible(self, *, page, modal_target: str) -> bool:
+        target = modal_target.strip()
+        if not target:
+            return False
+        normalized = target.lower()
+        if normalized in {"create", "new", "add"}:
+            dialogs = page.get_by_role("dialog", name=re.compile("新增|新建|创建"))
+            if await dialogs.count() == 0:
+                return False
+            return await dialogs.first.is_visible()
+
+        exact = page.get_by_role("dialog", name=target, exact=True)
+        if await exact.count() > 0:
+            return await exact.first.is_visible()
+        fuzzy = page.get_by_role("dialog", name=target, exact=False)
+        if await fuzzy.count() > 0:
+            return await fuzzy.first.is_visible()
+        return False
+
 
 def _route_pattern(route_path: str) -> str:
     return f".*{re.escape(route_path)}"
+
+
+def _extract_modal_target(state_signature: str) -> str | None:
+    normalized = str(state_signature or "").strip()
+    if not normalized:
+        return None
+    matched = re.search(r"(?:^|:)modal=([^:]+)", normalized)
+    if matched is None:
+        return None
+    target = matched.group(1).strip()
+    return target or None
 
 
 def _coerce_positive_int(value: object) -> int | None:
