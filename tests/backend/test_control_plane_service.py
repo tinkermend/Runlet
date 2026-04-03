@@ -232,6 +232,7 @@ async def test_submit_check_request_prefers_safe_high_confidence_asset(
 @pytest.mark.anyio
 async def test_submit_check_request_uses_realtime_probe_when_page_or_menu_is_unresolved(
     control_plane_service,
+    seeded_system,
     db_session,
 ):
     result = await control_plane_service.submit_check_request(
@@ -241,6 +242,8 @@ async def test_submit_check_request_uses_realtime_probe_when_page_or_menu_is_unr
     )
 
     plan = db_session.exec(select(ExecutionPlan)).one()
+    assert plan.resolved_system_id == seeded_system.id
+    assert plan.resolved_page_asset_id is None
     assert plan.execution_track == "realtime_probe"
     assert result.execution_track == "realtime_probe"
 

@@ -1,5 +1,6 @@
 from sqlmodel import select
 
+from app.infrastructure.db.models.execution import ExecutionPlan
 from app.infrastructure.db.models.jobs import QueuedJob
 
 
@@ -53,7 +54,11 @@ def test_get_check_request_returns_404_for_missing_request(client):
     assert response.status_code == 404
 
 
-def test_post_check_requests_uses_realtime_probe_when_page_or_menu_unresolved(client):
+def test_post_check_requests_uses_realtime_probe_when_page_or_menu_unresolved(
+    client,
+    seeded_system,
+    db_session,
+):
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -65,6 +70,9 @@ def test_post_check_requests_uses_realtime_probe_when_page_or_menu_unresolved(cl
 
     assert response.status_code == 202
     assert response.json()["execution_track"] == "realtime_probe"
+    plan = db_session.exec(select(ExecutionPlan)).one()
+    assert plan.resolved_system_id == seeded_system.id
+    assert plan.resolved_page_asset_id is None
 
 
 def test_post_check_requests_returns_409_when_element_asset_missing(
