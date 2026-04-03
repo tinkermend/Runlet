@@ -35,6 +35,14 @@ class PageCheckRunTarget:
     page_check: PageCheck
 
 
+@dataclass(frozen=True)
+class CheckResolution:
+    system: System | None
+    page_asset: PageAsset | None
+    page_check: PageCheck | None
+    miss_reason: str | None
+
+
 class ControlPlaneRepository(Protocol):
     async def get_system_by_id(self, *, system_id: UUID) -> System | None: ...
 
@@ -71,11 +79,10 @@ class ControlPlaneRepository(Protocol):
     async def resolve_page_asset_and_check(
         self,
         *,
-        system_id: UUID | None,
         system_hint: str,
         page_hint: str | None,
         check_goal: str,
-    ) -> tuple[PageAsset | None, PageCheck | None]: ...
+    ) -> CheckResolution: ...
 
     async def create_execution_request(
         self,
@@ -296,47 +303,72 @@ class SqlControlPlaneRepository:
         self,
         *,
         system_hint: str,
-        system_id: UUID | None,
         page_hint: str | None,
         check_goal: str,
-    ) -> tuple[PageAsset | None, PageCheck | None]:
+    ) -> CheckResolution:
         normalized_system_hint = system_hint.strip().lower()
         normalized_goal = check_goal.strip().lower()
-
-        if page_hint is not None:
-            normalized_page_hint = page_hint.strip().lower()
-            asset_statement = (
-                select(PageAsset)
-                .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
-                .where(PageAsset.status == AssetStatus.SAFE)
-                .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
-                .where(func.lower(IntentAlias.check_alias) == normalized_goal)
-                .where(
-                    (func.lower(IntentAlias.page_alias) == normalized_page_hint)
-                    | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
-                )
-                .order_by(IntentAlias.confidence.desc(), PageAsset.asset_version.desc())
+        system = await self.resolve_system(system_hint=system_hint)
+        if system is None:
+            return CheckResolution(
+                system=None,
+                page_asset=None,
+                page_check=None,
+                miss_reason="system_not_found",
             )
-            if system_id is not None:
-                asset_statement = asset_statement.where(PageAsset.system_id == system_id)
 
-            page_asset = await self._exec_first(asset_statement)
-            if page_asset is not None:
-                check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
-                    (func.lower(PageCheck.goal) == normalized_goal)
-                    | (func.lower(PageCheck.check_code) == normalized_goal)
-                ).order_by(PageCheck.id)
-                page_check = await self._exec_first(check_statement)
-                return page_asset, page_check
-
-        if system_id is None or page_hint is None:
-            return None, None
+        if page_hint is None:
+            return CheckResolution(
+                system=system,
+                page_asset=None,
+                page_check=None,
+                miss_reason="page_or_menu_not_resolved",
+            )
 
         normalized_page_hint = page_hint.strip().lower()
         asset_statement = (
             select(PageAsset)
+            .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
+            .where(PageAsset.status == AssetStatus.SAFE)
+            .where(PageAsset.system_id == system.id)
+            .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
+            .where(func.lower(IntentAlias.check_alias) == normalized_goal)
+            .where(
+                (func.lower(IntentAlias.page_alias) == normalized_page_hint)
+                | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
+            )
+            .order_by(IntentAlias.confidence.desc(), PageAsset.asset_version.desc())
+        )
+        page_asset = await self._exec_first(asset_statement)
+        if page_asset is not None:
+            check_statement = (
+                select(PageCheck)
+                .where(PageCheck.page_asset_id == page_asset.id)
+                .where(
+                    (func.lower(PageCheck.goal) == normalized_goal)
+                    | (func.lower(PageCheck.check_code) == normalized_goal)
+                )
+                .order_by(PageCheck.id)
+            )
+            page_check = await self._exec_first(check_statement)
+            if page_check is None:
+                return CheckResolution(
+                    system=system,
+                    page_asset=page_asset,
+                    page_check=None,
+                    miss_reason="element_asset_missing",
+                )
+            return CheckResolution(
+                system=system,
+                page_asset=page_asset,
+                page_check=page_check,
+                miss_reason=None,
+            )
+
+        asset_statement = (
+            select(PageAsset)
             .join(Page, Page.id == PageAsset.page_id)
-            .where(PageAsset.system_id == system_id)
+            .where(PageAsset.system_id == system.id)
             .where(PageAsset.status == AssetStatus.SAFE)
             .where(
                 (func.lower(Page.page_title) == normalized_page_hint)
@@ -347,14 +379,36 @@ class SqlControlPlaneRepository:
         )
         page_asset = await self._exec_first(asset_statement)
         if page_asset is None:
-            return None, None
+            return CheckResolution(
+                system=system,
+                page_asset=None,
+                page_check=None,
+                miss_reason="page_or_menu_not_resolved",
+            )
 
-        check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
-            (func.lower(PageCheck.goal) == normalized_goal)
-            | (func.lower(PageCheck.check_code) == normalized_goal)
-        ).order_by(PageCheck.id)
+        check_statement = (
+            select(PageCheck)
+            .where(PageCheck.page_asset_id == page_asset.id)
+            .where(
+                (func.lower(PageCheck.goal) == normalized_goal)
+                | (func.lower(PageCheck.check_code) == normalized_goal)
+            )
+            .order_by(PageCheck.id)
+        )
         page_check = await self._exec_first(check_statement)
-        return page_asset, page_check
+        if page_check is None:
+            return CheckResolution(
+                system=system,
+                page_asset=page_asset,
+                page_check=None,
+                miss_reason="element_asset_missing",
+            )
+        return CheckResolution(
+            system=system,
+            page_asset=page_asset,
+            page_check=page_check,
+            miss_reason=None,
+        )
 
     async def create_execution_request(
         self,

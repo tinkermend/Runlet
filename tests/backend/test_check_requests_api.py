@@ -51,3 +51,34 @@ def test_get_check_request_returns_404_for_missing_request(client):
     response = client.get("/api/v1/check-requests/00000000-0000-0000-0000-000000000001")
 
     assert response.status_code == 404
+
+
+def test_post_check_requests_uses_realtime_probe_when_page_or_menu_unresolved(client):
+    response = client.post(
+        "/api/v1/check-requests",
+        json={
+            "system_hint": "ERP",
+            "page_hint": "不存在的页面",
+            "check_goal": "page_open",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["execution_track"] == "realtime_probe"
+
+
+def test_post_check_requests_returns_409_when_element_asset_missing(
+    client,
+    seeded_asset_without_matching_check,
+):
+    response = client.post(
+        "/api/v1/check-requests",
+        json={
+            "system_hint": "WMS",
+            "page_hint": "库存列表",
+            "check_goal": "table_render",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "element asset is missing"

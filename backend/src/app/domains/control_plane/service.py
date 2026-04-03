@@ -92,20 +92,20 @@ class ControlPlaneService:
             request_source=request_source,
         )
 
-        system = await self.repository.resolve_system(system_hint=payload.system_hint)
-        page_asset, page_check = await self.repository.resolve_page_asset_and_check(
+        resolution = await self.repository.resolve_page_asset_and_check(
             system_hint=payload.system_hint,
-            system_id=system.id if system else None,
             page_hint=payload.page_hint,
             check_goal=payload.check_goal,
         )
-        execution_track = "precompiled" if page_check is not None else "realtime"
+        if resolution.miss_reason == "element_asset_missing":
+            raise HTTPException(status_code=409, detail="element asset is missing")
+        execution_track = "precompiled" if resolution.page_check is not None else "realtime_probe"
         return await self._accept_check_request(
             payload=payload,
-            resolved_system_id=system.id if system else None,
-            resolved_page_asset_id=page_asset.id if page_asset else None,
-            resolved_page_check_id=page_check.id if page_check else None,
-            module_plan_id=page_check.module_plan_id if page_check else None,
+            resolved_system_id=resolution.system.id if resolution.system else None,
+            resolved_page_asset_id=resolution.page_asset.id if resolution.page_asset else None,
+            resolved_page_check_id=resolution.page_check.id if resolution.page_check else None,
+            module_plan_id=resolution.page_check.module_plan_id if resolution.page_check else None,
             execution_track=execution_track,
         )
 

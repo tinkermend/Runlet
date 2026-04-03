@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -92,7 +93,7 @@ class CheckRequestAccepted(BaseModel):
     request_id: UUID
     plan_id: UUID
     page_check_id: UUID | None
-    execution_track: str
+    execution_track: Literal["precompiled", "realtime_probe"]
     auth_policy: str
     job_id: UUID
     status: str = "accepted"
@@ -102,7 +103,7 @@ class CheckRequestStatus(BaseModel):
     request_id: UUID
     plan_id: UUID | None = None
     page_check_id: UUID | None = None
-    execution_track: str | None = None
+    execution_track: Literal["precompiled", "realtime_probe"] | None = None
     auth_policy: str | None = None
     status: str = "accepted"
 

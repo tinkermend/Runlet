@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 from sqlmodel import select
 
 from app.domains.control_plane.repository import SqlControlPlaneRepository
@@ -56,7 +57,7 @@ async def test_submit_check_request_creates_request_plan_and_job(
 
 
 @pytest.mark.anyio
-async def test_submit_check_request_normalizes_defaults_and_falls_back_to_realtime(
+async def test_submit_check_request_normalizes_defaults_and_falls_back_to_realtime_probe(
     control_plane_service,
     db_session,
 ):
@@ -78,37 +79,30 @@ async def test_submit_check_request_normalizes_defaults_and_falls_back_to_realti
     assert plan.resolved_system_id is None
     assert plan.resolved_page_asset_id is None
     assert plan.resolved_page_check_id is None
-    assert plan.execution_track == "realtime"
+    assert plan.execution_track == "realtime_probe"
 
     assert job.job_type == "run_check"
     assert job.payload["execution_plan_id"] == str(result.plan_id)
-    assert job.payload["execution_track"] == "realtime"
+    assert job.payload["execution_track"] == "realtime_probe"
 
     assert result.page_check_id is None
-    assert result.execution_track == "realtime"
+    assert result.execution_track == "realtime_probe"
 
 
 @pytest.mark.anyio
-async def test_submit_check_request_keeps_resolved_asset_when_check_falls_back_to_realtime(
+async def test_submit_check_request_fails_when_check_falls_into_element_asset_missing_boundary(
     control_plane_service,
     seeded_asset_without_matching_check,
     db_session,
 ):
-    result = await control_plane_service.submit_check_request(
-        system_hint="WMS",
-        page_hint="库存列表",
-        check_goal="table_render",
-    )
+    with pytest.raises(HTTPException, match="element asset is missing"):
+        await control_plane_service.submit_check_request(
+            system_hint="WMS",
+            page_hint="库存列表",
+            check_goal="table_render",
+        )
 
-    plan = db_session.exec(select(ExecutionPlan)).one()
-
-    assert plan.resolved_page_asset_id == seeded_asset_without_matching_check.id
-    assert plan.resolved_page_check_id is None
-    assert plan.execution_track == "realtime"
-
-    assert result.page_check_id is None
-    assert result.execution_track == "realtime"
-    assert result.auth_policy == "server_injected"
+    assert db_session.exec(select(ExecutionPlan)).all() == []
 
 
 @pytest.mark.anyio
@@ -233,3 +227,32 @@ async def test_submit_check_request_prefers_safe_high_confidence_asset(
     assert plan.resolved_page_asset_id == ready_asset.id
     assert plan.resolved_page_check_id == ready_check.id
     assert result.page_check_id == ready_check.id
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_uses_realtime_probe_when_page_or_menu_is_unresolved(
+    control_plane_service,
+    db_session,
+):
+    result = await control_plane_service.submit_check_request(
+        system_hint="ERP",
+        page_hint="不存在的页面",
+        check_goal="page_open",
+    )
+
+    plan = db_session.exec(select(ExecutionPlan)).one()
+    assert plan.execution_track == "realtime_probe"
+    assert result.execution_track == "realtime_probe"
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_fails_when_page_is_resolved_but_element_asset_is_missing(
+    control_plane_service,
+    seeded_asset_without_matching_check,
+):
+    with pytest.raises(HTTPException, match="element asset is missing"):
+        await control_plane_service.submit_check_request(
+            system_hint="WMS",
+            page_hint="库存列表",
+            check_goal="table_render",
+        )
