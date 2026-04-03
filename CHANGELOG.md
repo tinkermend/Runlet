@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 新增资产生命周期与 reconciliation 持久化契约：为 `page_assets/page_checks/intent_aliases/published_jobs` 补齐退役与停用字段，新增 `asset_reconciliation_audits` 审计表，扩展 `CompileSnapshotResult` 输出退役计数与决策列表字段，并补充对应 schema/DTO 回归测试。
 - 新增后端采集同步一致性与资产退役设计文档，明确高质量 `full crawl` 作为页面资产真相源，引入 reconciliation、生命周期状态、alias 失效、调度暂停与执行阻断的统一收敛方案。
 - 新增后端检查执行与受控实时探测实施计划，按 TDD 拆分双轨受理、完整 runtime、统一结果查询、probe 反馈回写与从成功检查晋升为调度对象的后端落地步骤。
 - 新增后端检查执行与受控实时探测设计文档，明确企业级 To B 巡检平台继续采用“资产优先 + 页面级受控降级 + 元素级缺失直接失败”的后端演进原则，并收口 `skill/control_plane/runner_service/script_renderer` 的职责边界。

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -8,7 +8,7 @@ from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from app.infrastructure.db.base import BaseModel
-from app.shared.enums import AssetStatus
+from app.shared.enums import AssetLifecycleStatus, AssetStatus
 
 
 def asset_status_enum() -> sa.Enum:
@@ -20,7 +20,20 @@ def asset_status_enum() -> sa.Enum:
     )
 
 
+def asset_lifecycle_status_enum() -> sa.Enum:
+    return sa.Enum(
+        AssetLifecycleStatus,
+        name="asset_lifecycle_status",
+        native_enum=False,
+        values_callable=lambda values: [value.value for value in values],
+    )
+
+
 json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class PageAsset(BaseModel, table=True):
@@ -35,6 +48,21 @@ class PageAsset(BaseModel, table=True):
         default=AssetStatus.SAFE,
         sa_column=sa.Column(asset_status_enum(), nullable=False),
     )
+    drift_status: AssetStatus = Field(
+        default=AssetStatus.SAFE,
+        sa_column=sa.Column(asset_status_enum(), nullable=False, server_default=AssetStatus.SAFE.value),
+    )
+    lifecycle_status: AssetLifecycleStatus = Field(
+        default=AssetLifecycleStatus.ACTIVE,
+        sa_column=sa.Column(
+            asset_lifecycle_status_enum(),
+            nullable=False,
+            server_default=AssetLifecycleStatus.ACTIVE.value,
+        ),
+    )
+    retired_reason: str | None = Field(default=None, max_length=64)
+    retired_at: datetime | None = Field(default=None)
+    retired_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     compiled_from_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     last_verified_at: datetime | None = Field(default=None)
 
@@ -46,6 +74,17 @@ class PageCheck(BaseModel, table=True):
     page_asset_id: UUID = Field(foreign_key="page_assets.id", index=True)
     check_code: str = Field(max_length=64)
     goal: str = Field(max_length=64)
+    lifecycle_status: AssetLifecycleStatus = Field(
+        default=AssetLifecycleStatus.ACTIVE,
+        sa_column=sa.Column(
+            asset_lifecycle_status_enum(),
+            nullable=False,
+            server_default=AssetLifecycleStatus.ACTIVE.value,
+        ),
+    )
+    retired_reason: str | None = Field(default=None, max_length=64)
+    retired_at: datetime | None = Field(default=None)
+    retired_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     input_schema: dict[str, object] | None = Field(
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
@@ -55,6 +94,10 @@ class PageCheck(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=True),
     )
     module_plan_id: UUID | None = Field(default=None)
+    blocking_dependency_json: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
     success_rate: float | None = Field(default=None)
     last_verified_at: datetime | None = Field(default=None)
 
@@ -70,6 +113,13 @@ class IntentAlias(BaseModel, table=True):
     asset_key: str = Field(max_length=255)
     confidence: float = Field(default=1.0)
     source: str = Field(max_length=64)
+    is_active: bool = Field(
+        default=True,
+        sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
+    disabled_reason: str | None = Field(default=None, max_length=64)
+    disabled_at: datetime | None = Field(default=None)
+    disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
 
 
 class ModulePlan(BaseModel, table=True):
@@ -100,4 +150,31 @@ class AssetSnapshot(BaseModel, table=True):
     status: AssetStatus = Field(
         default=AssetStatus.SAFE,
         sa_column=sa.Column(asset_status_enum(), nullable=False),
+    )
+
+
+class AssetReconciliationAudit(BaseModel, table=True):
+    __tablename__ = "asset_reconciliation_audits"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
+    retired_asset_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+    retired_check_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+    retire_reasons: list[dict[str, object]] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+    paused_published_job_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )

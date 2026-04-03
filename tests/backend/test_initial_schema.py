@@ -49,6 +49,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "execution_plans",
         "execution_requests",
         "execution_runs",
+        "asset_reconciliation_audits",
         "intent_aliases",
         "job_runs",
         "menu_nodes",
@@ -80,8 +81,30 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "asset_key",
         "asset_version",
         "status",
+        "drift_status",
+        "lifecycle_status",
+        "retired_reason",
+        "retired_at",
+        "retired_by_snapshot_id",
         "compiled_from_snapshot_id",
     } <= page_assets_columns
+
+    page_checks_columns = {column["name"] for column in inspector.get_columns("page_checks")}
+    assert {
+        "lifecycle_status",
+        "retired_reason",
+        "retired_at",
+        "retired_by_snapshot_id",
+        "blocking_dependency_json",
+    } <= page_checks_columns
+
+    intent_aliases_columns = {column["name"] for column in inspector.get_columns("intent_aliases")}
+    assert {
+        "is_active",
+        "disabled_reason",
+        "disabled_at",
+        "disabled_by_snapshot_id",
+    } <= intent_aliases_columns
 
     module_plan_columns = {column["name"] for column in inspector.get_columns("module_plans")}
     assert {"page_asset_id", "check_code", "plan_version", "steps_json"} <= module_plan_columns
@@ -150,9 +173,25 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "schedule_expr",
         "timezone",
         "state",
+        "pause_reason",
+        "paused_by_snapshot_id",
+        "paused_by_asset_id",
+        "paused_by_page_check_id",
         "created_at",
         "updated_at",
     } <= published_job_columns
+
+    reconciliation_audit_columns = {
+        column["name"] for column in inspector.get_columns("asset_reconciliation_audits")
+    }
+    assert {
+        "snapshot_id",
+        "retired_asset_ids",
+        "retired_check_ids",
+        "retire_reasons",
+        "paused_published_job_ids",
+        "created_at",
+    } <= reconciliation_audit_columns
 
     job_run_columns = {column["name"] for column in inspector.get_columns("job_runs")}
     assert {
@@ -257,6 +296,62 @@ def test_runtime_policy_tables_exist(inspector):
         index["name"] == "ix_system_crawl_policies_system_id" and bool(index.get("unique"))
         for index in crawl_policy_indexes
     )
+
+
+def test_page_asset_and_related_tables_expose_lifecycle_columns(db_engine):
+    inspector = inspect(db_engine)
+
+    page_assets_columns = {column["name"] for column in inspector.get_columns("page_assets")}
+    assert {
+        "drift_status",
+        "lifecycle_status",
+        "retired_reason",
+        "retired_at",
+        "retired_by_snapshot_id",
+    } <= page_assets_columns
+
+    page_checks_columns = {column["name"] for column in inspector.get_columns("page_checks")}
+    assert {
+        "lifecycle_status",
+        "retired_reason",
+        "retired_at",
+        "retired_by_snapshot_id",
+        "blocking_dependency_json",
+    } <= page_checks_columns
+
+    intent_aliases_columns = {column["name"] for column in inspector.get_columns("intent_aliases")}
+    assert {
+        "is_active",
+        "disabled_reason",
+        "disabled_at",
+        "disabled_by_snapshot_id",
+    } <= intent_aliases_columns
+
+    published_job_columns = {column["name"] for column in inspector.get_columns("published_jobs")}
+    assert {
+        "pause_reason",
+        "paused_by_snapshot_id",
+        "paused_by_asset_id",
+        "paused_by_page_check_id",
+    } <= published_job_columns
+
+
+def test_initial_schema_exposes_reconciliation_audit_table(db_engine):
+    inspector = inspect(db_engine)
+    table_names = set(inspector.get_table_names())
+    assert "asset_reconciliation_audits" in table_names
+
+    reconciliation_audit_columns = {
+        column["name"] for column in inspector.get_columns("asset_reconciliation_audits")
+    }
+    assert {
+        "snapshot_id",
+        "retired_asset_ids",
+        "retired_check_ids",
+        "retire_reasons",
+        "paused_published_job_ids",
+        "created_at",
+    } <= reconciliation_audit_columns
 
     auth_policy_foreign_keys = inspector.get_foreign_keys("system_auth_policies")
     assert any(

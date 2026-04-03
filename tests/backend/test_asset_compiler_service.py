@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint
+from app.domains.asset_compiler.schemas import CompileSnapshotResult
 from app.infrastructure.db.models.assets import AssetSnapshot, PageAsset
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.shared.enums import AssetStatus
@@ -327,3 +328,13 @@ async def test_compile_snapshot_marks_asset_suspect_when_drift_is_medium(
     result = await asset_compiler_service.compile_snapshot(snapshot_id=seeded_previous_snapshot.id)
 
     assert result.drift_state in {AssetStatus.SAFE, AssetStatus.SUSPECT, AssetStatus.STALE}
+
+
+def test_compile_snapshot_result_exposes_reconciliation_counts():
+    assert "assets_retired" in CompileSnapshotResult.__dataclass_fields__
+    assert "checks_retired" in CompileSnapshotResult.__dataclass_fields__
+    assert "alias_disable_decision_count" in CompileSnapshotResult.__dataclass_fields__
+    assert "published_job_pause_decision_count" in CompileSnapshotResult.__dataclass_fields__
+    assert "alias_ids_to_disable" in CompileSnapshotResult.__dataclass_fields__
+    assert "published_job_ids_to_pause" in CompileSnapshotResult.__dataclass_fields__
+    assert "retire_reasons" in CompileSnapshotResult.__dataclass_fields__
