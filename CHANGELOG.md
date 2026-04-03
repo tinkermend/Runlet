@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 新增 Web 测试系统接入与删除实施计划，拆分 YAML 清单建模、`.env` 密钥加密、后端系统治理服务、同步正式链路编排、彻底删除与 CLI 命令接线五个任务，为后续 `openweb web-system add/remove` 落地提供可执行步骤。
 - 新增 Web 测试系统接入与删除治理设计文档，明确以 YAML 清单驱动 `openweb web-system add/remove`，约束明文凭据仅存在于配置文件、入库前必须使用 `.env` 密钥加密，并定义系统彻底删除时对认证、采集、资产、执行、调度数据及 APScheduler 注册项的全链路清理边界。
 - 修复 `asset_compiler` 对真实采集孤儿菜单的兼容性：`build_current_snapshot_truth` 现在会对 `page_id=None` 的 `menu_nodes` 使用空值安全排序，并继续忽略无法映射到页面路由的菜单，避免 `asset_compile` 在 reconciliation 阶段因 `None/UUID` 比较抛错。
 - 修复资产生命周期时间列的 ORM 元数据偏差：`page_assets.retired_at`、`page_checks.retired_at`、`intent_aliases.disabled_at` 现在显式声明为 timezone-aware，消除真实 PostgreSQL/asyncpg 在 reconciliation 写入 UTC 时间时的 `TIMESTAMP WITHOUT TIME ZONE` 绑定错误。
