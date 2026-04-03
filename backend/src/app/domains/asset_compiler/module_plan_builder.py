@@ -25,6 +25,28 @@ def build_module_plan(
             {"module": "state.enter", "params": {"state_signature": normalized_state_signature}}
         )
 
+    if _uses_legacy_open_create_action(
+        check_code=check_code,
+        state_signature=normalized_state_signature,
+        default_state_signature=default_state_signature,
+    ):
+        steps_json.append(
+            {
+                "module": "locator.assert",
+                "params": {
+                    "assertion": _assertion_name(check_code),
+                    "expected_element_type": _expected_element_type(check_code),
+                    "locator_bundle": locator_bundle or {"candidates": []},
+                },
+            }
+        )
+        steps_json.append({"module": "action.open_create_modal", "params": {}})
+        return ModulePlanDraft(
+            check_code=check_code,
+            plan_version="v1",
+            steps_json=steps_json,
+        )
+
     steps_json.append(
         {
             "module": "locator.assert",
@@ -49,6 +71,8 @@ def _assertion_name(check_code: str) -> str:
     if check_code == "tab_switch_render":
         return "table_visible"
     if check_code == "open_create_modal":
+        return "page_ready"
+    if check_code == "open_create_modal_state":
         return "modal_visible"
     return "page_ready"
 
@@ -57,5 +81,20 @@ def _expected_element_type(check_code: str) -> str:
     if check_code in {"table_render", "tab_switch_render"}:
         return "table"
     if check_code == "open_create_modal":
+        return "button"
+    if check_code == "open_create_modal_state":
         return "dialog"
     return "page"
+
+
+def _uses_legacy_open_create_action(
+    *,
+    check_code: str,
+    state_signature: str,
+    default_state_signature: str,
+) -> bool:
+    if check_code != "open_create_modal":
+        return False
+    if not state_signature:
+        return True
+    return state_signature == default_state_signature

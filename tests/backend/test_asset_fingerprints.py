@@ -129,3 +129,48 @@ def test_build_page_fingerprint_uses_locator_bundle_summary_instead_of_single_lo
     locator_only_changed = build_page_fingerprint(locator_only_changed_payload)
 
     assert baseline["key_locator_hash"] == locator_only_changed["key_locator_hash"]
+
+
+def test_compare_fingerprints_accepts_legacy_hashes_for_unchanged_page():
+    from app.domains.asset_compiler.fingerprints import build_page_fingerprint, compare_fingerprints
+
+    payload = {
+        "page": {
+            "route_path": "/users",
+            "page_title": "用户管理",
+            "page_summary": "用户管理列表",
+        },
+        "menus": [],
+        "elements": [
+            {
+                "element_type": "button",
+                "element_role": "button",
+                "element_text": "新增用户",
+                "playwright_locator": "get_by_role('button', name='新增用户')",
+                "state_signature": "users:default",
+                "attributes": {"data-testid": "create-user"},
+                "locator_bundle": {
+                    "candidates": [
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='新增用户']",
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+    new_fp = build_page_fingerprint(payload)
+    legacy_old_fp = {
+        "navigation_hash": new_fp["navigation_hash"],
+        "key_locator_hash": new_fp["legacy_key_locator_hash"],
+        "semantic_summary_hash": new_fp["semantic_summary_hash"],
+        "structure_hash": new_fp["legacy_structure_hash"],
+    }
+
+    diff = compare_fingerprints(legacy_old_fp, new_fp)
+
+    assert diff.score == 0.0
+    assert diff.changed_components == set()
+    assert diff.status == AssetStatus.SAFE

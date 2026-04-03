@@ -35,7 +35,10 @@ def build_standard_checks(
             StandardCheckDefinition(
                 check_code="open_create_modal",
                 goal="open_create_modal",
-                assertion_schema={"assertion": "modal_visible"},
+                assertion_schema={
+                    "assertion": "page_ready",
+                    "required_elements": [{"kind": "button", "role": "button"}],
+                },
                 state_signature=default_state_signature,
             )
         )
@@ -47,16 +50,20 @@ def build_standard_checks(
         )
     )
 
-    deduped_checks: list[StandardCheckDefinition] = []
-    seen_check_keys: set[tuple[str, str]] = set()
+    selected_by_code: dict[str, StandardCheckDefinition] = {}
     for check in checks:
-        dedupe_key = (check.check_code, _clean_text(check.state_signature))
-        if dedupe_key in seen_check_keys:
+        existing = selected_by_code.get(check.check_code)
+        if existing is None:
+            selected_by_code[check.check_code] = check
             continue
-        seen_check_keys.add(dedupe_key)
-        deduped_checks.append(check)
+        if _prefer_new_check(
+            existing=existing,
+            candidate=check,
+            default_state_signature=default_state_signature,
+        ):
+            selected_by_code[check.check_code] = check
 
-    return deduped_checks
+    return list(selected_by_code.values())
 
 
 def _build_representative_state_checks(
@@ -82,7 +89,7 @@ def _build_representative_state_checks(
         elif entry_type == "open_modal":
             checks.append(
                 StandardCheckDefinition(
-                    check_code="open_create_modal",
+                    check_code="open_create_modal_state",
                     goal="open_create_modal",
                     assertion_schema={"assertion": "modal_visible"},
                     state_signature=state_signature,
@@ -103,3 +110,20 @@ def _clean_text(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _prefer_new_check(
+    *,
+    existing: StandardCheckDefinition,
+    candidate: StandardCheckDefinition,
+    default_state_signature: str | None,
+) -> bool:
+    default_signature = _clean_text(default_state_signature)
+    existing_signature = _clean_text(existing.state_signature)
+    candidate_signature = _clean_text(candidate.state_signature)
+    existing_is_default = existing_signature == default_signature
+    candidate_is_default = candidate_signature == default_signature
+
+    if existing_is_default and not candidate_is_default:
+        return True
+    return False

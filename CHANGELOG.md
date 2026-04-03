@@ -1,3 +1,7 @@
+## 2026-04-04
+
+- 完成采集完整性增强 Task 4 收口：`asset_compiler` 新增 locator bundle 编译与状态感知 module plan 生成能力，补齐默认态与代表态弹窗检查模板（默认 `open_create_modal` + 代表态 `open_create_modal_state`）并消除同名检查歧义；同时为指纹比较加入 legacy hash 兼容桥接，避免升级首轮把存量稳定页面误判为漂移。
+
 ## 2026-04-03
 
 - 完成 Task 1 采集事实契约发布：为 `pages/menu_nodes/page_elements` 扩展状态与上下文字段契约，`CrawlerService` 持久化链路补齐 `discovery_sources/entry_candidates/context_constraints/state_signature/state_context/locator_candidates` 回写，`0011_crawl_state_and_locator_evidence` 迁移 JSON 列与 ORM `json_type`（PostgreSQL JSONB 变体）对齐，并补充 crawler round-trip 持久化断言覆盖。

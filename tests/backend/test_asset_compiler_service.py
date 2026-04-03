@@ -38,10 +38,10 @@ def test_build_standard_checks_adds_representative_state_checks():
         ],
     )
 
-    assert {"tab_switch_render", "open_create_modal"} <= {check.check_code for check in checks}
+    assert {"tab_switch_render", "open_create_modal_state"} <= {check.check_code for check in checks}
 
 
-def test_build_standard_checks_keeps_default_and_representative_open_modal_checks():
+def test_build_standard_checks_preserves_default_and_state_open_modal_checks():
     from app.domains.asset_compiler.check_templates import build_standard_checks
 
     checks = build_standard_checks(
@@ -54,12 +54,12 @@ def test_build_standard_checks_keeps_default_and_representative_open_modal_check
         default_state_signature="users:default",
     )
 
-    modal_checks = [check for check in checks if check.check_code == "open_create_modal"]
-    assert len(modal_checks) == 2
-    assert {check.state_signature for check in modal_checks} == {
-        "users:default",
-        "users:modal=create",
-    }
+    default_modal_checks = [check for check in checks if check.check_code == "open_create_modal"]
+    state_modal_checks = [check for check in checks if check.check_code == "open_create_modal_state"]
+    assert len(default_modal_checks) == 1
+    assert len(state_modal_checks) == 1
+    assert default_modal_checks[0].state_signature == "users:default"
+    assert state_modal_checks[0].state_signature == "users:modal=create"
 
 
 def test_build_module_plan_for_table_render_contains_expected_steps():
@@ -97,6 +97,33 @@ def test_build_module_plan_for_table_render_contains_expected_steps():
         "locator.assert",
     ]
     assert plan.steps_json[-1]["params"]["locator_bundle"] == locator_bundle
+
+
+def test_build_module_plan_for_default_open_create_modal_uses_action_step():
+    from app.domains.asset_compiler.module_plan_builder import build_module_plan
+
+    page_context = {
+        "system_code": "erp",
+        "page_title": "用户管理",
+        "route_path": "/users",
+        "menu_chain": ["系统管理", "用户管理"],
+        "default_state_signature": "users:default",
+    }
+
+    plan = build_module_plan(
+        check_code="open_create_modal",
+        page_context=page_context,
+        state_signature="users:default",
+        locator_bundle={"candidates": []},
+    )
+
+    assert [step["module"] for step in plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "locator.assert",
+        "action.open_create_modal",
+    ]
 
 
 @pytest.fixture
@@ -592,20 +619,12 @@ async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_m
 
     modal_checks = db_session.exec(
         select(PageCheck)
-        .where(PageCheck.check_code == "open_create_modal")
+        .where(PageCheck.check_code == "open_create_modal_state")
         .order_by(PageCheck.id)
     ).all()
-    assert len(modal_checks) == 2
-
-    modal_signatures = {
-        (check.input_schema or {}).get("state_signature")
-        for check in modal_checks
-    }
-    assert modal_signatures == {"users:default", "users:modal=create"}
-
-    representative_check = next(
-        check for check in modal_checks if (check.input_schema or {}).get("state_signature") == "users:modal=create"
-    )
+    assert len(modal_checks) == 1
+    representative_check = modal_checks[0]
+    assert (representative_check.input_schema or {}).get("state_signature") == "users:modal=create"
     representative_plan = db_session.exec(
         select(ModulePlan).where(ModulePlan.id == representative_check.module_plan_id)
     ).one()
@@ -622,6 +641,56 @@ async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_m
         representative_plan.steps_json[-1]["params"]["locator_bundle"]["candidates"][0]["selector"]
         == "role=dialog[name='新增用户']"
     )
+
+    default_modal_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "open_create_modal")
+        .order_by(PageCheck.id.desc())
+    ).first()
+    assert default_modal_check is not None
+    assert (default_modal_check.input_schema or {}).get("state_signature") == "users:default"
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_keeps_default_open_create_modal_active_without_modal_state(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    snapshot = _create_snapshot(db_session, seeded_system, quality_score=0.95, degraded=False)
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        snapshot,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表，支持新增用户",
+        include_table=False,
+        include_button=True,
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=snapshot.id)
+
+    modal_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "open_create_modal")
+        .order_by(PageCheck.id.desc())
+    ).first()
+    assert modal_check is not None
+    assert modal_check.lifecycle_status == AssetLifecycleStatus.ACTIVE
+    assert result.checks_retired == 0
+
+    plan = db_session.exec(
+        select(ModulePlan).where(ModulePlan.id == modal_check.module_plan_id)
+    ).one()
+    assert [step["module"] for step in plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "locator.assert",
+        "action.open_create_modal",
+    ]
 
 
 def test_compile_snapshot_result_exposes_reconciliation_counts():
