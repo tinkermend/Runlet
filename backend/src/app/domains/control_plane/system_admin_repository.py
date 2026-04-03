@@ -583,7 +583,7 @@ class SqlSystemAdminRepository:
             (
                 IntentAlias.__tablename__,
                 select(IntentAlias.id)
-                .join(PageAsset, IntentAlias.asset_key == PageAsset.asset_key)
+                .outerjoin(PageAsset, IntentAlias.asset_key == PageAsset.asset_key)
                 .where(
                     or_(
                         PageAsset.system_id == system_id,

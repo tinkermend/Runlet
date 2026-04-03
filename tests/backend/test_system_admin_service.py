@@ -1074,6 +1074,89 @@ async def test_teardown_system_residue_scan_requeries_system_links_without_preco
 
 
 @pytest.mark.anyio
+async def test_teardown_system_residue_scan_reports_orphaned_precollected_intent_alias(
+    db_session,
+):
+    from app.domains.control_plane.system_admin_repository import (
+        SqlSystemAdminRepository,
+        SystemTeardownIds,
+    )
+
+    system = System(
+        code="orphan-intent-alias-test",
+        name="orphan intent alias",
+        base_url="https://intent-alias.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    page = Page(
+        system_id=system.id,
+        route_path="/alias",
+        page_title="Alias Page",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    page_asset = PageAsset(
+        system_id=system.id,
+        page_id=page.id,
+        asset_key="orphan.intent.alias.asset",
+        asset_version="20260404000100",
+        status=AssetStatus.SAFE,
+    )
+    db_session.add(page_asset)
+    db_session.flush()
+
+    alias = IntentAlias(
+        system_alias=system.code,
+        page_alias="alias",
+        check_alias="table_render",
+        route_hint="/alias",
+        asset_key=page_asset.asset_key,
+        source="teardown_test",
+    )
+    db_session.add(alias)
+    db_session.commit()
+
+    db_session.delete(page_asset)
+    db_session.commit()
+
+    repo = SqlSystemAdminRepository(db_session)
+    remaining = await repo.list_remaining_reference_tables(
+        teardown_ids=SystemTeardownIds(
+            system_id=system.id,
+            system_code=system.code,
+            job_run_ids=[],
+            published_job_ids=[],
+            page_check_ids=[],
+            page_asset_ids=[],
+            intent_alias_ids=[alias.id],
+            module_plan_ids=[],
+            asset_snapshot_ids=[],
+            reconciliation_audit_ids=[],
+            page_ids=[],
+            menu_node_ids=[],
+            page_element_ids=[],
+            crawl_snapshot_ids=[],
+            auth_state_ids=[],
+            system_credential_ids=[],
+            auth_policy_ids=[],
+            crawl_policy_ids=[],
+            execution_plan_ids=[],
+            execution_run_ids=[],
+            execution_artifact_ids=[],
+            execution_request_ids=[],
+            script_render_ids=[],
+            queued_job_ids=[],
+        )
+    )
+
+    assert "intent_aliases" in remaining
+
+
+@pytest.mark.anyio
 async def test_get_publish_target_uses_stable_ordering_for_asset_version_ties(db_session):
     from app.domains.control_plane.system_admin_repository import SqlSystemAdminRepository
 
