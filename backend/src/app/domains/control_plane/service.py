@@ -126,6 +126,7 @@ class ControlPlaneService:
         self,
         *,
         execution_plan_id: UUID,
+        execution_run_id: UUID,
     ) -> None:
         plan = await self.repository.get_execution_plan(execution_plan_id=execution_plan_id)
         if plan is None:
@@ -134,6 +135,21 @@ class ControlPlaneService:
             raise HTTPException(status_code=409, detail="execution plan is not realtime_probe")
         if plan.resolved_page_asset_id is None:
             raise HTTPException(status_code=409, detail="page asset is not resolved in execution plan")
+
+        execution_run = await self.repository.get_execution_run(
+            execution_run_id=execution_run_id
+        )
+        latest_run = await self.repository.get_latest_execution_run(
+            execution_plan_id=execution_plan_id
+        )
+        if (
+            execution_run is None
+            or execution_run.execution_plan_id != execution_plan_id
+            or execution_run.status != "passed"
+            or latest_run is None
+            or latest_run.id != execution_run_id
+        ):
+            raise HTTPException(status_code=409, detail="realtime probe execution is not successful")
 
         request = await self.repository.get_execution_request(
             execution_request_id=plan.execution_request_id

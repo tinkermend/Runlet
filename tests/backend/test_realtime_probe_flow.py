@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 from sqlmodel import select
 
 from app.domains.runner_service.schemas import PageProbePlan
@@ -175,6 +176,7 @@ async def test_successful_realtime_probe_writes_route_hint_alias(
 
     await control_plane_service.persist_realtime_probe_feedback(
         execution_plan_id=realtime_probe_execution_plan_id,
+        execution_run_id=result.execution_run_id,
     )
 
     request = db_session.get(ExecutionRequest, plan.execution_request_id)
@@ -213,3 +215,39 @@ async def test_realtime_probe_marks_result_as_needs_recompile_when_probe_succeed
     assert result.status == "passed"
     assert result.needs_recrawl is False
     assert result.needs_recompile is True
+
+
+@pytest.mark.anyio
+async def test_persist_realtime_probe_feedback_rejects_unsuccessful_probe(
+    control_plane_service,
+    realtime_probe_runner_service,
+    realtime_probe_execution_plan_id,
+    seeded_page_asset,
+    db_session,
+):
+    plan = db_session.get(ExecutionPlan, realtime_probe_execution_plan_id)
+    plan.resolved_page_asset_id = seeded_page_asset.id
+    db_session.add(plan)
+    db_session.commit()
+
+    result = await realtime_probe_runner_service.run_realtime_probe(
+        execution_plan_id=realtime_probe_execution_plan_id,
+    )
+
+    class FailingProbeRuntime(ProbeRuntime):
+        async def assert_page_open(self, *, route_path: str) -> bool:
+            return False
+
+    from app.domains.runner_service.service import RunnerService
+
+    failing_runner_service = RunnerService(session=db_session, runtime=FailingProbeRuntime())
+    failed_result = await failing_runner_service.run_realtime_probe(
+        execution_plan_id=realtime_probe_execution_plan_id,
+    )
+    assert failed_result.status == "failed"
+
+    with pytest.raises(HTTPException, match="realtime probe execution is not successful"):
+        await control_plane_service.persist_realtime_probe_feedback(
+            execution_plan_id=realtime_probe_execution_plan_id,
+            execution_run_id=result.execution_run_id,
+        )

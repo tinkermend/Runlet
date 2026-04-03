@@ -160,6 +160,18 @@ class ControlPlaneRepository(Protocol):
         page_id: UUID,
     ) -> Page | None: ...
 
+    async def get_latest_execution_run(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionRun | None: ...
+
+    async def get_execution_run(
+        self,
+        *,
+        execution_run_id: UUID,
+    ) -> ExecutionRun | None: ...
+
     async def upsert_intent_alias(
         self,
         *,
@@ -489,6 +501,25 @@ class SqlControlPlaneRepository:
         page_id: UUID,
     ) -> Page | None:
         return await self._get(Page, page_id)
+
+    async def get_latest_execution_run(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionRun | None:
+        statement = (
+            select(ExecutionRun)
+            .where(ExecutionRun.execution_plan_id == execution_plan_id)
+            .order_by(ExecutionRun.created_at.desc(), ExecutionRun.id.desc())
+        )
+        return await self._exec_first(statement)
+
+    async def get_execution_run(
+        self,
+        *,
+        execution_run_id: UUID,
+    ) -> ExecutionRun | None:
+        return await self._get(ExecutionRun, execution_run_id)
 
     async def upsert_intent_alias(
         self,

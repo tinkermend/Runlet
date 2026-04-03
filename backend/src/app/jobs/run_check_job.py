@@ -17,9 +17,16 @@ def utcnow() -> datetime:
 
 
 class RunCheckJobHandler:
-    def __init__(self, *, session: Session | AsyncSession, runner_service) -> None:
+    def __init__(
+        self,
+        *,
+        session: Session | AsyncSession,
+        runner_service,
+        control_plane_service=None,
+    ) -> None:
         self.session = session
         self.runner_service = runner_service
+        self.control_plane_service = control_plane_service
 
     async def run(self, *, job_id: UUID) -> None:
         job = await self._get(QueuedJob, job_id)
@@ -99,6 +106,15 @@ class RunCheckJobHandler:
                 result = await self.runner_service.run_realtime_probe(
                     execution_plan_id=parsed_execution_plan_id,
                 )
+                if (
+                    result.status.value == "passed"
+                    and parsed_execution_plan_id is not None
+                    and self.control_plane_service is not None
+                ):
+                    await self.control_plane_service.persist_realtime_probe_feedback(
+                        execution_plan_id=parsed_execution_plan_id,
+                        execution_run_id=result.execution_run_id,
+                    )
             else:
                 result = await self.runner_service.run_page_check(
                     page_check_id=UUID(page_check_id),

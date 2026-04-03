@@ -7,6 +7,7 @@ import pytest
 from sqlmodel import select
 
 from app.domains.control_plane.job_types import RUN_CHECK_JOB_TYPE
+from app.infrastructure.db.models.assets import IntentAlias, PageAsset
 from app.infrastructure.db.models.assets import ModulePlan, PageCheck
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
@@ -333,16 +334,24 @@ def queued_mismatched_published_run_check_job(db_session, seeded_published_job_f
 
 @pytest.fixture
 def job_runner(db_session):
+    from app.domains.control_plane.repository import SqlControlPlaneRepository
+    from app.domains.control_plane.service import ControlPlaneService
     from app.domains.runner_service.service import RunnerService
     from app.jobs.run_check_job import RunCheckJobHandler
+    from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 
     runner_service = RunnerService(session=db_session, runtime=FakeRuntime())
+    control_plane_service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(db_session),
+        dispatcher=SqlQueueDispatcher(db_session),
+    )
     return WorkerRunner(
         session=db_session,
         handlers={
             RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
                 session=db_session,
                 runner_service=runner_service,
+                control_plane_service=control_plane_service,
             )
         },
     )
@@ -445,6 +454,37 @@ async def test_run_check_job_uses_runner_result_page_check_id_for_realtime_probe
     assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_job_with_stale_page_check_id.id)
     assert refreshed.result_payload["execution_track"] == "realtime_probe"
     assert refreshed.result_payload["page_check_id"] is None
+
+
+@pytest.mark.anyio
+async def test_run_check_job_persists_realtime_probe_feedback_after_success(
+    job_runner,
+    queued_realtime_probe_job,
+    db_session,
+):
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_realtime_probe_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+
+    execution_plan = db_session.get(ExecutionPlan, UUID(refreshed.payload["execution_plan_id"]))
+    assert execution_plan is not None
+    execution_request = db_session.get(ExecutionRequest, execution_plan.execution_request_id)
+    assert execution_request is not None
+    page_asset = db_session.get(PageAsset, execution_plan.resolved_page_asset_id)
+    assert page_asset is not None
+
+    alias = db_session.exec(
+        select(IntentAlias)
+        .where(IntentAlias.source == "realtime_probe")
+        .where(IntentAlias.system_alias == execution_request.system_hint)
+        .where(IntentAlias.page_alias == execution_request.page_hint)
+        .where(IntentAlias.check_alias == execution_request.check_goal)
+        .where(IntentAlias.asset_key == page_asset.asset_key)
+    ).one()
+
+    assert alias.route_hint == "/users"
 
 
 @pytest.mark.anyio
