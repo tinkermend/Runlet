@@ -6,14 +6,11 @@ import { DashboardPage } from "../features/dashboard/pages/dashboard-page";
 import { SystemListPage } from "../features/systems/pages/system-list-page";
 import { SystemOnboardingPage } from "../features/systems/pages/system-onboarding-page";
 import { RunResultsPage } from "../features/results/pages/run-results-page";
-
-// Placeholder pages - will be replaced in later tasks
-function TasksPage() {
-  return <h1>检查任务</h1>;
-}
-function AssetsPage() {
-  return <h1>采集资产</h1>;
-}
+import { TaskListPage } from "../features/tasks/pages/task-list-page";
+import { TaskCreatePage } from "../features/tasks/pages/task-create-page";
+import { TaskDetailPage } from "../features/tasks/pages/task-detail-page";
+import { AssetBrowserPage } from "../features/assets/pages/asset-browser-page";
+import { AssetDetailPage } from "../features/assets/pages/asset-detail-page";
 
 export const routes = [
   {
@@ -28,8 +25,11 @@ export const routes = [
         children: [
           { path: "/", element: <Navigate to="/dashboard" replace /> },
           { path: "/dashboard", element: <DashboardPage /> },
-          { path: "/tasks", element: <TasksPage /> },
-          { path: "/assets", element: <AssetsPage /> },
+          { path: "/tasks", element: <TaskListPage /> },
+          { path: "/tasks/new", element: <TaskCreatePage /> },
+          { path: "/tasks/:id", element: <TaskDetailPage /> },
+          { path: "/assets", element: <AssetBrowserPage /> },
+          { path: "/assets/:id", element: <AssetDetailPage /> },
           { path: "/systems", element: <SystemListPage /> },
           { path: "/systems/new", element: <SystemOnboardingPage /> },
           { path: "/results", element: <RunResultsPage /> },

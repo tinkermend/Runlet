@@ -36,3 +36,57 @@ export interface PaginatedResults {
   page: number;
   page_size: number;
 }
+
+export interface TaskItem {
+  id: number;
+  name: string;
+  system_name: string;
+  status: string; // running / idle / failed / disabled
+  last_run_at: string | null;
+  last_run_status: string | null;
+  schedule_preset: string;
+}
+
+export interface TaskDetail {
+  id: number;
+  name: string;
+  system_name: string;
+  status: string;
+  schedule_preset: string;
+  check_types: string[];
+  recent_runs: RunResultItem[];
+}
+
+export interface WizardOptions {
+  systems: SystemItem[];
+  check_types: string[];
+}
+
+export interface AssetItem {
+  id: number;
+  check_type_label: string;
+  version: string;
+  status: string;
+}
+
+export interface PageGroup {
+  page_name: string;
+  assets: AssetItem[];
+}
+
+export interface SystemAssetGroup {
+  system_id: number;
+  system_name: string;
+  pages: PageGroup[];
+}
+
+export interface AssetDetail {
+  id: number;
+  page_name: string;
+  system_name: string;
+  check_type_label: string;
+  version: string;
+  status: string;
+  collected_at: string | null;
+  raw_facts: Record<string, unknown> | null;
+}
