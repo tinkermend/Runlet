@@ -418,6 +418,113 @@ class PlaywrightBrowserFactory:
   ];
 }
 """
+    _STATE_PROBE_EXECUTE_ACTION_SCRIPT = """
+(action) => {
+  const __RUNLET_STATE_PROBE_EXECUTE__ = true;
+  const normalizedAction = action && typeof action === "object" ? action : {};
+  const entryType = String(normalizedAction.entry_type || normalizedAction.interaction_type || "").trim().toLowerCase();
+  const stateContext = normalizedAction.state_context && typeof normalizedAction.state_context === "object"
+    ? normalizedAction.state_context
+    : {};
+
+  const visible = (node) => {
+    if (!(node instanceof HTMLElement)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && rect.width > 0
+      && rect.height > 0;
+  };
+  const textOf = (node) =>
+    String(node?.getAttribute?.("aria-label") || node?.textContent || "").trim().toLowerCase();
+  const normalizeText = (value) => String(value || "").trim().toLowerCase();
+  const normalizeNumber = (value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return String(Math.trunc(value));
+    if (typeof value === "string" && /^\\d+$/.test(value.trim())) return value.trim();
+    return "";
+  };
+  const clickFirst = (nodes, matcher) => {
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement) || !visible(node)) continue;
+      if (!matcher(node)) continue;
+      node.click();
+      return true;
+    }
+    return false;
+  };
+
+  let applied = false;
+  let reason = null;
+  const tabTarget = normalizeText(stateContext.active_tab || normalizedAction.target_text || normalizedAction.label);
+  const modalTarget = normalizeText(stateContext.modal_title || normalizedAction.target_text || normalizedAction.label);
+  const drawerTarget = normalizeText(stateContext.drawer_title || normalizedAction.target_text || normalizedAction.label);
+  const viewTarget = normalizeText(stateContext.view_mode || normalizedAction.target_text || normalizedAction.label);
+  const pageNumberTarget = normalizeNumber(stateContext.page_number || stateContext.page || stateContext.page_index);
+
+  if (entryType === "tab_switch") {
+    const tabNodes = Array.from(document.querySelectorAll(
+      '[role="tab"], .el-tabs__item, .ant-tabs-tab, .n-tabs-tab, [data-tab]'
+    ));
+    applied = clickFirst(tabNodes, (node) => {
+      const text = textOf(node);
+      if (!tabTarget) return node.getAttribute("aria-selected") !== "true";
+      return text.includes(tabTarget);
+    });
+  } else if (entryType === "open_modal" || entryType === "open_drawer") {
+    const target = entryType === "open_drawer" ? drawerTarget : modalTarget;
+    const triggerNodes = Array.from(document.querySelectorAll(
+      'button, [role="button"], [aria-haspopup="dialog"], [data-action], .ant-btn, .el-button'
+    ));
+    const defaultKeywords = ["新增", "新建", "创建", "添加", "open", "new", "create", "add", "drawer", "modal"];
+    applied = clickFirst(triggerNodes, (node) => {
+      const text = textOf(node);
+      if (target && text.includes(target)) return true;
+      return defaultKeywords.some((keyword) => text.includes(keyword.toLowerCase()));
+    });
+  } else if (entryType === "toggle_view") {
+    const nodes = Array.from(document.querySelectorAll(
+      'button, [role="button"], [data-view-mode], .ant-segmented-item, .el-radio-button'
+    ));
+    applied = clickFirst(nodes, (node) => {
+      const text = textOf(node);
+      if (viewTarget) return text.includes(viewTarget);
+      return text.includes("列表") || text.includes("表格") || text.includes("卡片")
+        || text.includes("list") || text.includes("table") || text.includes("grid") || text.includes("card");
+    });
+  } else if (entryType === "paginate_probe") {
+    const nodes = Array.from(document.querySelectorAll(
+      '[role="button"], button, a, li, .ant-pagination-item, .el-pager li, .pagination *'
+    ));
+    applied = clickFirst(nodes, (node) => {
+      const text = textOf(node);
+      if (pageNumberTarget) return text === pageNumberTarget || text.includes(`page ${pageNumberTarget}`);
+      return text.includes("下一页") || text.includes("next");
+    });
+  } else if (entryType === "expand_panel" || entryType === "tree_expand") {
+    const nodes = Array.from(document.querySelectorAll(
+      '[aria-expanded="false"], [role="button"], .el-collapse-item__header, .ant-collapse-header, .tree-node'
+    ));
+    applied = clickFirst(nodes, (node) => {
+      const ariaExpanded = node.getAttribute("aria-expanded");
+      if (ariaExpanded === "false") return true;
+      const text = textOf(node);
+      return text.includes("展开") || text.includes("expand") || text.includes("更多");
+    });
+  } else {
+    reason = "unsupported_action";
+  }
+
+  if (!applied && reason === null) {
+    reason = "action_not_applied";
+  }
+  return {
+    applied,
+    reason,
+    entry_type: entryType,
+  };
+}
+"""
     _STATE_PROBE_MODAL_KEYWORDS = ("新增", "新建", "创建", "添加", "add", "new", "create")
     _STATE_PROBE_VIEW_KEYWORDS = ("列表", "卡片", "视图", "table", "grid", "list", "card")
 
@@ -605,40 +712,20 @@ class PlaywrightBrowserFactory:
                 *,
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
-                del crawl_scope
                 await self_nonlocal._ensure_settled()
-                menu_nodes = await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
-                dom_elements = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
-
-                normalized_menu_nodes = [item for item in menu_nodes if isinstance(item, dict)] if isinstance(menu_nodes, list) else []
-                normalized_dom_elements = [
-                    item for item in dom_elements if isinstance(item, dict)
-                ] if isinstance(dom_elements, list) else []
+                dom_elements = await self_nonlocal.collect_dom_elements(crawl_scope=crawl_scope)
+                normalized_dom_elements = [item for item in dom_elements if isinstance(item, dict)]
 
                 action_candidates: list[dict[str, object]] = []
                 seen_actions: set[str] = set()
-                for node in normalized_menu_nodes:
-                    role = self_nonlocal._clean_text(node.get("role"))
-                    label = self_nonlocal._clean_text(node.get("label") or node.get("text") or node.get("name"))
-                    route_path = self_nonlocal._normalize_path(node.get("page_route_path") or node.get("route_path"))
-                    if route_path is None:
-                        continue
-                    if role == "tab" and label is not None:
-                        action = {
-                            "route_path": route_path,
-                            "entry_type": "tab_switch",
-                            "state_context": {"active_tab": label.lower()},
-                        }
-                        self_nonlocal._append_unique_action(
-                            action_candidates=action_candidates,
-                            seen_actions=seen_actions,
-                            action=action,
-                        )
+                discovered_routes: set[str] = set()
+                route_action_counts: dict[str, int] = {}
 
                 for element in normalized_dom_elements:
                     route_path = self_nonlocal._normalize_path(element.get("page_route_path") or element.get("route_path"))
                     if route_path is None:
                         continue
+                    discovered_routes.add(route_path)
                     role = self_nonlocal._clean_text(element.get("role"))
                     element_type = self_nonlocal._clean_text(element.get("element_type"))
                     text = self_nonlocal._clean_text(element.get("text") or element.get("element_text")) or ""
@@ -654,6 +741,7 @@ class PlaywrightBrowserFactory:
                             seen_actions=seen_actions,
                             action=action,
                         )
+                        route_action_counts[route_path] = route_action_counts.get(route_path, 0) + 1
                     if element_type == "button" and any(
                         keyword in lower_text for keyword in PlaywrightBrowserFactory._STATE_PROBE_MODAL_KEYWORDS
                     ):
@@ -667,6 +755,7 @@ class PlaywrightBrowserFactory:
                             seen_actions=seen_actions,
                             action=action,
                         )
+                        route_action_counts[route_path] = route_action_counts.get(route_path, 0) + 1
                     if text.isdigit():
                         action = {
                             "route_path": route_path,
@@ -678,6 +767,7 @@ class PlaywrightBrowserFactory:
                             seen_actions=seen_actions,
                             action=action,
                         )
+                        route_action_counts[route_path] = route_action_counts.get(route_path, 0) + 1
                     if element_type == "button" and any(
                         keyword in lower_text for keyword in PlaywrightBrowserFactory._STATE_PROBE_VIEW_KEYWORDS
                     ):
@@ -691,43 +781,29 @@ class PlaywrightBrowserFactory:
                             seen_actions=seen_actions,
                             action=action,
                         )
+                        route_action_counts[route_path] = route_action_counts.get(route_path, 0) + 1
 
-                if not action_candidates:
-                    normalized_current_path: str | None = None
-                    for node in normalized_menu_nodes:
-                        normalized_current_path = self_nonlocal._normalize_path(
-                            node.get("page_route_path") or node.get("route_path")
-                        )
-                        if normalized_current_path is not None:
-                            break
-                    if normalized_current_path is None:
-                        for element in normalized_dom_elements:
-                            normalized_current_path = self_nonlocal._normalize_path(
-                                element.get("page_route_path") or element.get("route_path")
-                            )
-                            if normalized_current_path is not None:
-                                break
-                    if normalized_current_path is None:
-                        route_hints = await self_nonlocal.collect_route_hints(crawl_scope="current")
-                        for hint in route_hints:
-                            if not isinstance(hint, dict):
-                                continue
-                            normalized_current_path = self_nonlocal._normalize_path(
-                                hint.get("path") or hint.get("route_path")
-                            )
-                            if normalized_current_path is not None:
-                                break
+                if not discovered_routes:
+                    route_hints = await self_nonlocal.collect_route_hints(crawl_scope="current")
+                    for hint in route_hints:
+                        if not isinstance(hint, dict):
+                            continue
+                        normalized_route = self_nonlocal._normalize_path(hint.get("path") or hint.get("route_path"))
+                        if normalized_route is not None:
+                            discovered_routes.add(normalized_route)
 
-                    if normalized_current_path is not None:
+                for route_path in sorted(discovered_routes):
+                    if route_action_counts.get(route_path, 0) == 0:
                         self_nonlocal._append_unique_action(
                             action_candidates=action_candidates,
                             seen_actions=seen_actions,
                             action={
-                                "route_path": normalized_current_path,
+                                "route_path": route_path,
                                 "entry_type": "tab_switch",
                                 "state_context": {"active_tab": "default"},
                             },
                         )
+                        route_action_counts[route_path] = 1
                 return action_candidates
 
             async def perform_state_probe_action(
@@ -748,8 +824,23 @@ class PlaywrightBrowserFactory:
                     await self_nonlocal._wait_for_route_render()
                     await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
                 else:
-                    current_path = await page.evaluate("() => window.location.pathname")
-                    route_path = self_nonlocal._normalize_path(current_path) or "/"
+                    route_hints = await self_nonlocal.collect_route_hints(crawl_scope="current")
+                    route_path = "/"
+                    for hint in route_hints:
+                        if not isinstance(hint, dict):
+                            continue
+                        normalized_path = self_nonlocal._normalize_path(hint.get("path") or hint.get("route_path"))
+                        if normalized_path is not None:
+                            route_path = normalized_path
+                            break
+
+                execution_result = await self_nonlocal._evaluate_with_optional_arg(
+                    PlaywrightBrowserFactory._STATE_PROBE_EXECUTE_ACTION_SCRIPT,
+                    action,
+                )
+                if isinstance(execution_result, dict) and execution_result.get("applied"):
+                    await self_nonlocal._wait_for_route_render()
+                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
 
                 collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
                 elements = [item for item in collected if isinstance(item, dict)] if isinstance(collected, list) else []
@@ -761,6 +852,21 @@ class PlaywrightBrowserFactory:
                     "state_context": state_context,
                     "elements": elements,
                 }
+
+            async def _evaluate_with_optional_arg(
+                self_nonlocal,
+                script: str,
+                arg: dict[str, object],
+            ):
+                try:
+                    return await page.evaluate(script, arg)
+                except TypeError:
+                    try:
+                        return await page.evaluate(script)
+                    except Exception:
+                        return {"applied": False, "reason": "action_execution_not_supported"}
+                except Exception:
+                    return {"applied": False, "reason": "action_execution_not_supported"}
 
             def _append_unique_action(
                 self_nonlocal,
@@ -1002,12 +1108,12 @@ class CrawlerService:
         dom_elements: list[ElementCandidate],
         probe_elements: list[ElementCandidate],
     ) -> list[ElementCandidate]:
-        merged: dict[tuple[str, str], ElementCandidate] = {}
-        ordered_keys: list[tuple[str, str]] = []
+        merged: dict[str, ElementCandidate] = {}
+        ordered_keys: list[str] = []
         for candidate in [*dom_elements, *probe_elements]:
             if not candidate.state_signature:
                 continue
-            key = (candidate.page_route_path, candidate.state_signature)
+            key = self._build_representative_element_key(candidate)
             existing = merged.get(key)
             if existing is None:
                 merged[key] = candidate
@@ -1032,6 +1138,20 @@ class CrawlerService:
                 }
             )
         return [merged[key] for key in ordered_keys]
+
+    def _build_representative_element_key(self, candidate: ElementCandidate) -> str:
+        locator_candidates = self._merge_locator_candidates(candidate.locator_candidates, [])
+        payload = {
+            "page_route_path": candidate.page_route_path,
+            "state_signature": candidate.state_signature,
+            "element_type": candidate.element_type,
+            "element_role": candidate.element_role,
+            "element_text": candidate.element_text,
+            "playwright_locator": candidate.playwright_locator,
+            "locator_candidates": locator_candidates,
+            "attributes": candidate.attributes or {},
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     def _merge_dict(
         self,

@@ -186,6 +186,122 @@ class FakeCrawlerPlaywright:
         self.stopped = True
 
 
+class StateProbeAwareFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.settled = False
+        self.current_url = "about:blank"
+        self.current_route = "/dashboard"
+        self.active_states: dict[str, str] = {}
+        self.executed_probe_actions: list[str] = []
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+        if "//" in url:
+            path = "/" + url.split("//", 1)[1].split("/", 1)[1] if "/" in url.split("//", 1)[1] else "/"
+            self.current_route = path
+
+    async def evaluate(self, script: str, *args):
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [
+                {"path": "/dashboard", "title": "仪表盘"},
+                {"path": "/users", "title": "用户管理"},
+            ]
+        if "__RUNLET_MENU_NODES__" in script:
+            if self.current_route == "/users":
+                return [
+                    {"label": "用户管理", "route_path": "/users", "role": "menuitem"},
+                    {"label": "禁用用户", "route_path": "/users", "role": "tab"},
+                ]
+            return [{"label": "仪表盘", "route_path": "/dashboard", "role": "menuitem"}]
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            if self.current_route == "/dashboard":
+                return [
+                    {
+                        "page_route_path": "/dashboard",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ]
+            state = self.active_states.get("/users", "default")
+            if state == "tab=disabled":
+                return [
+                    {
+                        "page_route_path": "/users",
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "禁用用户列表",
+                    }
+                ]
+            if state == "modal=create":
+                return [
+                    {
+                        "page_route_path": "/users",
+                        "element_type": "input",
+                        "role": "textbox",
+                        "text": "新增用户表单",
+                    }
+                ]
+            if state == "page=2":
+                return [
+                    {
+                        "page_route_path": "/users",
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "第2页用户列表",
+                    }
+                ]
+            return [
+                {
+                    "page_route_path": "/users",
+                    "element_type": "table",
+                    "role": "grid",
+                    "text": "默认用户列表",
+                },
+                {
+                    "page_route_path": "/users",
+                    "element_type": "button",
+                    "role": "button",
+                    "text": "新增用户",
+                },
+                {
+                    "page_route_path": "/users",
+                    "element_type": "button",
+                    "role": "button",
+                    "text": "2",
+                },
+            ]
+        if "__RUNLET_STATE_PROBE_EXECUTE__" in script:
+            action = args[0] if args else {}
+            if not isinstance(action, dict):
+                action = {}
+            entry_type = str(action.get("entry_type") or "")
+            self.executed_probe_actions.append(entry_type)
+            context = action.get("state_context")
+            if not isinstance(context, dict):
+                context = {}
+            if entry_type == "tab_switch":
+                self.active_states["/users"] = f"tab={context.get('active_tab', 'default')}"
+            if entry_type == "open_modal":
+                self.active_states["/users"] = f"modal={context.get('modal_title', 'create')}"
+            if entry_type == "paginate_probe":
+                self.active_states["/users"] = f"page={context.get('page_number', 1)}"
+            return {"applied": True}
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def install_fake_crawler_async_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[
@@ -196,6 +312,32 @@ def install_fake_crawler_async_api(
     FakeCrawlerPlaywright,
 ]:
     page = FakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
+def install_state_probe_aware_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    StateProbeAwareFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = StateProbeAwareFakeCrawlerPage()
     context = FakeCrawlerContext(page)
     browser = FakeCrawlerBrowser(context)
     chromium = FakeCrawlerChromium(browser)
@@ -835,6 +977,76 @@ async def test_playwright_browser_factory_session_exposes_controlled_state_probe
 
 
 @pytest.mark.anyio
+async def test_playwright_browser_factory_state_probe_executes_real_action_specific_states(monkeypatch):
+    page, context, browser, chromium, playwright = install_state_probe_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    tab_result = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "tab_switch",
+            "state_context": {"active_tab": "disabled"},
+        },
+        crawl_scope="full",
+    )
+    modal_result = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "open_modal",
+            "state_context": {"modal_title": "create"},
+        },
+        crawl_scope="full",
+    )
+    pagination_result = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "paginate_probe",
+            "state_context": {"page_number": 2},
+        },
+        crawl_scope="full",
+    )
+    await session.close()
+
+    assert any(item.get("text") == "禁用用户列表" for item in tab_result["elements"])
+    assert any(item.get("text") == "新增用户表单" for item in modal_result["elements"])
+    assert any(item.get("text") == "第2页用户列表" for item in pagination_result["elements"])
+    assert page.executed_probe_actions == ["tab_switch", "open_modal", "paginate_probe"]
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_state_probe_actions_include_non_current_discovered_routes(monkeypatch):
+    page, context, browser, chromium, playwright = install_state_probe_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    actions = await session.collect_state_probe_actions(crawl_scope="full")
+    await session.close()
+
+    assert any(action.get("route_path") == "/users" for action in actions)
+    assert any(action.get("entry_type") in {"tab_switch", "open_modal", "paginate_probe"} for action in actions)
+    assert any(call[0].endswith("/users") for call in page.goto_calls)
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
 async def test_playwright_browser_factory_metadata_reports_current_page_only(monkeypatch):
     page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
     factory = PlaywrightBrowserFactory()
@@ -1010,3 +1222,62 @@ async def test_run_crawl_merges_probe_and_dom_stateful_elements_instead_of_repla
     assert result.elements_saved == 2
     elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
     assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_preserves_multiple_elements_under_same_state_signature(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(pages=[PageCandidate(route_path="/users", page_title="用户管理")]),
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")])
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:tab=disabled",
+                    state_context={"active_tab": "disabled"},
+                    element_role="button",
+                    element_text="启用用户",
+                    playwright_locator="role=button[name='启用用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='启用用户']"},
+                    ],
+                ),
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:tab=disabled",
+                    state_context={"active_tab": "disabled"},
+                    element_role="button",
+                    element_text="批量恢复",
+                    playwright_locator="role=button[name='批量恢复']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='批量恢复']"},
+                    ],
+                ),
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 2
+    elements = db_session.exec(select(PageElement).order_by(PageElement.element_text, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:tab=disabled", "users:tab=disabled"]
+    assert [element.element_text for element in elements] == ["启用用户", "批量恢复"]
