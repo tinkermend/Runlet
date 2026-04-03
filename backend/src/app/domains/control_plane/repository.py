@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID
 
@@ -25,7 +26,7 @@ from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionReque
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.infrastructure.db.models.systems import System
-from app.shared.enums import AssetStatus, RuntimePolicyState
+from app.shared.enums import AssetLifecycleStatus, AssetStatus, RuntimePolicyState
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,19 @@ class PageCheckRunTarget:
     system: System
     page_asset: PageAsset
     page_check: PageCheck
+
+
+@dataclass(frozen=True)
+class PageCheckLookup:
+    system: System
+    page_asset: PageAsset
+    page_check: PageCheck
+
+
+@dataclass(frozen=True)
+class RetiredResolutionTarget:
+    page_asset: PageAsset
+    page_check: PageCheck | None = None
 
 
 class ControlPlaneRepository(Protocol):
@@ -107,11 +121,34 @@ class ControlPlaneRepository(Protocol):
         page_check_id: UUID,
     ) -> PageCheckRunTarget | None: ...
 
+    async def get_page_check_lookup(
+        self,
+        *,
+        page_check_id: UUID,
+    ) -> PageCheckLookup | None: ...
+
+    async def resolve_retired_page_asset_or_check(
+        self,
+        *,
+        system_hint: str,
+        system_id: UUID | None,
+        page_hint: str | None,
+        check_goal: str,
+    ) -> RetiredResolutionTarget | None: ...
+
     async def get_page_asset_checks(
         self,
         *,
         page_asset_id: UUID,
     ) -> PageAssetChecksList | None: ...
+
+    async def disable_aliases_from_compiler_decisions(
+        self,
+        *,
+        alias_ids: list[UUID],
+        snapshot_id: UUID,
+        reason: str,
+    ) -> int: ...
 
     async def commit(self) -> None: ...
 
@@ -309,6 +346,8 @@ class SqlControlPlaneRepository:
                 select(PageAsset)
                 .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
                 .where(PageAsset.status == AssetStatus.SAFE)
+                .where(PageAsset.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+                .where(IntentAlias.is_active.is_(True))
                 .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
                 .where(func.lower(IntentAlias.check_alias) == normalized_goal)
                 .where(
@@ -322,10 +361,16 @@ class SqlControlPlaneRepository:
 
             page_asset = await self._exec_first(asset_statement)
             if page_asset is not None:
-                check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
-                    (func.lower(PageCheck.goal) == normalized_goal)
-                    | (func.lower(PageCheck.check_code) == normalized_goal)
-                ).order_by(PageCheck.id)
+                check_statement = (
+                    select(PageCheck)
+                    .where(PageCheck.page_asset_id == page_asset.id)
+                    .where(PageCheck.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+                    .where(
+                        (func.lower(PageCheck.goal) == normalized_goal)
+                        | (func.lower(PageCheck.check_code) == normalized_goal)
+                    )
+                    .order_by(PageCheck.id)
+                )
                 page_check = await self._exec_first(check_statement)
                 return page_asset, page_check
 
@@ -338,6 +383,7 @@ class SqlControlPlaneRepository:
             .join(Page, Page.id == PageAsset.page_id)
             .where(PageAsset.system_id == system_id)
             .where(PageAsset.status == AssetStatus.SAFE)
+            .where(PageAsset.lifecycle_status == AssetLifecycleStatus.ACTIVE)
             .where(
                 (func.lower(Page.page_title) == normalized_page_hint)
                 | (func.lower(Page.route_path) == normalized_page_hint)
@@ -349,12 +395,103 @@ class SqlControlPlaneRepository:
         if page_asset is None:
             return None, None
 
-        check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
-            (func.lower(PageCheck.goal) == normalized_goal)
-            | (func.lower(PageCheck.check_code) == normalized_goal)
-        ).order_by(PageCheck.id)
+        check_statement = (
+            select(PageCheck)
+            .where(PageCheck.page_asset_id == page_asset.id)
+            .where(PageCheck.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+            .where(
+                (func.lower(PageCheck.goal) == normalized_goal)
+                | (func.lower(PageCheck.check_code) == normalized_goal)
+            )
+            .order_by(PageCheck.id)
+        )
         page_check = await self._exec_first(check_statement)
         return page_asset, page_check
+
+    async def resolve_retired_page_asset_or_check(
+        self,
+        *,
+        system_hint: str,
+        system_id: UUID | None,
+        page_hint: str | None,
+        check_goal: str,
+    ) -> RetiredResolutionTarget | None:
+        if page_hint is None:
+            return None
+
+        normalized_system_hint = system_hint.strip().lower()
+        normalized_goal = check_goal.strip().lower()
+        normalized_page_hint = page_hint.strip().lower()
+
+        alias_statement = (
+            select(PageAsset)
+            .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
+            .where(PageAsset.status == AssetStatus.SAFE)
+            .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
+            .where(func.lower(IntentAlias.check_alias) == normalized_goal)
+            .where(
+                (func.lower(IntentAlias.page_alias) == normalized_page_hint)
+                | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
+            )
+            .order_by(IntentAlias.confidence.desc(), PageAsset.asset_version.desc())
+        )
+        if system_id is not None:
+            alias_statement = alias_statement.where(PageAsset.system_id == system_id)
+
+        alias_asset = await self._exec_first(alias_statement)
+        if alias_asset is not None:
+            retired_target = await self._build_retired_resolution_target(
+                page_asset=alias_asset,
+                normalized_goal=normalized_goal,
+            )
+            if retired_target is not None:
+                return retired_target
+
+        if system_id is None:
+            return None
+
+        page_statement = (
+            select(PageAsset)
+            .join(Page, Page.id == PageAsset.page_id)
+            .where(PageAsset.system_id == system_id)
+            .where(PageAsset.status == AssetStatus.SAFE)
+            .where(
+                (func.lower(Page.page_title) == normalized_page_hint)
+                | (func.lower(Page.route_path) == normalized_page_hint)
+                | (func.lower(PageAsset.asset_key) == normalized_page_hint)
+            )
+            .order_by(PageAsset.asset_version.desc(), PageAsset.id)
+        )
+        page_asset = await self._exec_first(page_statement)
+        if page_asset is None:
+            return None
+        return await self._build_retired_resolution_target(
+            page_asset=page_asset,
+            normalized_goal=normalized_goal,
+        )
+
+    async def _build_retired_resolution_target(
+        self,
+        *,
+        page_asset: PageAsset,
+        normalized_goal: str,
+    ) -> RetiredResolutionTarget | None:
+        if page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            return RetiredResolutionTarget(page_asset=page_asset)
+
+        retired_check = await self._exec_first(
+            select(PageCheck)
+            .where(PageCheck.page_asset_id == page_asset.id)
+            .where(
+                (func.lower(PageCheck.goal) == normalized_goal)
+                | (func.lower(PageCheck.check_code) == normalized_goal)
+            )
+            .where(PageCheck.lifecycle_status != AssetLifecycleStatus.ACTIVE)
+            .order_by(PageCheck.id)
+        )
+        if retired_check is None:
+            return None
+        return RetiredResolutionTarget(page_asset=page_asset, page_check=retired_check)
 
     async def create_execution_request(
         self,
@@ -436,12 +573,35 @@ class SqlControlPlaneRepository:
             .join(System, System.id == PageAsset.system_id)
             .where(PageCheck.id == page_check_id)
             .where(PageAsset.status == AssetStatus.SAFE)
+            .where(PageAsset.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+            .where(PageCheck.lifecycle_status == AssetLifecycleStatus.ACTIVE)
         )
         row = await self._exec_first(statement)
         if row is None:
             return None
         page_check, page_asset, system = row
         return PageCheckRunTarget(
+            system=system,
+            page_asset=page_asset,
+            page_check=page_check,
+        )
+
+    async def get_page_check_lookup(
+        self,
+        *,
+        page_check_id: UUID,
+    ) -> PageCheckLookup | None:
+        statement = (
+            select(PageCheck, PageAsset, System)
+            .join(PageAsset, PageAsset.id == PageCheck.page_asset_id)
+            .join(System, System.id == PageAsset.system_id)
+            .where(PageCheck.id == page_check_id)
+        )
+        row = await self._exec_first(statement)
+        if row is None:
+            return None
+        page_check, page_asset, system = row
+        return PageCheckLookup(
             system=system,
             page_asset=page_asset,
             page_check=page_check,
@@ -472,10 +632,50 @@ class SqlControlPlaneRepository:
                     goal=check.goal,
                     module_plan_id=check.module_plan_id,
                     status=page_asset.status.value,
+                    drift_status=page_asset.drift_status.value,
+                    lifecycle_status=check.lifecycle_status.value,
                 )
                 for check in checks
             ],
         )
+
+    async def disable_aliases_from_compiler_decisions(
+        self,
+        *,
+        alias_ids: list[UUID],
+        snapshot_id: UUID,
+        reason: str,
+    ) -> int:
+        if not alias_ids:
+            return 0
+
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ValueError("reason must not be empty")
+
+        statement = (
+            select(IntentAlias)
+            .where(IntentAlias.id.in_(alias_ids))
+            .where(IntentAlias.is_active.is_(True))
+            .with_for_update()
+            .order_by(IntentAlias.id)
+        )
+        aliases = await self._exec_all(statement)
+        if not aliases:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        changed = 0
+        for alias in aliases:
+            alias.is_active = False
+            alias.disabled_reason = normalized_reason
+            alias.disabled_at = now
+            alias.disabled_by_snapshot_id = snapshot_id
+            self.session.add(alias)
+            changed += 1
+
+        await self._flush()
+        return changed
 
     async def commit(self) -> None:
         if isinstance(self.session, AsyncSession):

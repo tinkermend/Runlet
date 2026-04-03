@@ -217,3 +217,24 @@ async def test_published_job_service_matches_cron_weekday_mapping(
     assert triggered is True
     assert len(db_session.exec(select(JobRun)).all()) == 1
     assert len(db_session.exec(select(QueuedJob)).all()) == 1
+
+
+@pytest.mark.anyio
+async def test_pause_jobs_for_retired_page_check_marks_published_jobs_paused(
+    published_job_service,
+    seeded_published_job,
+    seeded_snapshot,
+    db_session,
+):
+    paused = await published_job_service.pause_jobs_for_retired_page_check(
+        page_check_id=seeded_published_job.page_check_id,
+        snapshot_id=seeded_snapshot.id,
+        reason="asset_retired_missing",
+    )
+
+    db_session.refresh(seeded_published_job)
+    assert paused == 1
+    assert seeded_published_job.state == "paused"
+    assert seeded_published_job.pause_reason == "asset_retired_missing"
+    assert seeded_published_job.paused_by_snapshot_id == seeded_snapshot.id
+    assert seeded_published_job.paused_by_page_check_id == seeded_published_job.page_check_id

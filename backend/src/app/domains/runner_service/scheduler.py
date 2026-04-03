@@ -203,6 +203,34 @@ class PublishedJobService:
         )
         return True
 
+    async def pause_jobs_for_retired_page_check(
+        self,
+        *,
+        page_check_id: UUID,
+        snapshot_id: UUID,
+        reason: str,
+    ) -> int:
+        normalized_reason = _validate_required_text(reason)
+        statement = (
+            select(PublishedJob)
+            .where(PublishedJob.page_check_id == page_check_id)
+            .where(PublishedJob.state == PublishedJobState.ACTIVE)
+            .with_for_update()
+        )
+        jobs = await self._exec_all(statement)
+        if not jobs:
+            return 0
+
+        for job in jobs:
+            job.state = PublishedJobState.PAUSED
+            job.pause_reason = normalized_reason
+            job.paused_by_snapshot_id = snapshot_id
+            job.paused_by_page_check_id = page_check_id
+            self.session.add(job)
+
+        await self._commit()
+        return len(jobs)
+
     async def _lock_published_job(self, *, published_job_id: UUID) -> PublishedJob | None:
         statement = select(PublishedJob).where(PublishedJob.id == published_job_id).with_for_update()
         return await self._exec_first(statement)

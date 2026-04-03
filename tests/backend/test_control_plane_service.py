@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 from sqlmodel import select
 
 from app.domains.control_plane.repository import SqlControlPlaneRepository
@@ -9,7 +10,7 @@ from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionReque
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.systems import System
 from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
-from app.shared.enums import AssetStatus
+from app.shared.enums import AssetLifecycleStatus, AssetStatus
 
 
 @pytest.mark.anyio
@@ -233,3 +234,73 @@ async def test_submit_check_request_prefers_safe_high_confidence_asset(
     assert plan.resolved_page_asset_id == ready_asset.id
     assert plan.resolved_page_check_id == ready_check.id
     assert result.page_check_id == ready_check.id
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_ignores_disabled_alias_and_retired_asset(
+    control_plane_service,
+    seeded_asset,
+    seeded_page_check,
+    db_session,
+):
+    alias = db_session.exec(
+        select(IntentAlias).where(IntentAlias.asset_key == seeded_asset.asset_key)
+    ).one()
+    alias.is_active = False
+    alias.disabled_reason = "retired_missing"
+    seeded_asset.lifecycle_status = AssetLifecycleStatus.RETIRED_MISSING
+    seeded_page_check.lifecycle_status = AssetLifecycleStatus.RETIRED_MISSING
+    db_session.add(alias)
+    db_session.add(seeded_asset)
+    db_session.add(seeded_page_check)
+    db_session.commit()
+
+    with pytest.raises(HTTPException, match="asset is retired") as exc_info:
+        await control_plane_service.submit_check_request(
+            system_hint="ERP",
+            page_hint="用户管理",
+            check_goal="table_render",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert db_session.exec(select(ExecutionRequest)).all() == []
+    assert db_session.exec(select(ExecutionPlan)).all() == []
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+@pytest.mark.anyio
+async def test_apply_reconciliation_cascades_disables_aliases_and_pauses_published_jobs(
+    control_plane_service,
+    seeded_asset,
+    seeded_page_check,
+    seeded_snapshot,
+    seeded_published_job,
+    db_session,
+):
+    alias = db_session.exec(
+        select(IntentAlias).where(IntentAlias.asset_key == seeded_asset.asset_key)
+    ).one()
+
+    result = await control_plane_service.apply_reconciliation_cascades(
+        snapshot_id=seeded_snapshot.id,
+        alias_ids_to_disable=[alias.id],
+        retired_page_check_ids=[seeded_page_check.id],
+        alias_disable_decision_count=1,
+        published_job_pause_decision_count=1,
+    )
+
+    db_session.refresh(alias)
+    db_session.refresh(seeded_published_job)
+
+    assert result.alias_disable_decision_count == 1
+    assert result.published_job_pause_decision_count == 1
+    assert result.aliases_disabled == 1
+    assert result.published_jobs_paused == 1
+
+    assert alias.is_active is False
+    assert alias.disabled_reason == "retired_missing"
+    assert alias.disabled_by_snapshot_id == seeded_snapshot.id
+    assert seeded_published_job.state == "paused"
+    assert seeded_published_job.pause_reason == "asset_retired_missing"
+    assert seeded_published_job.paused_by_snapshot_id == seeded_snapshot.id
+    assert seeded_published_job.paused_by_page_check_id == seeded_page_check.id

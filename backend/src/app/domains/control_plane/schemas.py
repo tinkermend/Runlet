@@ -114,6 +114,8 @@ class PageAssetCheckItem(BaseModel):
     goal: str
     module_plan_id: UUID | None = None
     status: str
+    drift_status: str
+    lifecycle_status: str
 
 
 class PageAssetChecksList(BaseModel):
@@ -230,3 +232,11 @@ class CompileAssetsAccepted(BaseModel):
     job_id: UUID
     status: str = "accepted"
     job_type: str = "asset_compile"
+
+
+class ReconciliationCascadeApplied(BaseModel):
+    snapshot_id: UUID
+    alias_disable_decision_count: int = 0
+    published_job_pause_decision_count: int = 0
+    aliases_disabled: int = 0
+    published_jobs_paused: int = 0
