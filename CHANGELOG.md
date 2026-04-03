@@ -7,6 +7,18 @@
 
 - 新增 Vue/React Web 系统采集完整性增强实施计划，按事实层扩展、页面发现、状态探测、locator bundle 编译、runner telemetry 与回归验收六个任务拆解后端落地步骤。
 - 新增 Vue/React Web 系统采集完整性增强设计文档，明确以“页面发现高召回 + 状态探测高精度”为核心策略，补充受控交互采集、多重定位证据与 locator bundle 资产化方案，并定义完整性指标与验收口径。
+- 新增 `openweb web-system add/remove` CLI：`add` 现在支持从 YAML 清单加载 Web 测试系统配置并同步调用后端 `SystemAdminService` 完成正式接入；`remove` 同时支持 `--file` 与 `--system-code` 解析删除目标，并输出接入/清理结果摘要。CLI 运行时同时显式依赖 monorepo `backend` 包，避免纯 `uv run --project cli openweb ...` 场景下因缺少后端依赖而在命令执行时崩溃。
+- 新增 Web 系统接入 YAML 示例文档：补充 `docs/examples/web-system-manifest.example.yaml`，并在 `backend/README.md` 增加入口说明，便于后续合并到 `main` 后直接按示例编写 `add/remove` 清单。
+- 新增 CLI 侧 backend bootstrap/manifest loader：`cli` 现在会在 monorepo 内定位 `backend/src`、复用后端 `WebSystemManifest` 做 YAML 校验，并通过 `anyio.run(...)` 调用后端治理服务，保持 CLI 只做入口、不复制领域逻辑。
+- 消除 Web 系统 onboarding 的 policy setup 残留窗口：`SystemAdminService.onboard_system()` 现在先以 disabled 状态落库 auth/crawl policy，待正式链路与发布成功后再切换到清单要求的 enabled 状态；若中途任一步骤失败，仍会统一回写为 disabled，避免出现“auth policy 已调度、crawl policy 尚未完成”的半接入状态。
+- 修补 Web 系统 onboarding 失败清理：当 `auth_refresh`、`asset_compile` 或后续发布链路失败时，`SystemAdminService` 现在会通过既有 `ControlPlaneService` 将 auth/crawl runtime policy 显式切回 disabled，确保不会留下仍在 APScheduler 中激活的半接入系统。
+- 为 onboarding publish-target 选择补齐回归测试：新增覆盖“优先选择最新 active 资产”和“同版本按稳定顺序选择”的仓储测试，锁定 `page_check` 发布目标的确定性解析契约。
+- 收紧 Web 系统 onboarding 成功门禁：`SystemAdminService.onboard_system()` 现在会在 `auth_refresh` 与 `asset_compile` 两段正式链路后显式检查队列作业状态，未完成成功时立即以明确错误终止，避免认证失败后继续 crawl，以及 re-onboarding 时在 compile 失败后误发布旧 `page_check`。
+- 新增 Web 系统接入后端治理服务：补齐 `system_admin_repository/service/bootstrap`，支持按清单 upsert 系统与加密凭据、落库 auth/crawl policy、同步串行执行 `auth_refresh -> crawl -> asset_compile` 正式链路，并自动选择编译后的目标 `page_check` 发布为 `published_job`、回传 APScheduler 注册结果。
+- 收紧 crawl job 成功结果契约：成功完成采集后会把 `snapshot_id` 明确写入 `queued_jobs.result_payload`，方便 onboarding 链路精确回溯对应 compile job，并补充 onboarding/crawl 回归测试覆盖成功发布与缺失 publish target 两条路径。
+- 修复 Web 系统清单必填文本校验的类型健壮性：`required-text` helper 在收到非字符串输入时改为抛出 `ValueError`，避免 `mode="before"` 阶段出现 `AttributeError`；并新增回归测试锁定为 `ValidationError` 失败语义。
+- 收紧 Web 系统清单 DTO 合约：`system/credential/auth_policy/crawl_policy/publish` 关键必填文本字段新增空白拒绝校验，并补充凭据解密兼容回归测试（`enc:` 与不含当前 secret 前缀的 `enc-b64:` 均可解密）。
+- 新增 Web 系统清单与本地凭据加密契约：补充 `WebSystemManifest` 嵌套 DTO、`credential_crypto_secret` 配置项，以及 `LocalCredentialCrypto.encrypt/decrypt`（兼容既有 `enc:` fixture 与旧 `enc-b64` 解密），并新增对应测试覆盖 manifest 解析与加解密回环。
 - 新增 Web 测试系统接入与删除实施计划，拆分 YAML 清单建模、`.env` 密钥加密、后端系统治理服务、同步正式链路编排、彻底删除与 CLI 命令接线五个任务，为后续 `openweb web-system add/remove` 落地提供可执行步骤。
 - 新增 Web 测试系统接入与删除治理设计文档，明确以 YAML 清单驱动 `openweb web-system add/remove`，约束明文凭据仅存在于配置文件、入库前必须使用 `.env` 密钥加密，并定义系统彻底删除时对认证、采集、资产、执行、调度数据及 APScheduler 注册项的全链路清理边界。
 - 修复 `asset_compiler` 对真实采集孤儿菜单的兼容性：`build_current_snapshot_truth` 现在会对 `page_id=None` 的 `menu_nodes` 使用空值安全排序，并继续忽略无法映射到页面路由的菜单，避免 `asset_compile` 在 reconciliation 阶段因 `None/UUID` 比较抛错。

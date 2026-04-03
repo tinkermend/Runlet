@@ -20,6 +20,14 @@ cp .env.example .env
 
 本地默认数据库和 Redis 参数可参考仓库内的 `docs/base_info.md`。
 
+## Web 系统接入 YAML 示例
+
+`openweb web-system add/remove` 可直接参考以下示例清单：
+
+- `docs/examples/web-system-manifest.example.yaml`
+
+其中 `credential.username/password` 可以写明文，真正入库前会使用 `backend/.env` 中的 `credential_crypto_secret` 加密。
+
 ## 执行迁移
 
 ```bash
