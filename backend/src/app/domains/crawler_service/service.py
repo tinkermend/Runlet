@@ -48,6 +48,10 @@ class BrowserSession(Protocol):
 
     async def collect_network_route_configs(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
+    async def collect_network_resource_hints(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
+    async def collect_network_requests(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
     async def collect_page_metadata(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
     async def close(self) -> None: ...
@@ -267,6 +271,113 @@ class PlaywrightBrowserFactory:
     || visibleSelector('table, [role="grid"], .el-table, .vxe-table, .ant-table, .ivu-table, .n-data-table, .ag-root, [class*="ag-theme"]');
 }
 """
+    _NETWORK_ROUTE_CONFIGS_SCRIPT = """
+() => {
+  const __RUNLET_NETWORK_ROUTE_CONFIGS__ = true;
+  const seen = new Set();
+  const result = [];
+  const pushRoute = (value, source) => {
+    if (typeof value !== 'string') return;
+    const route = value.trim();
+    if (!route || !route.startsWith('/') || seen.has(route)) return;
+    seen.add(route);
+    result.push({ route_path: route, source });
+  };
+
+  const routeTables = [
+    window.__NEXT_DATA__?.props?.pageProps?.routes,
+    window.__INITIAL_STATE__?.router?.routes,
+    window.__VUE_ROUTER__?.options?.routes,
+    window.$router?.options?.routes,
+  ];
+
+  for (const table of routeTables) {
+    if (!Array.isArray(table)) continue;
+    for (const route of table) {
+      if (!route || typeof route !== 'object') continue;
+      pushRoute(route.path, 'network_route_config');
+      if (Array.isArray(route.children)) {
+        for (const child of route.children) {
+          if (!child || typeof child !== 'object') continue;
+          pushRoute(child.path, 'network_route_config');
+        }
+      }
+    }
+  }
+
+  return result;
+}
+"""
+    _NETWORK_RESOURCE_HINTS_SCRIPT = """
+() => {
+  const __RUNLET_NETWORK_RESOURCES__ = true;
+  const seen = new Set();
+  const result = [];
+  const routeLike = (path) => {
+    if (!path || !path.startsWith('/')) return false;
+    if (path.startsWith('/api/')) return false;
+    return !/\\.(js|mjs|css|png|jpe?g|svg|gif|ico|woff2?|map|json)(\\?.*)?$/i.test(path);
+  };
+  const pushPath = (raw) => {
+    if (typeof raw !== 'string' || !raw) return;
+    try {
+      const url = raw.startsWith('/') ? new URL(raw, window.location.origin) : new URL(raw, window.location.href);
+      const path = url.pathname;
+      if (!routeLike(path) || seen.has(path)) return;
+      seen.add(path);
+      result.push({ route_path: path, source: 'network_resource' });
+    } catch {
+      return;
+    }
+  };
+
+  for (const entry of performance.getEntriesByType('resource')) {
+    if (!entry || typeof entry.name !== 'string') continue;
+    pushPath(entry.name);
+  }
+
+  const preloadNodes = document.querySelectorAll("link[rel='prefetch'][href], link[rel='prerender'][href], link[rel='preload'][href]");
+  for (const node of Array.from(preloadNodes)) {
+    pushPath(node.getAttribute('href'));
+  }
+
+  return result;
+}
+"""
+    _NETWORK_REQUESTS_SCRIPT = """
+() => {
+  const __RUNLET_NETWORK_REQUESTS__ = true;
+  const seen = new Set();
+  const result = [];
+  const routeLike = (path) => {
+    if (!path || !path.startsWith('/')) return false;
+    if (path.startsWith('/api/')) return false;
+    return !/\\.(js|mjs|css|png|jpe?g|svg|gif|ico|woff2?|map|json)(\\?.*)?$/i.test(path);
+  };
+  const pushPath = (raw) => {
+    if (typeof raw !== 'string' || !raw) return;
+    try {
+      const url = raw.startsWith('/') ? new URL(raw, window.location.origin) : new URL(raw, window.location.href);
+      const path = url.pathname;
+      if (!routeLike(path) || seen.has(path)) return;
+      seen.add(path);
+      result.push({ path, source: 'network_request' });
+    } catch {
+      return;
+    }
+  };
+
+  for (const entry of performance.getEntriesByType('resource')) {
+    if (!entry || typeof entry.name !== 'string') continue;
+    if (entry.initiatorType !== 'fetch' && entry.initiatorType !== 'xmlhttprequest' && entry.initiatorType !== 'beacon') {
+      continue;
+    }
+    pushPath(entry.name);
+  }
+
+  return result;
+}
+"""
 
     async def open_context(
         self,
@@ -380,6 +491,33 @@ class PlaywrightBrowserFactory:
             ) -> list[dict[str, object]]:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
+                collected = await page.evaluate(PlaywrightBrowserFactory._NETWORK_ROUTE_CONFIGS_SCRIPT)
+                if isinstance(collected, list):
+                    return [item for item in collected if isinstance(item, dict)]
+                return []
+
+            async def collect_network_resource_hints(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                collected = await page.evaluate(PlaywrightBrowserFactory._NETWORK_RESOURCE_HINTS_SCRIPT)
+                if isinstance(collected, list):
+                    return [item for item in collected if isinstance(item, dict)]
+                return []
+
+            async def collect_network_requests(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                collected = await page.evaluate(PlaywrightBrowserFactory._NETWORK_REQUESTS_SCRIPT)
+                if isinstance(collected, list):
+                    return [item for item in collected if isinstance(item, dict)]
                 return []
 
             async def collect_page_metadata(

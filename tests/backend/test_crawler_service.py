@@ -80,6 +80,12 @@ class FakeCrawlerPage:
                 return []
             if "__RUNLET_PAGE_ELEMENTS__" in script:
                 return []
+            if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+                return []
+            if "__RUNLET_NETWORK_RESOURCES__" in script:
+                return []
+            if "__RUNLET_NETWORK_REQUESTS__" in script:
+                return []
         if "__RUNLET_ROUTE_HINTS__" in script:
             assert "__NEXT_DATA__" in script
             assert "__NUXT__" in script
@@ -102,6 +108,12 @@ class FakeCrawlerPage:
                     "text": "刷新",
                 }
             ]
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return [{"route_path": "/reports", "source": "runtime_route_manifest"}]
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return [{"route_path": "/users", "source": "network_resource"}]
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return [{"path": "/dashboard", "source": "network_request"}]
         raise AssertionError(f"unexpected script: {script[:80]}")
 
     async def wait_for_timeout(self, timeout: int) -> None:
@@ -730,11 +742,17 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     route_hints = await session.collect_route_hints(crawl_scope="full")
     menu_nodes = await session.collect_dom_menu_nodes(crawl_scope="full")
     dom_elements = await session.collect_dom_elements(crawl_scope="full")
+    network_route_configs = await session.collect_network_route_configs(crawl_scope="full")
+    network_resource_hints = await session.collect_network_resource_hints(crawl_scope="full")
+    network_requests = await session.collect_network_requests(crawl_scope="full")
     await session.close()
 
     assert route_hints[0]["path"] == "/dashboard"
     assert menu_nodes[1]["label"] == "用户管理"
     assert dom_elements[0]["element_type"] == "button"
+    assert network_route_configs[0]["route_path"] == "/reports"
+    assert network_resource_hints[0]["route_path"] == "/users"
+    assert network_requests[0]["path"] == "/dashboard"
     assert page.goto_calls == [
         ("https://erp.example.com", "domcontentloaded"),
         ("https://erp.example.com/dashboard", "domcontentloaded"),

@@ -82,8 +82,6 @@ class PageDiscoveryExtractor:
             label="page metadata validation",
             warnings=warnings,
         )
-        if warnings:
-            failure_reason = warnings[0]
 
         page_store: dict[str, _PageStore] = {}
         quality_hints: list[float] = []
@@ -172,13 +170,19 @@ class PageDiscoveryExtractor:
         if framework_detected is None and framework_hints:
             framework_detected = framework_hints[0]
 
+        degraded = len(pages) == 0
+        if degraded:
+            failure_reason = warnings[0] if warnings else "page discovery produced no usable page candidates"
+        else:
+            failure_reason = None
+
         return CrawlExtractionResult(
             framework_detected=framework_detected,
             quality_score=quality_score,
             pages=pages,
             failure_reason=failure_reason,
             warning_messages=warnings,
-            degraded=len(pages) == 0,
+            degraded=degraded,
         )
 
     async def _collect_route_signals(
