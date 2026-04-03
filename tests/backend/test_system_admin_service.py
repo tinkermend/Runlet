@@ -18,6 +18,7 @@ from app.domains.control_plane.scheduler_registry import (
     SchedulerRegistry,
     build_auth_policy_job_id,
     build_crawl_policy_job_id,
+    build_published_job_id,
 )
 from app.domains.control_plane.service import ControlPlaneService
 from app.domains.control_plane.system_admin_schemas import WebSystemManifest
@@ -116,7 +117,7 @@ class StubCrawlerService:
                 usage_description="新增用户",
             )
         )
-        if system.code == "hotgo_test3":
+        if system.code in {"hotgo_test3", "vben_test1"}:
             self.db_session.add(
                 PageElement(
                     system_id=system_id,
@@ -137,7 +138,7 @@ class StubCrawlerService:
             snapshot_id=snapshot.id,
             pages_saved=1,
             menus_saved=1,
-            elements_saved=2 if system.code == "hotgo_test3" else 1,
+            elements_saved=2 if system.code in {"hotgo_test3", "vben_test1"} else 1,
         )
 
 
@@ -274,6 +275,16 @@ def system_admin_service_builder(db_session, scheduler):
 @pytest.fixture
 def system_admin_service(system_admin_service_builder):
     return system_admin_service_builder()
+
+
+@pytest.fixture
+async def onboarded_system(system_admin_service):
+    manifest = build_hotgo_manifest().model_copy(deep=True)
+    manifest.system.code = "vben_test1"
+    manifest.system.name = "vben"
+    manifest.system.base_url = "https://vben.example.com"
+    manifest.credential.login_url = "https://vben.example.com/login"
+    return await system_admin_service.onboard_system(manifest=manifest)
 
 
 def _seed_existing_publish_target(db_session) -> None:
@@ -756,6 +767,30 @@ async def test_get_publish_target_prefers_newest_active_asset(db_session):
     assert target.page_check.id == new_check.id
     assert target.page_asset.id != old_asset.id
     assert target.page_check.id != old_check.id
+
+
+@pytest.mark.anyio
+async def test_teardown_system_removes_related_rows_and_scheduler_jobs(
+    onboarded_system,
+    system_admin_service,
+    scheduler,
+):
+    assert scheduler.get_job(build_auth_policy_job_id(onboarded_system.system_id)) is not None
+    assert scheduler.get_job(build_crawl_policy_job_id(onboarded_system.system_id)) is not None
+    assert scheduler.get_job(build_published_job_id(onboarded_system.published_job_id)) is not None
+
+    result = await system_admin_service.teardown_system(system_code="vben_test1")
+
+    assert result.system_found is True
+    assert result.remaining_scheduler_job_ids == []
+    assert result.remaining_reference_tables == []
+
+
+@pytest.mark.anyio
+async def test_teardown_system_is_idempotent_when_system_is_missing(system_admin_service):
+    result = await system_admin_service.teardown_system(system_code="missing-system")
+
+    assert result.system_found is False
 
 
 @pytest.mark.anyio
