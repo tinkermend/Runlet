@@ -250,7 +250,6 @@ class AssetCompilerService:
                     page=page,
                     asset_key=page_asset.asset_key,
                     check_code=check_definition.check_code,
-                    reactivate_existing_alias=high_quality_full_snapshot,
                 )
 
             page_asset_ids.append(page_asset.id)
@@ -377,6 +376,18 @@ class AssetCompilerService:
         resume_check_ids = [
             check_id for check_id in _dedupe_uuids(reactivated_check_ids) if check_id not in retired_check_id_set
         ]
+        resume_check_targets = [
+            (
+                active_assets_by_id[active_checks_by_id[check_id].page_asset_id].asset_key,
+                active_checks_by_id[check_id].check_code,
+            )
+            for check_id in resume_check_ids
+            if check_id in active_checks_by_id
+            and active_checks_by_id[check_id].page_asset_id in active_assets_by_id
+        ]
+        alias_ids_to_enable = await self._query_alias_ids_to_enable(
+            reactivated_check_targets=resume_check_targets,
+        )
         published_jobs_to_resume = await self._query_published_jobs_to_resume(
             page_check_ids=resume_check_ids,
         )
@@ -435,9 +446,11 @@ class AssetCompilerService:
             asset_ids=page_asset_ids,
             check_ids=page_check_ids,
             alias_disable_decision_count=len(alias_ids_to_disable),
+            alias_enable_decision_count=len(alias_ids_to_enable),
             published_job_pause_decision_count=len(published_job_ids_to_pause),
             published_job_resume_decision_count=len(published_job_ids_to_resume),
             alias_ids_to_disable=alias_ids_to_disable,
+            alias_ids_to_enable=alias_ids_to_enable,
             published_job_ids_to_pause=published_job_ids_to_pause,
             published_job_ids_to_resume=published_job_ids_to_resume,
             retire_reasons=retire_reason_payloads,
@@ -534,6 +547,31 @@ class AssetCompilerService:
                 selected_alias_ids.append(alias.id)
         return selected_alias_ids
 
+    async def _query_alias_ids_to_enable(
+        self,
+        *,
+        reactivated_check_targets: list[tuple[str, str]],
+    ) -> list[UUID]:
+        check_target_set = {
+            (asset_key, check_code)
+            for asset_key, check_code in reactivated_check_targets
+            if asset_key and check_code
+        }
+        if not check_target_set:
+            return []
+        asset_keys = sorted({asset_key for asset_key, _ in check_target_set})
+        aliases = await self._exec_all(
+            select(IntentAlias)
+            .where(IntentAlias.asset_key.in_(asset_keys))
+            .where(IntentAlias.is_active.is_(False))
+            .order_by(IntentAlias.id)
+        )
+        selected_alias_ids: list[UUID] = []
+        for alias in aliases:
+            if (alias.asset_key, alias.check_alias) in check_target_set:
+                selected_alias_ids.append(alias.id)
+        return selected_alias_ids
+
     async def _query_published_jobs_to_pause(self, *, page_check_ids: list[UUID]) -> list[PublishedJob]:
         if not page_check_ids:
             return []
@@ -561,7 +599,6 @@ class AssetCompilerService:
         page: Page,
         asset_key: str,
         check_code: str,
-        reactivate_existing_alias: bool = False,
     ) -> None:
         candidates = [
             (system.code, page.page_title or page.route_path, page.route_path),
@@ -579,11 +616,6 @@ class AssetCompilerService:
                 existing.route_hint = route_hint
                 existing.confidence = 1.0
                 existing.source = "asset_compiler"
-                if reactivate_existing_alias:
-                    existing.is_active = True
-                    existing.disabled_reason = None
-                    existing.disabled_at = None
-                    existing.disabled_by_snapshot_id = None
                 continue
 
             self.session.add(

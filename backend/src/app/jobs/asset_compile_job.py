@@ -73,10 +73,12 @@ def _serialize_compile_result(result) -> dict[str, object]:
     payload["assets_retired"] = result.assets_retired
     payload["checks_retired"] = result.checks_retired
     payload["alias_disable_decision_count"] = result.alias_disable_decision_count
+    payload["alias_enable_decision_count"] = result.alias_enable_decision_count
     payload["published_job_pause_decision_count"] = result.published_job_pause_decision_count
     payload["published_job_resume_decision_count"] = result.published_job_resume_decision_count
     payload["retire_reasons"] = result.retire_reasons
     payload["alias_ids_to_disable"] = [str(alias_id) for alias_id in payload["alias_ids_to_disable"]]
+    payload["alias_ids_to_enable"] = [str(alias_id) for alias_id in payload["alias_ids_to_enable"]]
     payload["published_job_ids_to_pause"] = [
         str(job_id) for job_id in payload["published_job_ids_to_pause"]
     ]

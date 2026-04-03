@@ -342,9 +342,11 @@ def test_compile_snapshot_result_exposes_reconciliation_counts():
     assert "assets_retired" in CompileSnapshotResult.__dataclass_fields__
     assert "checks_retired" in CompileSnapshotResult.__dataclass_fields__
     assert "alias_disable_decision_count" in CompileSnapshotResult.__dataclass_fields__
+    assert "alias_enable_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_pause_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_resume_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "alias_ids_to_disable" in CompileSnapshotResult.__dataclass_fields__
+    assert "alias_ids_to_enable" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_ids_to_pause" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_ids_to_resume" in CompileSnapshotResult.__dataclass_fields__
     assert "retire_reasons" in CompileSnapshotResult.__dataclass_fields__
@@ -836,9 +838,11 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
     assert restored_page_open_check.retired_reason is None
     assert restored_page_open_check.retired_at is None
     assert restored_page_open_check.retired_by_snapshot_id is None
-    assert retired_alias.is_active is True
-    assert retired_alias.disabled_reason is None
+    assert retired_alias.is_active is False
+    assert retired_alias.disabled_reason == "retired_missing"
     assert retired_alias.disabled_at is None
-    assert retired_alias.disabled_by_snapshot_id is None
+    assert retired_alias.disabled_by_snapshot_id == retired_snapshot.id
+    assert result.alias_enable_decision_count == 1
+    assert result.alias_ids_to_enable == [retired_alias.id]
     assert result.published_job_resume_decision_count == 1
     assert result.published_job_ids_to_resume == [paused_job.id]
