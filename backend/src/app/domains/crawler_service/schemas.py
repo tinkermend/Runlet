@@ -10,6 +10,9 @@ class PageCandidate(BaseModel):
     page_title: str | None = None
     page_summary: str | None = None
     keywords: dict[str, object] | None = None
+    discovery_sources: list[str] = Field(default_factory=list)
+    entry_candidates: list[dict[str, object]] = Field(default_factory=list)
+    context_constraints: dict[str, object] | None = None
 
 
 class MenuCandidate(BaseModel):
@@ -20,11 +23,18 @@ class MenuCandidate(BaseModel):
     playwright_locator: str | None = None
     parent_label: str | None = None
     page_route_path: str | None = None
+    discovery_sources: list[str] = Field(default_factory=list)
+    entry_candidates: list[dict[str, object]] = Field(default_factory=list)
+    context_constraints: dict[str, object] | None = None
+    locator_candidates: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ElementCandidate(BaseModel):
     page_route_path: str
     element_type: str
+    state_signature: str | None = None
+    state_context: dict[str, object] | None = None
+    locator_candidates: list[dict[str, object]] = Field(default_factory=list)
     element_role: str | None = None
     element_text: str | None = None
     attributes: dict[str, object] | None = None

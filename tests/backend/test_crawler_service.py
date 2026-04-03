@@ -15,6 +15,12 @@ from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowse
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 
 
+def test_page_element_schema_exposes_state_and_locator_candidates():
+    assert "state_signature" in ElementCandidate.model_fields
+    assert "state_context" in ElementCandidate.model_fields
+    assert "locator_candidates" in ElementCandidate.model_fields
+
+
 class FakeBrowserSession:
     def __init__(self) -> None:
         self.closed = False
