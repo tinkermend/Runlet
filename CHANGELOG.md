@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 消除 Web 系统 onboarding 的 policy setup 残留窗口：`SystemAdminService.onboard_system()` 现在先以 disabled 状态落库 auth/crawl policy，待正式链路与发布成功后再切换到清单要求的 enabled 状态；若中途任一步骤失败，仍会统一回写为 disabled，避免出现“auth policy 已调度、crawl policy 尚未完成”的半接入状态。
 - 修补 Web 系统 onboarding 失败清理：当 `auth_refresh`、`asset_compile` 或后续发布链路失败时，`SystemAdminService` 现在会通过既有 `ControlPlaneService` 将 auth/crawl runtime policy 显式切回 disabled，确保不会留下仍在 APScheduler 中激活的半接入系统。
 - 为 onboarding publish-target 选择补齐回归测试：新增覆盖“优先选择最新 active 资产”和“同版本按稳定顺序选择”的仓储测试，锁定 `page_check` 发布目标的确定性解析契约。
 - 收紧 Web 系统 onboarding 成功门禁：`SystemAdminService.onboard_system()` 现在会在 `auth_refresh` 与 `asset_compile` 两段正式链路后显式检查队列作业状态，未完成成功时立即以明确错误终止，避免认证失败后继续 crawl，以及 re-onboarding 时在 compile 失败后误发布旧 `page_check`。

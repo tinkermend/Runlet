@@ -235,6 +235,7 @@ def system_admin_service_builder(db_session, scheduler):
 
     def build(
         *,
+        control_plane_service=None,
         auth_service=None,
         crawler_service=None,
         asset_compiler_service=None,
@@ -244,7 +245,7 @@ def system_admin_service_builder(db_session, scheduler):
             scheduler=scheduler,
         )
         dispatcher = SqlQueueDispatcher(db_session)
-        control_plane_service = ControlPlaneService(
+        resolved_control_plane_service = control_plane_service or ControlPlaneService(
             repository=SqlControlPlaneRepository(db_session),
             dispatcher=dispatcher,
             script_renderer=ScriptRenderer(session=db_session),
@@ -255,13 +256,13 @@ def system_admin_service_builder(db_session, scheduler):
         resolved_crawler_service = crawler_service or StubCrawlerService(db_session)
         return SystemAdminService(
             repository=SqlSystemAdminRepository(db_session),
-            control_plane_service=control_plane_service,
+            control_plane_service=resolved_control_plane_service,
             crypto=LocalCredentialCrypto(secret="test-secret"),
             job_executor=InProcessJobExecutor(
                 db_session=db_session,
                 auth_service=resolved_auth_service,
                 crawler_service=resolved_crawler_service,
-                control_plane_service=control_plane_service,
+                control_plane_service=resolved_control_plane_service,
                 asset_compiler_service=asset_compiler_service,
             ),
             scheduler_registry=scheduler_registry,
@@ -650,6 +651,61 @@ async def test_onboard_system_stops_when_asset_compile_does_not_complete_success
     assert scheduler.get_job(build_auth_policy_job_id(system.id)) is None
     assert scheduler.get_job(build_crawl_policy_job_id(system.id)) is None
     assert published_jobs == []
+
+
+@pytest.mark.anyio
+async def test_onboard_system_does_not_leave_scheduled_policies_when_second_policy_upsert_fails(
+    system_admin_service_builder,
+    db_session,
+    scheduler,
+):
+    dispatcher = SqlQueueDispatcher(db_session)
+    base_control_plane_service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(db_session),
+        dispatcher=dispatcher,
+        script_renderer=ScriptRenderer(session=db_session),
+        published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
+        scheduler_registry=SchedulerRegistry(session=db_session, scheduler=scheduler),
+    )
+
+    class FailingSecondPolicyUpsertControlPlaneService:
+        def __init__(self, inner) -> None:
+            self.inner = inner
+            self.calls = []
+
+        async def upsert_system_auth_policy(self, *, system_id, payload):
+            self.calls.append(("auth", payload.enabled))
+            return await self.inner.upsert_system_auth_policy(system_id=system_id, payload=payload)
+
+        async def upsert_system_crawl_policy(self, *, system_id, payload):
+            self.calls.append(("crawl", payload.enabled))
+            raise RuntimeError("crawl policy upsert failed")
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    service = system_admin_service_builder(
+        control_plane_service=FailingSecondPolicyUpsertControlPlaneService(
+            base_control_plane_service
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="crawl policy upsert failed"):
+        await service.onboard_system(manifest=build_hotgo_manifest())
+
+    system = db_session.exec(select(System).where(System.code == "hotgo_test3")).one()
+    auth_policy = db_session.exec(
+        select(SystemAuthPolicy).where(SystemAuthPolicy.system_id == system.id)
+    ).one()
+    crawl_policies = db_session.exec(
+        select(SystemCrawlPolicy).where(SystemCrawlPolicy.system_id == system.id)
+    ).all()
+
+    assert auth_policy.enabled is False
+    assert scheduler.get_job(build_auth_policy_job_id(system.id)) is None
+    assert crawl_policies == []
+    assert scheduler.get_job(build_crawl_policy_job_id(system.id)) is None
+    assert db_session.exec(select(QueuedJob)).all() == []
 
 
 @pytest.mark.anyio

@@ -67,25 +67,14 @@ class SystemAdminService:
         )
         await self.repository.commit()
 
-        await self.control_plane_service.upsert_system_auth_policy(
-            system_id=system.id,
-            payload=UpdateSystemAuthPolicy(
-                enabled=manifest.auth_policy.enabled,
-                schedule_expr=manifest.auth_policy.schedule_expr,
-                auth_mode=manifest.auth_policy.auth_mode,
-                captcha_provider=manifest.auth_policy.captcha_provider,
-            ),
-        )
-        await self.control_plane_service.upsert_system_crawl_policy(
-            system_id=system.id,
-            payload=UpdateSystemCrawlPolicy(
-                enabled=manifest.crawl_policy.enabled,
-                schedule_expr=manifest.crawl_policy.schedule_expr,
-                crawl_scope=manifest.crawl_policy.crawl_scope,
-            ),
-        )
-
         try:
+            await self._upsert_runtime_policies(
+                system_id=system.id,
+                manifest=manifest,
+                auth_enabled=False,
+                crawl_enabled=False,
+            )
+
             auth_job = await self.control_plane_service.refresh_auth(system_id=system.id)
             await self.job_executor.run_auth_refresh(auth_job.job_id)
             await self._ensure_job_completed_successfully(
@@ -136,6 +125,13 @@ class SystemAdminService:
                     enabled=manifest.publish.enabled,
                 )
             )
+
+            await self._upsert_runtime_policies(
+                system_id=system.id,
+                manifest=manifest,
+                auth_enabled=manifest.auth_policy.enabled,
+                crawl_enabled=manifest.crawl_policy.enabled,
+            )
         except Exception:
             await self._disable_runtime_policies(
                 system_id=system.id,
@@ -179,10 +175,25 @@ class SystemAdminService:
         system_id: UUID,
         manifest: WebSystemManifest,
     ) -> None:
+        await self._upsert_runtime_policies(
+            system_id=system_id,
+            manifest=manifest,
+            auth_enabled=False,
+            crawl_enabled=False,
+        )
+
+    async def _upsert_runtime_policies(
+        self,
+        *,
+        system_id: UUID,
+        manifest: WebSystemManifest,
+        auth_enabled: bool,
+        crawl_enabled: bool,
+    ) -> None:
         await self.control_plane_service.upsert_system_auth_policy(
             system_id=system_id,
             payload=UpdateSystemAuthPolicy(
-                enabled=False,
+                enabled=auth_enabled,
                 schedule_expr=manifest.auth_policy.schedule_expr,
                 auth_mode=manifest.auth_policy.auth_mode,
                 captcha_provider=manifest.auth_policy.captcha_provider,
@@ -191,7 +202,7 @@ class SystemAdminService:
         await self.control_plane_service.upsert_system_crawl_policy(
             system_id=system_id,
             payload=UpdateSystemCrawlPolicy(
-                enabled=False,
+                enabled=crawl_enabled,
                 schedule_expr=manifest.crawl_policy.schedule_expr,
                 crawl_scope=manifest.crawl_policy.crawl_scope,
             ),
