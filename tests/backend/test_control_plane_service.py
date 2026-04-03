@@ -4,10 +4,11 @@ from sqlmodel import select
 
 from app.domains.control_plane.repository import SqlControlPlaneRepository
 from app.domains.control_plane.service import ControlPlaneService
+from app.domains.runner_service.scheduler import PublishedJobService
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
-from app.infrastructure.db.models.jobs import QueuedJob
+from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob
 from app.infrastructure.db.models.systems import System
 from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 from app.shared.enums import AssetLifecycleStatus, AssetStatus
@@ -284,18 +285,26 @@ async def test_apply_reconciliation_cascades_disables_aliases_and_pauses_publish
     result = await control_plane_service.apply_reconciliation_cascades(
         snapshot_id=seeded_snapshot.id,
         alias_ids_to_disable=[alias.id],
-        retired_page_check_ids=[seeded_page_check.id],
+        alias_ids_to_enable=[],
+        published_job_ids_to_pause=[seeded_published_job.id],
+        published_job_ids_to_resume=[],
         alias_disable_decision_count=1,
+        alias_enable_decision_count=0,
         published_job_pause_decision_count=1,
+        published_job_resume_decision_count=0,
     )
 
     db_session.refresh(alias)
     db_session.refresh(seeded_published_job)
 
     assert result.alias_disable_decision_count == 1
+    assert result.alias_enable_decision_count == 0
     assert result.published_job_pause_decision_count == 1
+    assert result.published_job_resume_decision_count == 0
     assert result.aliases_disabled == 1
+    assert result.aliases_enabled == 0
     assert result.published_jobs_paused == 1
+    assert result.published_jobs_resumed == 0
 
     assert alias.is_active is False
     assert alias.disabled_reason == "retired_missing"
@@ -304,3 +313,108 @@ async def test_apply_reconciliation_cascades_disables_aliases_and_pauses_publish
     assert seeded_published_job.pause_reason == "asset_retired_missing"
     assert seeded_published_job.paused_by_snapshot_id == seeded_snapshot.id
     assert seeded_published_job.paused_by_page_check_id == seeded_page_check.id
+
+
+@pytest.mark.anyio
+async def test_apply_reconciliation_cascades_enables_aliases_and_resumes_published_jobs(
+    control_plane_service,
+    seeded_asset,
+    seeded_page_check,
+    seeded_snapshot,
+    seeded_published_job,
+    db_session,
+):
+    alias = db_session.exec(
+        select(IntentAlias).where(IntentAlias.asset_key == seeded_asset.asset_key)
+    ).one()
+    alias.is_active = False
+    alias.disabled_reason = "retired_missing"
+    alias.disabled_by_snapshot_id = seeded_snapshot.id
+    seeded_published_job.state = "paused"
+    seeded_published_job.pause_reason = "asset_retired_missing"
+    seeded_published_job.paused_by_snapshot_id = seeded_snapshot.id
+    seeded_published_job.paused_by_page_check_id = seeded_page_check.id
+    db_session.add(alias)
+    db_session.add(seeded_published_job)
+    db_session.commit()
+
+    result = await control_plane_service.apply_reconciliation_cascades(
+        snapshot_id=seeded_snapshot.id,
+        alias_ids_to_disable=[],
+        alias_ids_to_enable=[alias.id],
+        published_job_ids_to_pause=[],
+        published_job_ids_to_resume=[seeded_published_job.id],
+        alias_disable_decision_count=0,
+        alias_enable_decision_count=1,
+        published_job_pause_decision_count=0,
+        published_job_resume_decision_count=1,
+    )
+
+    db_session.refresh(alias)
+    db_session.refresh(seeded_published_job)
+
+    assert result.alias_disable_decision_count == 0
+    assert result.alias_enable_decision_count == 1
+    assert result.published_job_pause_decision_count == 0
+    assert result.published_job_resume_decision_count == 1
+    assert result.aliases_disabled == 0
+    assert result.aliases_enabled == 1
+    assert result.published_jobs_paused == 0
+    assert result.published_jobs_resumed == 1
+    assert alias.is_active is True
+    assert alias.disabled_reason is None
+    assert alias.disabled_by_snapshot_id is None
+    assert seeded_published_job.state == "active"
+    assert seeded_published_job.pause_reason is None
+    assert seeded_published_job.paused_by_snapshot_id is None
+    assert seeded_published_job.paused_by_page_check_id is None
+
+
+@pytest.mark.anyio
+async def test_apply_reconciliation_cascades_rolls_back_when_pause_fails(
+    seeded_asset,
+    seeded_page_check,
+    seeded_snapshot,
+    seeded_published_job,
+    db_session,
+):
+    alias = db_session.exec(
+        select(IntentAlias).where(IntentAlias.asset_key == seeded_asset.asset_key)
+    ).one()
+
+    class FailingPublishedJobService(PublishedJobService):
+        async def pause_published_jobs_by_ids(
+            self,
+            *,
+            published_job_ids,
+            snapshot_id,
+            reason,
+            commit=True,
+        ) -> int:
+            raise RuntimeError("pause failure")
+
+    dispatcher = SqlQueueDispatcher(db_session)
+    service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(db_session),
+        dispatcher=dispatcher,
+        published_job_service=FailingPublishedJobService(session=db_session, dispatcher=dispatcher),
+    )
+
+    with pytest.raises(RuntimeError, match="pause failure"):
+        await service.apply_reconciliation_cascades(
+            snapshot_id=seeded_snapshot.id,
+            alias_ids_to_disable=[alias.id],
+            alias_ids_to_enable=[],
+            published_job_ids_to_pause=[seeded_published_job.id],
+            published_job_ids_to_resume=[],
+            alias_disable_decision_count=1,
+            alias_enable_decision_count=0,
+            published_job_pause_decision_count=1,
+            published_job_resume_decision_count=0,
+        )
+
+    db_session.refresh(alias)
+    db_session.refresh(seeded_published_job)
+    assert alias.is_active is True
+    assert alias.disabled_reason is None
+    assert seeded_published_job.state == "active"

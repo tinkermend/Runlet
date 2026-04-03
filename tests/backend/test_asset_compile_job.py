@@ -211,6 +211,7 @@ async def test_asset_compile_job_applies_control_plane_reconciliation_cascades(
                 alias_disable_decision_count=1,
                 published_job_pause_decision_count=1,
                 alias_ids_to_disable=[intent_alias.id],
+                published_job_ids_to_pause=[seeded_published_job.id],
                 retire_reasons=[
                     {
                         "reason": "retired_missing",
@@ -255,3 +256,85 @@ async def test_asset_compile_job_applies_control_plane_reconciliation_cascades(
     assert refreshed.result_payload["published_jobs_paused"] == 1
     assert intent_alias.is_active is False
     assert seeded_published_job.state == "paused"
+
+
+@pytest.mark.anyio
+async def test_asset_compile_job_applies_control_plane_recovery_cascades(
+    db_session,
+    seeded_asset,
+    seeded_snapshot,
+    seeded_published_job,
+):
+    intent_alias = db_session.exec(
+        select(IntentAlias).where(IntentAlias.asset_key == seeded_asset.asset_key)
+    ).one()
+    intent_alias.is_active = False
+    intent_alias.disabled_reason = "retired_missing"
+    intent_alias.disabled_by_snapshot_id = seeded_snapshot.id
+    seeded_published_job.state = "paused"
+    seeded_published_job.pause_reason = "asset_retired_missing"
+    seeded_published_job.paused_by_snapshot_id = seeded_snapshot.id
+    seeded_published_job.paused_by_page_check_id = seeded_published_job.page_check_id
+    db_session.add(intent_alias)
+    db_session.add(seeded_published_job)
+    db_session.commit()
+
+    job = QueuedJob(
+        job_type=ASSET_COMPILE_JOB_TYPE,
+        payload={"snapshot_id": str(seeded_snapshot.id), "compile_scope": "impacted_pages_only"},
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    class StubAssetCompilerService:
+        async def compile_snapshot(self, *, snapshot_id):
+            return CompileSnapshotResult(
+                snapshot_id=snapshot_id,
+                status="success",
+                assets_created=0,
+                checks_created=0,
+                drift_state=AssetStatus.SAFE,
+                alias_enable_decision_count=1,
+                published_job_resume_decision_count=1,
+                alias_ids_to_enable=[intent_alias.id],
+                published_job_ids_to_resume=[seeded_published_job.id],
+            )
+
+    dispatcher = SqlQueueDispatcher(db_session)
+    control_plane_service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(db_session),
+        dispatcher=dispatcher,
+        published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
+    )
+
+    from app.jobs.asset_compile_job import AssetCompileJobHandler
+
+    runner = WorkerRunner(
+        session=db_session,
+        handlers={
+            ASSET_COMPILE_JOB_TYPE: AssetCompileJobHandler(
+                session=db_session,
+                asset_compiler_service=StubAssetCompilerService(),
+                control_plane_service=control_plane_service,
+            )
+        },
+    )
+
+    await runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, job.id)
+    db_session.refresh(intent_alias)
+    db_session.refresh(seeded_published_job)
+
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload is not None
+    assert refreshed.result_payload["alias_enable_decision_count"] == 1
+    assert refreshed.result_payload["published_job_resume_decision_count"] == 1
+    assert refreshed.result_payload["aliases_enabled"] == 1
+    assert refreshed.result_payload["published_jobs_resumed"] == 1
+    assert intent_alias.is_active is True
+    assert intent_alias.disabled_reason is None
+    assert seeded_published_job.state == "active"
+    assert seeded_published_job.pause_reason is None

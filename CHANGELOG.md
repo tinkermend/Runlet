@@ -1,6 +1,7 @@
 ## 2026-04-03
 
 - 补齐 asset compile 生产执行链路：`AssetCompileJobHandler` 在 `compile_snapshot` 后会调用 `ControlPlaneService.apply_reconciliation_cascades` 执行 alias 失效与发布任务暂停，并把实际执行计数 `aliases_disabled/published_jobs_paused` 回写到 compile job `result_payload`；worker 组装同时注入 control plane 协调器，避免级联逻辑成为死代码。
+- 强化 reconciliation 级联一致性与对称性：`apply_reconciliation_cascades` 改为单事务执行 `disable/enable alias` 与 `pause/resume published jobs`，任一步骤失败会统一 rollback；生产链路现在同时消费 `alias_ids_to_enable` 与 `published_job_ids_to_resume`，并回写 `aliases_enabled/published_jobs_resumed` 实际执行计数。
 - control_plane 收口退役级联执行：新增 `PublishedJobService.pause_jobs_for_retired_page_check`，并由 `ControlPlaneService.apply_reconciliation_cascades` 统一执行 alias 失效与发布任务暂停；同时把请求解析路径收紧为 `active alias -> active asset -> active check`，对 `retired_missing` 目标返回显式 `409`（不再回退 realtime probe），并在 page-check 列表读模型补齐 `drift_status/lifecycle_status`。
 - 修复资产编译作业结果序列化边界：`_serialize_compile_result` 现在会递归转换 `retire_reasons` 中的嵌套 UUID，确保 queued job `result_payload` 在包含退役原因明细时仍保持 JSON-safe。
 - 修复 lifecycle/reconciliation 持久化契约细节：`asset_reconciliation_audits` 新增 `disabled_alias_ids` 审计字段，审计 JSON 列支持 UUID 安全序列化并可持久化非空标识列表；同时补齐 `asset_compile_job` 对 `alias_ids_to_disable/published_job_ids_to_pause` 的结果序列化，确保 queued job payload 保持 JSON-safe。

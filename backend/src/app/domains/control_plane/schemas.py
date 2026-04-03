@@ -237,6 +237,10 @@ class CompileAssetsAccepted(BaseModel):
 class ReconciliationCascadeApplied(BaseModel):
     snapshot_id: UUID
     alias_disable_decision_count: int = 0
+    alias_enable_decision_count: int = 0
     published_job_pause_decision_count: int = 0
+    published_job_resume_decision_count: int = 0
     aliases_disabled: int = 0
+    aliases_enabled: int = 0
     published_jobs_paused: int = 0
+    published_jobs_resumed: int = 0

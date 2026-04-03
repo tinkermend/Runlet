@@ -48,9 +48,13 @@ class AssetCompileJobHandler:
                 cascade_result = await self.control_plane_service.apply_reconciliation_cascades(
                     snapshot_id=result.snapshot_id,
                     alias_ids_to_disable=result.alias_ids_to_disable,
-                    retired_page_check_ids=_extract_retired_page_check_ids(result),
+                    alias_ids_to_enable=result.alias_ids_to_enable,
+                    published_job_ids_to_pause=result.published_job_ids_to_pause,
+                    published_job_ids_to_resume=result.published_job_ids_to_resume,
                     alias_disable_decision_count=result.alias_disable_decision_count,
+                    alias_enable_decision_count=result.alias_enable_decision_count,
                     published_job_pause_decision_count=result.published_job_pause_decision_count,
+                    published_job_resume_decision_count=result.published_job_resume_decision_count,
                 )
         except Exception as exc:
             await self._mark_failed(job, message=str(exc))
@@ -62,7 +66,9 @@ class AssetCompileJobHandler:
         job.result_payload = _serialize_compile_result(result)
         if cascade_result is not None:
             job.result_payload["aliases_disabled"] = cascade_result.aliases_disabled
+            job.result_payload["aliases_enabled"] = cascade_result.aliases_enabled
             job.result_payload["published_jobs_paused"] = cascade_result.published_jobs_paused
+            job.result_payload["published_jobs_resumed"] = cascade_result.published_jobs_resumed
         await self._commit()
 
     async def _mark_failed(self, job: QueuedJob, *, message: str | None) -> None:
@@ -120,21 +126,3 @@ def _json_safe(value):
         return {key: _json_safe(item) for key, item in value.items()}
     return value
 
-
-def _extract_retired_page_check_ids(result) -> list[UUID]:
-    retired_page_check_ids: list[UUID] = []
-    seen: set[UUID] = set()
-    for reason in result.retire_reasons:
-        if not isinstance(reason, dict):
-            continue
-        check_ids = reason.get("page_check_ids")
-        if not isinstance(check_ids, list):
-            continue
-        for check_id in check_ids:
-            if not isinstance(check_id, UUID):
-                continue
-            if check_id in seen:
-                continue
-            seen.add(check_id)
-            retired_page_check_ids.append(check_id)
-    return retired_page_check_ids

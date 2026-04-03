@@ -380,32 +380,53 @@ class ControlPlaneService:
         *,
         snapshot_id: UUID,
         alias_ids_to_disable: list[UUID],
-        retired_page_check_ids: list[UUID],
+        alias_ids_to_enable: list[UUID],
+        published_job_ids_to_pause: list[UUID],
+        published_job_ids_to_resume: list[UUID],
         alias_disable_decision_count: int = 0,
+        alias_enable_decision_count: int = 0,
         published_job_pause_decision_count: int = 0,
+        published_job_resume_decision_count: int = 0,
     ) -> ReconciliationCascadeApplied:
-        aliases_disabled = await self.repository.disable_aliases_from_compiler_decisions(
-            alias_ids=alias_ids_to_disable,
-            snapshot_id=snapshot_id,
-            reason="retired_missing",
-        )
-        await self.repository.commit()
+        try:
+            aliases_disabled = await self.repository.disable_aliases_from_compiler_decisions(
+                alias_ids=alias_ids_to_disable,
+                snapshot_id=snapshot_id,
+                reason="retired_missing",
+            )
+            aliases_enabled = await self.repository.enable_aliases_from_compiler_decisions(
+                alias_ids=alias_ids_to_enable,
+            )
 
-        published_jobs_paused = 0
-        if self.published_job_service is not None:
-            for page_check_id in _dedupe_uuids(retired_page_check_ids):
-                published_jobs_paused += await self.published_job_service.pause_jobs_for_retired_page_check(
-                    page_check_id=page_check_id,
+            published_jobs_paused = 0
+            published_jobs_resumed = 0
+            if self.published_job_service is not None:
+                published_jobs_paused = await self.published_job_service.pause_published_jobs_by_ids(
+                    published_job_ids=published_job_ids_to_pause,
                     snapshot_id=snapshot_id,
                     reason="asset_retired_missing",
+                    commit=False,
                 )
+                published_jobs_resumed = await self.published_job_service.resume_published_jobs_by_ids(
+                    published_job_ids=published_job_ids_to_resume,
+                    commit=False,
+                )
+
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
 
         return ReconciliationCascadeApplied(
             snapshot_id=snapshot_id,
             alias_disable_decision_count=alias_disable_decision_count,
+            alias_enable_decision_count=alias_enable_decision_count,
             published_job_pause_decision_count=published_job_pause_decision_count,
+            published_job_resume_decision_count=published_job_resume_decision_count,
             aliases_disabled=aliases_disabled,
+            aliases_enabled=aliases_enabled,
             published_jobs_paused=published_jobs_paused,
+            published_jobs_resumed=published_jobs_resumed,
         )
 
     async def _accept_check_request(

@@ -209,13 +209,41 @@ class PublishedJobService:
         page_check_id: UUID,
         snapshot_id: UUID,
         reason: str,
+        commit: bool = True,
     ) -> int:
-        normalized_reason = _validate_required_text(reason)
         statement = (
             select(PublishedJob)
             .where(PublishedJob.page_check_id == page_check_id)
             .where(PublishedJob.state == PublishedJobState.ACTIVE)
             .with_for_update()
+            .order_by(PublishedJob.id)
+        )
+        jobs = await self._exec_all(statement)
+        return await self.pause_published_jobs_by_ids(
+            published_job_ids=[job.id for job in jobs],
+            snapshot_id=snapshot_id,
+            reason=reason,
+            commit=commit,
+        )
+
+    async def pause_published_jobs_by_ids(
+        self,
+        *,
+        published_job_ids: list[UUID],
+        snapshot_id: UUID,
+        reason: str,
+        commit: bool = True,
+    ) -> int:
+        normalized_reason = _validate_required_text(reason)
+        deduped_ids = _dedupe_uuids(published_job_ids)
+        if not deduped_ids:
+            return 0
+        statement = (
+            select(PublishedJob)
+            .where(PublishedJob.id.in_(deduped_ids))
+            .where(PublishedJob.state == PublishedJobState.ACTIVE)
+            .with_for_update()
+            .order_by(PublishedJob.id)
         )
         jobs = await self._exec_all(statement)
         if not jobs:
@@ -225,10 +253,48 @@ class PublishedJobService:
             job.state = PublishedJobState.PAUSED
             job.pause_reason = normalized_reason
             job.paused_by_snapshot_id = snapshot_id
-            job.paused_by_page_check_id = page_check_id
+            job.paused_by_page_check_id = job.page_check_id
             self.session.add(job)
 
-        await self._commit()
+        if commit:
+            await self._commit()
+        else:
+            await self._flush()
+        return len(jobs)
+
+    async def resume_published_jobs_by_ids(
+        self,
+        *,
+        published_job_ids: list[UUID],
+        commit: bool = True,
+    ) -> int:
+        deduped_ids = _dedupe_uuids(published_job_ids)
+        if not deduped_ids:
+            return 0
+
+        statement = (
+            select(PublishedJob)
+            .where(PublishedJob.id.in_(deduped_ids))
+            .where(PublishedJob.state == PublishedJobState.PAUSED)
+            .with_for_update()
+            .order_by(PublishedJob.id)
+        )
+        jobs = await self._exec_all(statement)
+        if not jobs:
+            return 0
+
+        for job in jobs:
+            job.state = PublishedJobState.ACTIVE
+            job.pause_reason = None
+            job.paused_by_snapshot_id = None
+            job.paused_by_asset_id = None
+            job.paused_by_page_check_id = None
+            self.session.add(job)
+
+        if commit:
+            await self._commit()
+        else:
+            await self._flush()
         return len(jobs)
 
     async def _lock_published_job(self, *, published_job_id: UUID) -> PublishedJob | None:
@@ -274,6 +340,12 @@ class PublishedJobService:
             return
         self.session.commit()
 
+    async def _flush(self) -> None:
+        if isinstance(self.session, AsyncSession):
+            await self.session.flush()
+            return
+        self.session.flush()
+
     async def _refresh(self, model) -> None:
         if isinstance(self.session, AsyncSession):
             await self.session.refresh(model)
@@ -286,6 +358,17 @@ def _optional_text(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _dedupe_uuids(values: list[UUID]) -> list[UUID]:
+    deduped: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
 
 
 def _build_job_key(page_check_id: UUID, script_render_id: UUID) -> str:

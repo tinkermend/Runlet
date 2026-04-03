@@ -150,6 +150,12 @@ class ControlPlaneRepository(Protocol):
         reason: str,
     ) -> int: ...
 
+    async def enable_aliases_from_compiler_decisions(
+        self,
+        *,
+        alias_ids: list[UUID],
+    ) -> int: ...
+
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
@@ -671,6 +677,37 @@ class SqlControlPlaneRepository:
             alias.disabled_reason = normalized_reason
             alias.disabled_at = now
             alias.disabled_by_snapshot_id = snapshot_id
+            self.session.add(alias)
+            changed += 1
+
+        await self._flush()
+        return changed
+
+    async def enable_aliases_from_compiler_decisions(
+        self,
+        *,
+        alias_ids: list[UUID],
+    ) -> int:
+        if not alias_ids:
+            return 0
+
+        statement = (
+            select(IntentAlias)
+            .where(IntentAlias.id.in_(alias_ids))
+            .where(IntentAlias.is_active.is_(False))
+            .with_for_update()
+            .order_by(IntentAlias.id)
+        )
+        aliases = await self._exec_all(statement)
+        if not aliases:
+            return 0
+
+        changed = 0
+        for alias in aliases:
+            alias.is_active = True
+            alias.disabled_reason = None
+            alias.disabled_at = None
+            alias.disabled_by_snapshot_id = None
             self.session.add(alias)
             changed += 1
 
