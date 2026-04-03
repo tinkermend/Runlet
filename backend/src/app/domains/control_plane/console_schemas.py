@@ -6,6 +6,15 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+CHECK_TYPE_LABELS: dict[str, str] = {
+    "menu_completeness": "菜单完整性",
+    "element_existence": "页面元素存在性",
+    "login_flow": "登录流程",
+    "table_render": "表格渲染",
+    "form_submit": "表单提交",
+    "page_load": "页面加载",
+}
+
 
 class DashboardSummary(BaseModel):
     today_runs: int
@@ -95,3 +104,32 @@ class WizardOptions(BaseModel):
 class TriggerResponse(BaseModel):
     ok: bool
     run_id: Optional[str] = None
+
+
+class AssetItem(BaseModel):
+    id: UUID
+    check_type_label: str
+    version: str
+    status: str
+
+
+class PageGroup(BaseModel):
+    page_name: str
+    assets: list[AssetItem]
+
+
+class SystemAssetGroup(BaseModel):
+    system_id: UUID
+    system_name: str
+    pages: list[PageGroup]
+
+
+class AssetDetail(BaseModel):
+    id: UUID
+    page_name: str
+    system_name: str
+    check_type_label: str
+    version: str
+    status: str
+    collected_at: Optional[datetime] = None
+    raw_facts: Optional[dict] = None
