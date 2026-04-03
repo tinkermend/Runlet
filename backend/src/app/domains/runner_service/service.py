@@ -25,6 +25,9 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+ASSET_RETIRED_FAILURE_MESSAGE = "asset_retired_missing"
+
+
 class ExecutionBlockedError(ValueError):
     def __init__(self, *, reason: str) -> None:
         super().__init__(reason)
@@ -247,6 +250,4 @@ def _retirement_failure_message(
     )
     if normalized == AssetLifecycleStatus.ACTIVE.value:
         return None
-    if normalized.startswith("retired_"):
-        return f"asset_{normalized}"
-    return "asset_retired_missing"
+    return ASSET_RETIRED_FAILURE_MESSAGE

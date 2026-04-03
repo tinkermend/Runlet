@@ -300,6 +300,20 @@ def job_runner_with_race_retirement(db_session):
 def pause_linked_published_job_for_retirement(db_session, seeded_published_job_for_run_check):
     seeded_published_job_for_run_check.state = PublishedJobState.PAUSED
     seeded_published_job_for_run_check.pause_reason = "asset_retired_replaced"
+    seeded_published_job_for_run_check.paused_by_page_check_id = seeded_published_job_for_run_check.page_check_id
+    db_session.add(seeded_published_job_for_run_check)
+    db_session.commit()
+    db_session.refresh(seeded_published_job_for_run_check)
+    return seeded_published_job_for_run_check
+
+
+@pytest.fixture
+def pause_linked_published_job_without_retirement_markers(db_session, seeded_published_job_for_run_check):
+    seeded_published_job_for_run_check.state = PublishedJobState.PAUSED
+    seeded_published_job_for_run_check.pause_reason = "asset_retired_replaced"
+    seeded_published_job_for_run_check.paused_by_snapshot_id = None
+    seeded_published_job_for_run_check.paused_by_asset_id = None
+    seeded_published_job_for_run_check.paused_by_page_check_id = None
     db_session.add(seeded_published_job_for_run_check)
     db_session.commit()
     db_session.refresh(seeded_published_job_for_run_check)
@@ -336,7 +350,7 @@ async def test_run_check_job_skips_when_target_was_retired_after_enqueue(
 
 
 @pytest.mark.anyio
-async def test_run_check_job_skips_with_detailed_reason_for_retired_replaced_target(
+async def test_run_check_job_skips_for_retired_replaced_target_with_fixed_failure_message(
     job_runner,
     queued_run_check_job,
     retire_run_check_target_replaced,
@@ -347,7 +361,7 @@ async def test_run_check_job_skips_with_detailed_reason_for_retired_replaced_tar
     refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
     assert refreshed is not None
     assert refreshed.status == "skipped"
-    assert refreshed.failure_message == "asset_retired_replaced"
+    assert refreshed.failure_message == "asset_retired_missing"
 
 
 @pytest.mark.anyio
@@ -362,12 +376,27 @@ async def test_run_check_job_skips_when_linked_published_job_paused_by_retired_r
     refreshed = db_session.get(QueuedJob, queued_published_run_check_job.id)
     assert refreshed is not None
     assert refreshed.status == "skipped"
-    assert refreshed.failure_message == "asset_retired_replaced"
+    assert refreshed.failure_message == "asset_retired_missing"
 
     job_run = db_session.get(JobRun, UUID(refreshed.payload["job_run_id"]))
     assert job_run is not None
     assert job_run.run_status == "skipped"
-    assert job_run.failure_message == "asset_retired_replaced"
+    assert job_run.failure_message == "asset_retired_missing"
+
+
+@pytest.mark.anyio
+async def test_run_check_job_does_not_skip_when_linked_published_job_paused_without_retired_markers(
+    job_runner,
+    queued_published_run_check_job,
+    pause_linked_published_job_without_retirement_markers,
+    db_session,
+):
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_published_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.failure_message is None
 
 
 @pytest.mark.anyio
@@ -381,7 +410,7 @@ async def test_run_check_job_skips_when_target_retired_between_handler_guard_and
     refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
     assert refreshed is not None
     assert refreshed.status == "skipped"
-    assert refreshed.failure_message == "asset_retired_replaced"
+    assert refreshed.failure_message == "asset_retired_missing"
 
 
 @pytest.mark.anyio

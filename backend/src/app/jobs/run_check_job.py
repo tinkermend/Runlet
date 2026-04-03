@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session
 
-from app.domains.runner_service.service import ExecutionBlockedError
+from app.domains.runner_service.service import ASSET_RETIRED_FAILURE_MESSAGE, ExecutionBlockedError
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
 from app.shared.enums import AssetLifecycleStatus, PublishedJobState, QueuedJobStatus
@@ -100,8 +100,12 @@ class RunCheckJobHandler:
                 page_check_id=parsed_page_check_id,
                 execution_plan_id=UUID(execution_plan_id) if execution_plan_id else None,
             )
-        except ExecutionBlockedError as exc:
-            await self._mark_skipped(job, message=exc.reason, job_run=job_run)
+        except ExecutionBlockedError:
+            await self._mark_skipped(
+                job,
+                message=ASSET_RETIRED_FAILURE_MESSAGE,
+                job_run=job_run,
+            )
             return
         except Exception as exc:
             await self._mark_failed(job, message=str(exc), job_run=job_run)
@@ -202,7 +206,9 @@ class RunCheckJobHandler:
             return None
         if published_job.state != PublishedJobState.PAUSED:
             return None
-        return _retired_pause_reason(published_job.pause_reason)
+        if _is_retired_pause_marker(published_job):
+            return ASSET_RETIRED_FAILURE_MESSAGE
+        return None
 
     def _build_result_payload(
         self,
@@ -281,17 +287,17 @@ def _retirement_failure_message(
     )
     if normalized == AssetLifecycleStatus.ACTIVE.value:
         return None
-    if normalized.startswith("retired_"):
-        return f"asset_{normalized}"
-    return "asset_retired_missing"
+    return ASSET_RETIRED_FAILURE_MESSAGE
 
 
-def _retired_pause_reason(pause_reason: str | None) -> str | None:
-    normalized = (pause_reason or "").strip().lower()
-    if not normalized or "retired" not in normalized:
-        return None
-    if normalized.startswith("asset_retired_"):
-        return normalized
-    if normalized.startswith("retired_"):
-        return f"asset_{normalized}"
-    return "asset_retired_missing"
+def _is_retired_pause_marker(published_job: PublishedJob) -> bool:
+    normalized_reason = (published_job.pause_reason or "").strip().lower()
+    if "retired" not in normalized_reason:
+        return False
+    return any(
+        (
+            published_job.paused_by_snapshot_id is not None,
+            published_job.paused_by_asset_id is not None,
+            published_job.paused_by_page_check_id is not None,
+        )
+    )
