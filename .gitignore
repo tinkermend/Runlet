@@ -92,6 +92,8 @@ playwright/.cache/
 test/
 
 output/
+.claude/
+**/screenshots/**
 
 # Git worktrees
 worktrees/
