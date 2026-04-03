@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
 
@@ -136,8 +137,18 @@ class LifecycleRuntime(FakeRuntime):
 
 
 class FakeVisibleLocator:
-    def __init__(self, *, count: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        count: int = 1,
+        visible: bool = True,
+        count_fn: Callable[[], int] | None = None,
+        on_click: Callable[[], None] | None = None,
+    ) -> None:
         self._count = count
+        self._visible = visible
+        self._count_fn = count_fn
+        self._on_click = on_click
         self.wait_for_calls: list[dict[str, object]] = []
         self.click_calls = 0
 
@@ -146,13 +157,20 @@ class FakeVisibleLocator:
         return self
 
     async def count(self) -> int:
+        if self._count_fn is not None:
+            return self._count_fn()
         return self._count
 
     async def wait_for(self, *, state: str, timeout: int | None = None) -> None:
         self.wait_for_calls.append({"state": state, "timeout": timeout})
 
+    async def is_visible(self) -> bool:
+        return self._visible
+
     async def click(self) -> None:
         self.click_calls += 1
+        if self._on_click is not None:
+            self._on_click()
 
 
 class FakeContainerLocator:
@@ -246,11 +264,22 @@ class FakeRuntimeContextPage:
 
 
 class FakeOpenCreateModalPage:
-    def __init__(self) -> None:
-        self.button_trigger = FakeVisibleLocator(count=1)
+    def __init__(self, *, dialog_before_click: int = 0, dialog_after_click: int = 1) -> None:
+        self.dialog_count = dialog_before_click
+        self.dialog_after_click = dialog_after_click
+        self.dialog_visible = dialog_before_click > 0
+        self.button_trigger = FakeVisibleLocator(count=1, on_click=self._open_dialog)
         self.link_trigger = FakeVisibleLocator(count=0)
-        self.dialog = FakeVisibleLocator(count=1)
+        self.dialog = FakeVisibleLocator(
+            count_fn=lambda: self.dialog_count,
+            visible=self.dialog_visible,
+        )
         self.role_calls: list[dict[str, object]] = []
+
+    def _open_dialog(self) -> None:
+        self.dialog_count = self.dialog_after_click
+        self.dialog_visible = self.dialog_count > 0
+        self.dialog._visible = self.dialog_visible
 
     def get_by_role(self, role: str, *, name=None, exact: bool = False) -> FakeVisibleLocator:
         self.role_calls.append({"role": role, "name": name, "exact": exact})
@@ -444,7 +473,16 @@ async def test_run_page_check_persists_screenshot_and_final_page_context(
     assert "content" not in screenshot_artifacts[0].payload
     assert screenshot_artifacts[0].payload["final_url"] == result.final_url
     assert screenshot_artifacts[0].artifact_uri is not None
-    assert Path(screenshot_artifacts[0].artifact_uri).exists()
+    screenshot_path = Path(screenshot_artifacts[0].artifact_uri)
+    expected_root = (
+        Path(__file__).resolve().parents[2]
+        / "backend"
+        / "generated"
+        / "execution_artifacts"
+        / "screenshots"
+    )
+    assert screenshot_path == expected_root / f"{result.execution_run_id}.png"
+    assert screenshot_path.exists()
     assert set(result.artifact_ids) == {artifact.id for artifact in artifacts}
     assert set(result.screenshot_artifact_ids) == {artifact.id for artifact in screenshot_artifacts}
 
@@ -631,6 +669,17 @@ async def test_playwright_runtime_open_create_modal_waits_for_dialog_visibility(
     assert runtime._page.button_trigger.wait_for_calls == [{"state": "visible", "timeout": None}]
     assert runtime._page.button_trigger.click_calls == 1
     assert runtime._page.dialog.wait_for_calls == [{"state": "visible", "timeout": None}]
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_open_create_modal_rejects_when_dialog_state_does_not_change():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeOpenCreateModalPage(dialog_before_click=1, dialog_after_click=1)
+
+    with pytest.raises(RuntimeError, match="did not change dialog state"):
+        await runtime.open_create_modal()
 
 
 @pytest.mark.anyio

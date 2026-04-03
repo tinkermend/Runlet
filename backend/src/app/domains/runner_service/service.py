@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -29,7 +28,9 @@ from app.infrastructure.db.models.execution import (
 from app.infrastructure.db.models.systems import AuthState, System
 from app.shared.enums import ExecutionResultStatus
 
-_SCREENSHOT_ROOT = Path(tempfile.gettempdir()) / "runlet_runtime_artifacts" / "screenshots"
+_SCREENSHOT_ROOT = (
+    Path(__file__).resolve().parents[4] / "generated" / "execution_artifacts" / "screenshots"
+)
 
 
 def utcnow() -> datetime:
@@ -143,29 +144,41 @@ class RunnerService:
 
         persisted_artifacts = [artifact]
         screenshot_artifact_ids: list[UUID] = []
+        persisted_screenshot_paths: list[Path] = []
         if screenshot_bytes is not None:
-            screenshot_uri = self._persist_screenshot_artifact(
-                execution_run_id=execution_run.id,
-                screenshot_bytes=screenshot_bytes,
-            )
-            screenshot_artifact = ExecutionArtifact(
-                execution_run_id=execution_run.id,
-                artifact_kind="screenshot",
-                result_status=ExecutionResultStatus.SUCCESS,
-                artifact_uri=screenshot_uri,
-                payload={
-                    "mime_type": "image/png",
-                    "byte_size": len(screenshot_bytes),
-                    "final_url": final_url,
-                    "page_title": page_title,
-                    "page_probe": page_probe,
-                },
-            )
-            self.session.add(screenshot_artifact)
-            persisted_artifacts.append(screenshot_artifact)
-            screenshot_artifact_ids.append(screenshot_artifact.id)
+            try:
+                screenshot_path = self._persist_screenshot_artifact(
+                    execution_run_id=execution_run.id,
+                    screenshot_bytes=screenshot_bytes,
+                )
+            except OSError:
+                screenshot_path = None
 
-        await self._commit()
+            if screenshot_path is not None:
+                screenshot_artifact = ExecutionArtifact(
+                    execution_run_id=execution_run.id,
+                    artifact_kind="screenshot",
+                    result_status=ExecutionResultStatus.SUCCESS,
+                    artifact_uri=str(screenshot_path),
+                    payload={
+                        "mime_type": "image/png",
+                        "byte_size": len(screenshot_bytes),
+                        "final_url": final_url,
+                        "page_title": page_title,
+                        "page_probe": page_probe,
+                    },
+                )
+                self.session.add(screenshot_artifact)
+                persisted_artifacts.append(screenshot_artifact)
+                screenshot_artifact_ids.append(screenshot_artifact.id)
+                persisted_screenshot_paths.append(screenshot_path)
+
+        try:
+            await self._commit()
+        except Exception:
+            for screenshot_path in persisted_screenshot_paths:
+                screenshot_path.unlink(missing_ok=True)
+            raise
         await self._refresh(execution_run)
         for persisted_artifact in persisted_artifacts:
             await self._refresh(persisted_artifact)
@@ -334,11 +347,11 @@ class RunnerService:
             await result
 
     @staticmethod
-    def _persist_screenshot_artifact(*, execution_run_id: UUID, screenshot_bytes: bytes) -> str:
+    def _persist_screenshot_artifact(*, execution_run_id: UUID, screenshot_bytes: bytes) -> Path:
         _SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
         screenshot_path = _SCREENSHOT_ROOT / f"{execution_run_id}.png"
         screenshot_path.write_bytes(screenshot_bytes)
-        return str(screenshot_path)
+        return screenshot_path
 
 
 def _failure_category_for_module(module: str) -> FailureCategory:

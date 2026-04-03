@@ -80,13 +80,27 @@ class PlaywrightRunnerRuntime:
 
     async def open_create_modal(self) -> bool:
         page = self._require_page()
+        dialogs = page.get_by_role("dialog")
+        dialog_count_before = await dialogs.count()
+        dialog_visible_before = False
+        if dialog_count_before > 0:
+            dialog_visible_before = await dialogs.first.is_visible()
+
         trigger = page.get_by_role("button", name=re.compile("新增|新建|创建")).first
         if await trigger.count() == 0:
             trigger = page.get_by_role("link", name=re.compile("新增|新建|创建")).first
         await trigger.wait_for(state="visible")
         await trigger.click()
-        modal = page.get_by_role("dialog").first
+        modal = dialogs.first
         await modal.wait_for(state="visible")
+
+        dialog_count_after = await dialogs.count()
+        dialog_visible_after = await modal.is_visible()
+        dialog_state_changed = dialog_count_after > dialog_count_before or (
+            not dialog_visible_before and dialog_visible_after
+        )
+        if not dialog_state_changed:
+            raise RuntimeError("open_create_modal did not change dialog state")
         return True
 
     async def probe_page(self) -> dict[str, object]:
