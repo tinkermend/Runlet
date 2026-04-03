@@ -32,7 +32,7 @@ class RunCheckJobHandler:
 
         page_check_id = job.payload.get("page_check_id")
         execution_track = str(job.payload.get("execution_track") or "").strip().lower()
-        if page_check_id is None and execution_track == "realtime":
+        if page_check_id is None and execution_track in {"realtime", "realtime_probe"}:
             job.status = QueuedJobStatus.SKIPPED.value
             job.started_at = job.started_at or utcnow()
             job.finished_at = utcnow()

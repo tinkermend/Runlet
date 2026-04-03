@@ -474,7 +474,7 @@ class SqlControlPlaneRepository:
             request_id=request.id,
             plan_id=plan.id if plan else None,
             page_check_id=plan.resolved_page_check_id if plan else None,
-            execution_track=plan.execution_track if plan else None,
+            execution_track=_normalize_public_execution_track(plan.execution_track) if plan else None,
             auth_policy=plan.auth_policy if plan else None,
             status=queued_job.status if queued_job else "accepted",
         )
@@ -547,3 +547,9 @@ class SqlControlPlaneRepository:
 def _is_unique_system_id_violation(*, exc: IntegrityError, table_name: str) -> bool:
     message = str(exc).lower()
     return "unique" in message and table_name in message and "system_id" in message
+
+
+def _normalize_public_execution_track(track: str | None) -> str | None:
+    if track == "realtime":
+        return "realtime_probe"
+    return track

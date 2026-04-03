@@ -127,6 +127,23 @@ def queued_realtime_run_check_job(db_session):
 
 
 @pytest.fixture
+def queued_realtime_probe_run_check_job(db_session):
+    job = QueuedJob(
+        job_type=RUN_CHECK_JOB_TYPE,
+        payload={
+            "execution_request_id": str(uuid4()),
+            "execution_plan_id": str(uuid4()),
+            "execution_track": "realtime_probe",
+            "page_check_id": None,
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    return job
+
+
+@pytest.fixture
 def seeded_published_job_for_run_check(db_session, seeded_run_check_target):
     from app.domains.runner_service.script_renderer import ScriptRenderer
     from app.infrastructure.db.models.execution import ScriptRender
@@ -285,6 +302,23 @@ async def test_run_check_job_skips_realtime_request_without_resolved_page_check(
     assert refreshed.failure_message == "realtime execution track is not supported by run_check worker"
     assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_run_check_job.id)
     assert refreshed.result_payload["execution_track"] == "realtime"
+
+
+@pytest.mark.anyio
+async def test_run_check_job_skips_realtime_probe_request_without_resolved_page_check(
+    job_runner,
+    queued_realtime_probe_run_check_job,
+    db_session,
+):
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_realtime_probe_run_check_job.id)
+
+    assert refreshed is not None
+    assert refreshed.status == "skipped"
+    assert refreshed.failure_message == "realtime execution track is not supported by run_check worker"
+    assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_run_check_job.id)
+    assert refreshed.result_payload["execution_track"] == "realtime_probe"
 
 
 @pytest.mark.anyio

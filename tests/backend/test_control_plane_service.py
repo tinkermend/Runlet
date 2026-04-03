@@ -259,3 +259,19 @@ async def test_submit_check_request_fails_when_page_is_resolved_but_element_asse
             page_hint="库存列表",
             check_goal="table_render",
         )
+
+
+@pytest.mark.anyio
+async def test_get_check_request_status_normalizes_legacy_realtime_track(
+    control_plane_service,
+    accepted_request,
+    db_session,
+):
+    plan = db_session.get(ExecutionPlan, accepted_request.plan_id)
+    assert plan is not None
+    plan.execution_track = "realtime"
+    db_session.add(plan)
+    db_session.commit()
+
+    status = await control_plane_service.get_check_request_status(accepted_request.request_id)
+    assert status.execution_track == "realtime_probe"
