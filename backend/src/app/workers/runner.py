@@ -13,6 +13,8 @@ from sqlmodel import Session, select
 
 from app.config.settings import settings
 from app.domains.asset_compiler.service import AssetCompilerService
+from app.domains.control_plane.repository import SqlControlPlaneRepository
+from app.domains.control_plane.service import ControlPlaneService
 from app.domains.auth_service.browser_login import PlaywrightBrowserLoginAdapter
 from app.domains.auth_service.service import AuthService
 from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowserFactory
@@ -20,6 +22,7 @@ from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntim
 from app.domains.runner_service.service import RunnerService
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.session import create_session_factory
+from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 from app.shared.enums import QueuedJobStatus
 
 
@@ -107,6 +110,7 @@ def build_worker_handlers(
     crawler_service=None,
     asset_compiler_service=None,
     runner_service=None,
+    control_plane_service=None,
 ) -> dict[str, JobHandler]:
     from app.domains.control_plane.job_types import (
         ASSET_COMPILE_JOB_TYPE,
@@ -139,6 +143,7 @@ def build_worker_handlers(
         handlers[RUN_CHECK_JOB_TYPE] = RunCheckJobHandler(
             session=session,
             runner_service=runner_service,
+            control_plane_service=control_plane_service,
         )
     return handlers
 
@@ -162,6 +167,11 @@ def build_worker_runner(
         session=session,
         runtime=PlaywrightRunnerRuntime(),
     )
+    dispatcher = SqlQueueDispatcher(session)
+    control_plane_service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(session),
+        dispatcher=dispatcher,
+    )
     return WorkerRunner(
         session=session,
         handlers=build_worker_handlers(
@@ -170,6 +180,7 @@ def build_worker_runner(
             crawler_service=crawler_service,
             asset_compiler_service=asset_compiler_service,
             runner_service=runner_service,
+            control_plane_service=control_plane_service,
         ),
     )
 

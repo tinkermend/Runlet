@@ -1,12 +1,47 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 from sqlmodel import select
 
+from app.domains.runner_service.failure_categories import FailureCategory
 from app.infrastructure.db.models.assets import ModulePlan, PageCheck
 from app.infrastructure.db.models.execution import ExecutionArtifact, ExecutionRun
+from pydantic.fields import PydanticUndefined
+
+
+@pytest.mark.anyio
+async def test_run_page_check_result_fields_match_failure_category_contract():
+    from app.domains.runner_service.schemas import RunPageCheckResult
+
+    fields = RunPageCheckResult.model_fields
+    failure_field = fields["failure_category"]
+    screenshot_artifact_ids_field = fields["screenshot_artifact_ids"]
+    final_url_field = fields["final_url"]
+    page_title_field = fields["page_title"]
+
+    assert failure_field.annotation == FailureCategory | None
+    assert failure_field.default is None
+
+    assert screenshot_artifact_ids_field.annotation == list[UUID]
+    assert screenshot_artifact_ids_field.is_required()
+
+    assert final_url_field.annotation == str | None
+    assert final_url_field.default is None
+
+    assert page_title_field.annotation == str | None
+    assert page_title_field.default is None
+
+
+@pytest.mark.anyio
+async def test_execution_run_failure_category_field_stays_string_backed():
+    field = ExecutionRun.model_fields["failure_category"]
+    assert field.annotation == str | None
+    assert field.sa_column is PydanticUndefined
+    assert any(getattr(metadata, "max_length", None) == 64 for metadata in field.metadata)
 
 
 class FakeRuntime:
@@ -15,13 +50,24 @@ class FakeRuntime:
         *,
         inject_outcome: bool = True,
         fail_action: str | None = None,
+        raise_on_inject: bool = False,
     ) -> None:
         self.calls: list[dict[str, object]] = []
         self.inject_outcome = inject_outcome
         self.fail_action = fail_action
+        self.raise_on_inject = raise_on_inject
+        self.final_url = "https://erp.example.com/users"
+        self.page_title = "用户管理"
+        self.screenshot_bytes = b"fake-screenshot-png"
+        self.probe_payload: dict[str, object] = {
+            "url": self.final_url,
+            "title": self.page_title,
+        }
 
     async def inject_auth_state(self, *, storage_state: dict[str, object]) -> bool:
         self.calls.append({"action": "inject_auth_state", "storage_state": storage_state})
+        if self.raise_on_inject:
+            raise RuntimeError("inject_auth_state crashed")
         return self.inject_outcome
 
     async def navigate_menu_chain(self, *, menu_chain: list[str], route_path: str) -> bool:
@@ -54,6 +100,28 @@ class FakeRuntime:
             return False
         return True
 
+    async def open_create_modal(self) -> bool:
+        self.calls.append({"action": "open_create_modal"})
+        if self.fail_action == "open_create_modal":
+            return False
+        return True
+
+    async def capture_screenshot(self) -> bytes:
+        self.calls.append({"action": "capture_screenshot"})
+        return self.screenshot_bytes
+
+    async def get_final_url(self) -> str | None:
+        self.calls.append({"action": "get_final_url"})
+        return self.final_url
+
+    async def get_page_title(self) -> str | None:
+        self.calls.append({"action": "get_page_title"})
+        return self.page_title
+
+    async def probe_page(self) -> dict[str, object]:
+        self.calls.append({"action": "probe_page"})
+        return self.probe_payload
+
 
 class LifecycleRuntime(FakeRuntime):
     def __init__(self) -> None:
@@ -69,19 +137,40 @@ class LifecycleRuntime(FakeRuntime):
 
 
 class FakeVisibleLocator:
-    def __init__(self, *, count: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        count: int = 1,
+        visible: bool = True,
+        count_fn: Callable[[], int] | None = None,
+        on_click: Callable[[], None] | None = None,
+    ) -> None:
         self._count = count
+        self._visible = visible
+        self._count_fn = count_fn
+        self._on_click = on_click
         self.wait_for_calls: list[dict[str, object]] = []
+        self.click_calls = 0
 
     @property
     def first(self) -> "FakeVisibleLocator":
         return self
 
     async def count(self) -> int:
+        if self._count_fn is not None:
+            return self._count_fn()
         return self._count
 
     async def wait_for(self, *, state: str, timeout: int | None = None) -> None:
         self.wait_for_calls.append({"state": state, "timeout": timeout})
+
+    async def is_visible(self) -> bool:
+        return self._visible
+
+    async def click(self) -> None:
+        self.click_calls += 1
+        if self._on_click is not None:
+            self._on_click()
 
 
 class FakeContainerLocator:
@@ -154,6 +243,55 @@ class FakeGlobalFallbackPlaywrightPage:
         return FakeVisibleLocator(count=0)
 
 
+class FakeRuntimeContextPage:
+    def __init__(self) -> None:
+        self.url = "https://erp.example.com/users?tab=list"
+        self.title_calls = 0
+        self.screenshot_calls: list[dict[str, object]] = []
+        self.role_counts = {"dialog": 2, "table": 1}
+
+    async def screenshot(self, *, full_page: bool, type: str) -> bytes:
+        self.screenshot_calls.append({"full_page": full_page, "type": type})
+        return b"\x89PNG\r\nfake"
+
+    async def title(self) -> str:
+        self.title_calls += 1
+        return "用户管理"
+
+    def get_by_role(self, role: str, *, name=None, exact: bool = False) -> FakeVisibleLocator:
+        del name, exact
+        return FakeVisibleLocator(count=self.role_counts.get(role, 0))
+
+
+class FakeOpenCreateModalPage:
+    def __init__(self, *, dialog_before_click: int = 0, dialog_after_click: int = 1) -> None:
+        self.dialog_count = dialog_before_click
+        self.dialog_after_click = dialog_after_click
+        self.dialog_visible = dialog_before_click > 0
+        self.button_trigger = FakeVisibleLocator(count=1, on_click=self._open_dialog)
+        self.link_trigger = FakeVisibleLocator(count=0)
+        self.dialog = FakeVisibleLocator(
+            count_fn=lambda: self.dialog_count,
+            visible=self.dialog_visible,
+        )
+        self.role_calls: list[dict[str, object]] = []
+
+    def _open_dialog(self) -> None:
+        self.dialog_count = self.dialog_after_click
+        self.dialog_visible = self.dialog_count > 0
+        self.dialog._visible = self.dialog_visible
+
+    def get_by_role(self, role: str, *, name=None, exact: bool = False) -> FakeVisibleLocator:
+        self.role_calls.append({"role": role, "name": name, "exact": exact})
+        if role == "button":
+            return self.button_trigger
+        if role == "link":
+            return self.link_trigger
+        if role == "dialog":
+            return self.dialog
+        return FakeVisibleLocator(count=0)
+
+
 @pytest.fixture
 def seeded_ready_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -206,6 +344,31 @@ def seeded_page_open_check(db_session, seeded_page_check, seeded_auth_state) -> 
 
 
 @pytest.fixture
+def seeded_open_create_modal_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="open_create_modal",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {"module": "action.open_create_modal", "params": {}},
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "open_create_modal"
+    seeded_page_check.goal = "open_create_modal"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
 def runner_service(db_session):
     from app.domains.runner_service.service import RunnerService
 
@@ -229,6 +392,16 @@ def blocked_auth_runner_service(db_session):
     return RunnerService(
         session=db_session,
         runtime=FakeRuntime(inject_outcome=False),
+    )
+
+
+@pytest.fixture
+def auth_error_runner_service(db_session):
+    from app.domains.runner_service.service import RunnerService
+
+    return RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(raise_on_inject=True),
     )
 
 
@@ -281,6 +454,49 @@ async def test_run_page_check_supports_assert_page_ready_alias(runner_service, s
 
 
 @pytest.mark.anyio
+async def test_run_page_check_persists_screenshot_and_final_page_context(
+    runner_service,
+    seeded_ready_check,
+    db_session,
+):
+    result = await runner_service.run_page_check(page_check_id=seeded_ready_check.id)
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    screenshot_artifacts = [artifact for artifact in artifacts if artifact.artifact_kind == "screenshot"]
+
+    assert result.final_url
+    assert result.page_title is not None
+    assert screenshot_artifacts
+    assert screenshot_artifacts[0].payload["mime_type"] == "image/png"
+    assert screenshot_artifacts[0].payload["byte_size"] > 0
+    assert "content" not in screenshot_artifacts[0].payload
+    assert screenshot_artifacts[0].payload["final_url"] == result.final_url
+    assert screenshot_artifacts[0].artifact_uri is not None
+    screenshot_path = Path(screenshot_artifacts[0].artifact_uri)
+    expected_root = (
+        Path(__file__).resolve().parents[2]
+        / "backend"
+        / "generated"
+        / "execution_artifacts"
+        / "screenshots"
+    )
+    assert screenshot_path == expected_root / f"{result.execution_run_id}.png"
+    assert screenshot_path.exists()
+    assert set(result.artifact_ids) == {artifact.id for artifact in artifacts}
+    assert set(result.screenshot_artifact_ids) == {artifact.id for artifact in screenshot_artifacts}
+
+
+@pytest.mark.anyio
+async def test_run_page_check_supports_open_create_modal(
+    runner_service,
+    seeded_open_create_modal_check,
+):
+    result = await runner_service.run_page_check(page_check_id=seeded_open_create_modal_check.id)
+    assert result.status == "passed"
+
+
+@pytest.mark.anyio
 async def test_run_page_check_configures_and_closes_runtime(db_session, seeded_ready_check, seeded_system):
     from app.domains.runner_service.service import RunnerService
 
@@ -316,13 +532,20 @@ async def test_run_page_check_persists_failed_execution_artifact(
     result = await failing_runner_service.run_page_check(page_check_id=seeded_ready_check.id)
 
     execution_run = db_session.get(ExecutionRun, result.execution_run_id)
-    artifacts = db_session.exec(select(ExecutionArtifact)).all()
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
 
     assert result.status == "failed"
+    assert result.failure_category == FailureCategory.ASSERTION_FAILED
     assert execution_run is not None
     assert execution_run.status == "failed"
-    assert artifacts[-1].result_status.value == "failed"
-    assert artifacts[-1].payload["step_results"][-1]["status"] == "failed"
+    assert execution_run.failure_category == FailureCategory.ASSERTION_FAILED.value
+    assert execution_run.duration_ms is not None
+    assert execution_run.duration_ms >= 0
+    assert module_artifact.result_status.value == "failed"
+    assert module_artifact.payload["step_results"][-1]["status"] == "failed"
 
 
 @pytest.mark.anyio
@@ -334,14 +557,39 @@ async def test_run_page_check_fails_when_server_injected_auth_is_blocked(
     result = await blocked_auth_runner_service.run_page_check(page_check_id=seeded_ready_check.id)
 
     execution_run = db_session.get(ExecutionRun, result.execution_run_id)
-    artifact = db_session.exec(select(ExecutionArtifact)).all()[-1]
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
 
     assert result.status == "failed"
     assert result.auth_status == "blocked"
+    assert result.failure_category == FailureCategory.AUTH_BLOCKED
     assert execution_run is not None
     assert execution_run.status == "failed"
-    assert artifact.result_status.value == "failed"
-    assert artifact.payload["step_results"][0]["status"] == "failed"
+    assert execution_run.failure_category == FailureCategory.AUTH_BLOCKED.value
+    assert module_artifact.result_status.value == "failed"
+    assert module_artifact.payload["step_results"][0]["status"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_run_page_check_classifies_auth_inject_exception_as_runtime_error(
+    auth_error_runner_service,
+    seeded_ready_check,
+    db_session,
+):
+    result = await auth_error_runner_service.run_page_check(page_check_id=seeded_ready_check.id)
+    execution_run = db_session.get(ExecutionRun, result.execution_run_id)
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
+
+    assert result.status == "failed"
+    assert result.failure_category == FailureCategory.RUNTIME_ERROR
+    assert execution_run is not None
+    assert execution_run.failure_category == FailureCategory.RUNTIME_ERROR.value
+    assert module_artifact.payload["step_results"][0]["output"]["failure_category"] == "runtime_error"
 
 
 @pytest.mark.anyio
@@ -388,3 +636,64 @@ async def test_playwright_runtime_falls_back_to_global_menuitem_when_no_scoped_c
         {"role": "menuitem", "name": "总览", "exact": True},
     ]
     assert runtime._page.global_menuitem.wait_for_calls == [{"state": "visible", "timeout": None}]
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_exposes_page_context_and_screenshot_methods():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeRuntimeContextPage()
+
+    screenshot = await runtime.capture_screenshot()
+    final_url = await runtime.get_final_url()
+    page_title = await runtime.get_page_title()
+
+    assert screenshot == b"\x89PNG\r\nfake"
+    assert runtime._page.screenshot_calls == [{"full_page": True, "type": "png"}]
+    assert final_url == "https://erp.example.com/users?tab=list"
+    assert page_title == "用户管理"
+    assert runtime._page.title_calls == 1
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_open_create_modal_waits_for_dialog_visibility():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeOpenCreateModalPage()
+
+    result = await runtime.open_create_modal()
+
+    assert result is True
+    assert runtime._page.button_trigger.wait_for_calls == [{"state": "visible", "timeout": None}]
+    assert runtime._page.button_trigger.click_calls == 1
+    assert runtime._page.dialog.wait_for_calls == [{"state": "visible", "timeout": None}]
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_open_create_modal_rejects_when_dialog_state_does_not_change():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeOpenCreateModalPage(dialog_before_click=1, dialog_after_click=1)
+
+    with pytest.raises(RuntimeError, match="did not change dialog state"):
+        await runtime.open_create_modal()
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_probe_page_returns_core_page_facts():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeRuntimeContextPage()
+
+    result = await runtime.probe_page()
+
+    assert result == {
+        "url": "https://erp.example.com/users?tab=list",
+        "title": "用户管理",
+        "dialog_count": 2,
+        "table_count": 1,
+    }

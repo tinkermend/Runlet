@@ -36,10 +36,12 @@ from app.domains.control_plane.schemas import (
     SystemCrawlPolicyRead,
     CrawlTriggerRequest,
     PageAssetChecksList,
+    PublishCheckRequest,
     RunPageCheck,
     UpdateSystemAuthPolicy,
     UpdateSystemCrawlPolicy,
 )
+from app.domains.runner_service.result_views import CheckResultView
 from app.domains.runner_service.script_renderer import RenderScriptResult
 from app.domains.runner_service.scheduler import (
     CreatePublishedJobRequest,
@@ -92,20 +94,20 @@ class ControlPlaneService:
             request_source=request_source,
         )
 
-        system = await self.repository.resolve_system(system_hint=payload.system_hint)
-        page_asset, page_check = await self.repository.resolve_page_asset_and_check(
+        resolution = await self.repository.resolve_page_asset_and_check(
             system_hint=payload.system_hint,
-            system_id=system.id if system else None,
             page_hint=payload.page_hint,
             check_goal=payload.check_goal,
         )
-        execution_track = "precompiled" if page_check is not None else "realtime"
+        if resolution.miss_reason == "element_asset_missing":
+            raise HTTPException(status_code=409, detail="element asset is missing")
+        execution_track = "precompiled" if resolution.page_check is not None else "realtime_probe"
         return await self._accept_check_request(
             payload=payload,
-            resolved_system_id=system.id if system else None,
-            resolved_page_asset_id=page_asset.id if page_asset else None,
-            resolved_page_check_id=page_check.id if page_check else None,
-            module_plan_id=page_check.module_plan_id if page_check else None,
+            resolved_system_id=resolution.system.id if resolution.system else None,
+            resolved_page_asset_id=resolution.page_asset.id if resolution.page_asset else None,
+            resolved_page_check_id=resolution.page_check.id if resolution.page_check else None,
+            module_plan_id=resolution.page_check.module_plan_id if resolution.page_check else None,
             execution_track=execution_track,
         )
 
@@ -114,6 +116,68 @@ class ControlPlaneService:
         if status is None:
             raise HTTPException(status_code=404, detail="check request not found")
         return status
+
+    async def get_check_request_result(self, request_id: UUID) -> CheckResultView:
+        result = await self.repository.get_check_request_result_view(request_id=request_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="check request not found")
+        return result
+
+    async def persist_realtime_probe_feedback(
+        self,
+        *,
+        execution_plan_id: UUID,
+        execution_run_id: UUID,
+    ) -> None:
+        plan = await self.repository.get_execution_plan(execution_plan_id=execution_plan_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail="execution plan not found")
+        if plan.execution_track != "realtime_probe":
+            raise HTTPException(status_code=409, detail="execution plan is not realtime_probe")
+        if plan.resolved_page_asset_id is None:
+            raise HTTPException(status_code=409, detail="page asset is not resolved in execution plan")
+
+        execution_run = await self.repository.get_execution_run(
+            execution_run_id=execution_run_id
+        )
+        latest_run = await self.repository.get_latest_execution_run(
+            execution_plan_id=execution_plan_id
+        )
+        if (
+            execution_run is None
+            or execution_run.execution_plan_id != execution_plan_id
+            or execution_run.status != "passed"
+            or latest_run is None
+            or latest_run.id != execution_run_id
+        ):
+            raise HTTPException(status_code=409, detail="realtime probe execution is not successful")
+
+        request = await self.repository.get_execution_request(
+            execution_request_id=plan.execution_request_id
+        )
+        if request is None:
+            raise HTTPException(status_code=404, detail="execution request not found")
+
+        page_asset = await self.repository.get_page_asset(
+            page_asset_id=plan.resolved_page_asset_id
+        )
+        if page_asset is None:
+            raise HTTPException(status_code=404, detail="page asset not found")
+
+        page = await self.repository.get_page(page_id=page_asset.page_id)
+        if page is None:
+            raise HTTPException(status_code=404, detail="page not found")
+
+        await self.repository.upsert_intent_alias(
+            system_alias=request.system_hint,
+            page_alias=request.page_hint,
+            check_alias=request.check_goal,
+            route_hint=page.route_path,
+            asset_key=page_asset.asset_key,
+            source="realtime_probe",
+            confidence=1.0,
+        )
+        await self.repository.commit()
 
     async def run_page_check(
         self,
@@ -183,6 +247,45 @@ class ControlPlaneService:
             raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
             created = await self.published_job_service.create_published_job(payload=payload)
+            await self._sync_published_job_registry_safely(
+                published_job_id=created.published_job_id,
+            )
+            return created
+        except InvalidPublishedJobScheduleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PublishedJobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async def publish_check_request(
+        self,
+        *,
+        request_id: UUID,
+        payload: PublishCheckRequest,
+    ) -> PublishedJobCreated:
+        if self.script_renderer is None:
+            raise HTTPException(status_code=500, detail="script renderer is not configured")
+        if self.published_job_service is None:
+            raise HTTPException(status_code=500, detail="published job service is not configured")
+
+        result = await self.repository.get_check_request_result_view(request_id=request_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="check request not found")
+        if result.plan_id is None or result.execution_summary is None:
+            raise HTTPException(status_code=409, detail="check request has no successful execution")
+        if result.execution_summary.status != "passed":
+            raise HTTPException(status_code=409, detail="check request has no successful execution")
+        if result.page_check_id is None:
+            raise HTTPException(status_code=409, detail="check request has no publishable page_check")
+
+        try:
+            created = await self.published_job_service.create_published_job_from_execution(
+                execution_plan_id=result.plan_id,
+                page_check_id=result.page_check_id,
+                schedule_expr=payload.schedule_expr,
+                trigger_source=payload.trigger_source,
+                enabled=payload.enabled,
+                script_renderer=self.script_renderer,
+            )
             await self._sync_published_job_registry_safely(
                 published_job_id=created.published_job_id,
             )

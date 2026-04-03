@@ -32,7 +32,6 @@ def render_result_status_enum() -> sa.Enum:
         values_callable=lambda values: [value.value for value in values],
     )
 
-
 json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
 
 
@@ -72,6 +71,10 @@ class ExecutionRun(BaseModel, table=True):
     failure_category: str | None = Field(default=None, max_length=64)
     asset_version: str | None = Field(default=None, max_length=64)
     snapshot_version: str | None = Field(default=None, max_length=64)
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+    )
 
 
 class ExecutionArtifact(BaseModel, table=True):

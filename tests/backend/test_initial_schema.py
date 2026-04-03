@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 
 import pytest
+import sqlalchemy as sa
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
@@ -102,6 +103,22 @@ def test_initial_schema_exposes_core_columns(db_engine):
     }
     assert {"request_source", "system_hint", "page_hint", "check_goal"} <= execution_request_columns
 
+    execution_run_columns = {column["name"] for column in inspector.get_columns("execution_runs")}
+    assert {
+        "execution_plan_id",
+        "status",
+        "duration_ms",
+        "auth_status",
+        "failure_category",
+        "asset_version",
+        "snapshot_version",
+        "created_at",
+    } <= execution_run_columns
+    execution_run_created_at = next(
+        column for column in inspector.get_columns("execution_runs") if column["name"] == "created_at"
+    )
+    assert execution_run_created_at["nullable"] is False
+
     execution_artifact_columns = {
         column["name"] for column in inspector.get_columns("execution_artifacts")
     }
@@ -200,8 +217,140 @@ def test_initial_schema_matches_sqlmodel_metadata(db_engine):
     assert diffs == []
 
 
+def test_execution_run_created_at_migration_backfills_from_artifacts(tmp_path):
+    project_root = Path(__file__).resolve().parents[2]
+    backend_root = project_root / "backend"
+    alembic_cfg = Config(str(backend_root / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(backend_root / "alembic"))
+
+    db_path = tmp_path / "execution-run-created-at.sqlite3"
+    db_url = f"sqlite:///{db_path}"
+    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+
+    command.upgrade(alembic_cfg, "0008_crawl_failure_metadata")
+
+    engine = create_engine(db_url)
+    request_id = "11111111-1111-4111-8111-111111111111"
+    plan_id = "22222222-2222-4222-8222-222222222222"
+    earlier_run_id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    later_run_id = "00000000-0000-4000-8000-000000000001"
+
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO execution_requests (
+                    id, request_source, system_hint, page_hint, check_goal, strictness, time_budget_ms
+                ) VALUES (
+                    :id, 'api', 'ERP', '用户管理', 'table_render', 'balanced', 20000
+                )
+                """
+            ),
+            {"id": request_id},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO execution_plans (
+                    id, execution_request_id, resolved_system_id, resolved_page_asset_id,
+                    resolved_page_check_id, execution_track, auth_policy, module_plan_id
+                ) VALUES (
+                    :id, :execution_request_id, NULL, NULL, NULL, 'precompiled', 'server_injected', NULL
+                )
+                """
+            ),
+            {"id": plan_id, "execution_request_id": request_id},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO execution_runs (
+                    id, execution_plan_id, status, duration_ms, auth_status,
+                    failure_category, asset_version, snapshot_version
+                ) VALUES (
+                    :id, :execution_plan_id, 'failed', 100, 'blocked',
+                    'assertion_failed', NULL, NULL
+                )
+                """
+            ),
+            {"id": earlier_run_id, "execution_plan_id": plan_id},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO execution_runs (
+                    id, execution_plan_id, status, duration_ms, auth_status,
+                    failure_category, asset_version, snapshot_version
+                ) VALUES (
+                    :id, :execution_plan_id, 'passed', 200, 'reused',
+                    NULL, NULL, NULL
+                )
+                """
+            ),
+            {"id": later_run_id, "execution_plan_id": plan_id},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO execution_artifacts (
+                    id, execution_run_id, artifact_kind, result_status, payload, artifact_uri, created_at
+                ) VALUES (
+                    '33333333-3333-4333-8333-333333333333',
+                    :execution_run_id,
+                    'module_execution',
+                    'failed',
+                    '{}',
+                    NULL,
+                    '2026-04-03 12:00:00+00:00'
+                )
+                """
+            ),
+            {"execution_run_id": earlier_run_id},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO execution_artifacts (
+                    id, execution_run_id, artifact_kind, result_status, payload, artifact_uri, created_at
+                ) VALUES (
+                    '44444444-4444-4444-8444-444444444444',
+                    :execution_run_id,
+                    'module_execution',
+                    'success',
+                    '{}',
+                    NULL,
+                    '2026-04-03 12:05:00+00:00'
+                )
+                """
+            ),
+            {"execution_run_id": later_run_id},
+        )
+
+    command.upgrade(alembic_cfg, "head")
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            sa.text(
+                """
+                SELECT id, created_at
+                FROM execution_runs
+                ORDER BY created_at ASC, id ASC
+                """
+            )
+        ).all()
+
+    engine.dispose()
+
+    assert len(rows) == 2
+    assert rows[0].id == earlier_run_id
+    assert rows[1].id == later_run_id
+    assert str(rows[0].created_at).startswith("2026-04-03 12:00:00")
+    assert str(rows[1].created_at).startswith("2026-04-03 12:05:00")
+
+
 def test_runtime_datetime_columns_are_timezone_aware_in_metadata():
     runtime_columns = [
+        BaseModel.metadata.tables["execution_runs"].c["created_at"],
         BaseModel.metadata.tables["queued_jobs"].c["created_at"],
         BaseModel.metadata.tables["queued_jobs"].c["started_at"],
         BaseModel.metadata.tables["queued_jobs"].c["finished_at"],

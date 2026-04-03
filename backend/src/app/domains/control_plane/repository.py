@@ -5,7 +5,7 @@ from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, func, select
+from sqlmodel import Session, desc, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.domains.control_plane.runtime_policies import (
@@ -21,7 +21,17 @@ from app.domains.control_plane.schemas import (
 )
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
-from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
+from app.domains.runner_service.result_views import (
+    ArtifactItem,
+    CheckResultView,
+    ExecutionSummary,
+)
+from app.infrastructure.db.models.execution import (
+    ExecutionArtifact,
+    ExecutionPlan,
+    ExecutionRequest,
+    ExecutionRun,
+)
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.infrastructure.db.models.systems import System
@@ -33,6 +43,14 @@ class PageCheckRunTarget:
     system: System
     page_asset: PageAsset
     page_check: PageCheck
+
+
+@dataclass(frozen=True)
+class CheckResolution:
+    system: System | None
+    page_asset: PageAsset | None
+    page_check: PageCheck | None
+    miss_reason: str | None
 
 
 class ControlPlaneRepository(Protocol):
@@ -71,11 +89,10 @@ class ControlPlaneRepository(Protocol):
     async def resolve_page_asset_and_check(
         self,
         *,
-        system_id: UUID | None,
         system_hint: str,
         page_hint: str | None,
         check_goal: str,
-    ) -> tuple[PageAsset | None, PageCheck | None]: ...
+    ) -> CheckResolution: ...
 
     async def create_execution_request(
         self,
@@ -101,6 +118,12 @@ class ControlPlaneRepository(Protocol):
         request_id: UUID,
     ) -> CheckRequestStatus | None: ...
 
+    async def get_check_request_result_view(
+        self,
+        *,
+        request_id: UUID,
+    ) -> CheckResultView | None: ...
+
     async def get_page_check_run_target(
         self,
         *,
@@ -112,6 +135,54 @@ class ControlPlaneRepository(Protocol):
         *,
         page_asset_id: UUID,
     ) -> PageAssetChecksList | None: ...
+
+    async def get_execution_plan(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionPlan | None: ...
+
+    async def get_execution_request(
+        self,
+        *,
+        execution_request_id: UUID,
+    ) -> ExecutionRequest | None: ...
+
+    async def get_page_asset(
+        self,
+        *,
+        page_asset_id: UUID,
+    ) -> PageAsset | None: ...
+
+    async def get_page(
+        self,
+        *,
+        page_id: UUID,
+    ) -> Page | None: ...
+
+    async def get_latest_execution_run(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionRun | None: ...
+
+    async def get_execution_run(
+        self,
+        *,
+        execution_run_id: UUID,
+    ) -> ExecutionRun | None: ...
+
+    async def upsert_intent_alias(
+        self,
+        *,
+        system_alias: str,
+        page_alias: str | None,
+        check_alias: str,
+        route_hint: str | None,
+        asset_key: str,
+        source: str,
+        confidence: float = 1.0,
+    ) -> IntentAlias: ...
 
     async def commit(self) -> None: ...
 
@@ -296,47 +367,72 @@ class SqlControlPlaneRepository:
         self,
         *,
         system_hint: str,
-        system_id: UUID | None,
         page_hint: str | None,
         check_goal: str,
-    ) -> tuple[PageAsset | None, PageCheck | None]:
+    ) -> CheckResolution:
         normalized_system_hint = system_hint.strip().lower()
         normalized_goal = check_goal.strip().lower()
-
-        if page_hint is not None:
-            normalized_page_hint = page_hint.strip().lower()
-            asset_statement = (
-                select(PageAsset)
-                .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
-                .where(PageAsset.status == AssetStatus.SAFE)
-                .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
-                .where(func.lower(IntentAlias.check_alias) == normalized_goal)
-                .where(
-                    (func.lower(IntentAlias.page_alias) == normalized_page_hint)
-                    | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
-                )
-                .order_by(IntentAlias.confidence.desc(), PageAsset.asset_version.desc())
+        system = await self.resolve_system(system_hint=system_hint)
+        if system is None:
+            return CheckResolution(
+                system=None,
+                page_asset=None,
+                page_check=None,
+                miss_reason="system_not_found",
             )
-            if system_id is not None:
-                asset_statement = asset_statement.where(PageAsset.system_id == system_id)
 
-            page_asset = await self._exec_first(asset_statement)
-            if page_asset is not None:
-                check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
-                    (func.lower(PageCheck.goal) == normalized_goal)
-                    | (func.lower(PageCheck.check_code) == normalized_goal)
-                ).order_by(PageCheck.id)
-                page_check = await self._exec_first(check_statement)
-                return page_asset, page_check
-
-        if system_id is None or page_hint is None:
-            return None, None
+        if page_hint is None:
+            return CheckResolution(
+                system=system,
+                page_asset=None,
+                page_check=None,
+                miss_reason="page_or_menu_not_resolved",
+            )
 
         normalized_page_hint = page_hint.strip().lower()
         asset_statement = (
             select(PageAsset)
+            .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
+            .where(PageAsset.status == AssetStatus.SAFE)
+            .where(PageAsset.system_id == system.id)
+            .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
+            .where(func.lower(IntentAlias.check_alias) == normalized_goal)
+            .where(
+                (func.lower(IntentAlias.page_alias) == normalized_page_hint)
+                | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
+            )
+            .order_by(IntentAlias.confidence.desc(), PageAsset.asset_version.desc())
+        )
+        page_asset = await self._exec_first(asset_statement)
+        if page_asset is not None:
+            check_statement = (
+                select(PageCheck)
+                .where(PageCheck.page_asset_id == page_asset.id)
+                .where(
+                    (func.lower(PageCheck.goal) == normalized_goal)
+                    | (func.lower(PageCheck.check_code) == normalized_goal)
+                )
+                .order_by(PageCheck.id)
+            )
+            page_check = await self._exec_first(check_statement)
+            if page_check is None:
+                return CheckResolution(
+                    system=system,
+                    page_asset=page_asset,
+                    page_check=None,
+                    miss_reason="element_asset_missing",
+                )
+            return CheckResolution(
+                system=system,
+                page_asset=page_asset,
+                page_check=page_check,
+                miss_reason=None,
+            )
+
+        asset_statement = (
+            select(PageAsset)
             .join(Page, Page.id == PageAsset.page_id)
-            .where(PageAsset.system_id == system_id)
+            .where(PageAsset.system_id == system.id)
             .where(PageAsset.status == AssetStatus.SAFE)
             .where(
                 (func.lower(Page.page_title) == normalized_page_hint)
@@ -347,14 +443,125 @@ class SqlControlPlaneRepository:
         )
         page_asset = await self._exec_first(asset_statement)
         if page_asset is None:
-            return None, None
+            return CheckResolution(
+                system=system,
+                page_asset=None,
+                page_check=None,
+                miss_reason="page_or_menu_not_resolved",
+            )
 
-        check_statement = select(PageCheck).where(PageCheck.page_asset_id == page_asset.id).where(
-            (func.lower(PageCheck.goal) == normalized_goal)
-            | (func.lower(PageCheck.check_code) == normalized_goal)
-        ).order_by(PageCheck.id)
+        check_statement = (
+            select(PageCheck)
+            .where(PageCheck.page_asset_id == page_asset.id)
+            .where(
+                (func.lower(PageCheck.goal) == normalized_goal)
+                | (func.lower(PageCheck.check_code) == normalized_goal)
+            )
+            .order_by(PageCheck.id)
+        )
         page_check = await self._exec_first(check_statement)
-        return page_asset, page_check
+        if page_check is None:
+            return CheckResolution(
+                system=system,
+                page_asset=page_asset,
+                page_check=None,
+                miss_reason="element_asset_missing",
+            )
+        return CheckResolution(
+            system=system,
+            page_asset=page_asset,
+            page_check=page_check,
+            miss_reason=None,
+        )
+
+    async def get_execution_plan(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionPlan | None:
+        return await self._get(ExecutionPlan, execution_plan_id)
+
+    async def get_execution_request(
+        self,
+        *,
+        execution_request_id: UUID,
+    ) -> ExecutionRequest | None:
+        return await self._get(ExecutionRequest, execution_request_id)
+
+    async def get_page_asset(
+        self,
+        *,
+        page_asset_id: UUID,
+    ) -> PageAsset | None:
+        return await self._get(PageAsset, page_asset_id)
+
+    async def get_page(
+        self,
+        *,
+        page_id: UUID,
+    ) -> Page | None:
+        return await self._get(Page, page_id)
+
+    async def get_latest_execution_run(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionRun | None:
+        statement = (
+            select(ExecutionRun)
+            .where(ExecutionRun.execution_plan_id == execution_plan_id)
+            .order_by(ExecutionRun.created_at.desc(), ExecutionRun.id.desc())
+        )
+        return await self._exec_first(statement)
+
+    async def get_execution_run(
+        self,
+        *,
+        execution_run_id: UUID,
+    ) -> ExecutionRun | None:
+        return await self._get(ExecutionRun, execution_run_id)
+
+    async def upsert_intent_alias(
+        self,
+        *,
+        system_alias: str,
+        page_alias: str | None,
+        check_alias: str,
+        route_hint: str | None,
+        asset_key: str,
+        source: str,
+        confidence: float = 1.0,
+    ) -> IntentAlias:
+        statement = (
+            select(IntentAlias)
+            .where(IntentAlias.system_alias == system_alias)
+            .where(IntentAlias.page_alias == page_alias)
+            .where(IntentAlias.check_alias == check_alias)
+            .where(IntentAlias.asset_key == asset_key)
+        )
+        alias = await self._exec_first(statement)
+        if alias is None:
+            alias = IntentAlias(
+                system_alias=system_alias,
+                page_alias=page_alias,
+                check_alias=check_alias,
+                route_hint=route_hint,
+                asset_key=asset_key,
+                confidence=confidence,
+                source=source,
+            )
+            self.session.add(alias)
+            await self._flush()
+            await self._refresh(alias)
+            return alias
+
+        alias.route_hint = route_hint
+        alias.confidence = confidence
+        alias.source = source
+        self.session.add(alias)
+        await self._flush()
+        await self._refresh(alias)
+        return alias
 
     async def create_execution_request(
         self,
@@ -420,9 +627,92 @@ class SqlControlPlaneRepository:
             request_id=request.id,
             plan_id=plan.id if plan else None,
             page_check_id=plan.resolved_page_check_id if plan else None,
-            execution_track=plan.execution_track if plan else None,
+            execution_track=_normalize_public_execution_track(plan.execution_track) if plan else None,
             auth_policy=plan.auth_policy if plan else None,
             status=queued_job.status if queued_job else "accepted",
+        )
+
+    async def get_check_request_result_view(
+        self,
+        *,
+        request_id: UUID,
+    ) -> CheckResultView | None:
+        request = await self._get(ExecutionRequest, request_id)
+        if request is None:
+            return None
+
+        plan = await self._exec_first(
+            select(ExecutionPlan).where(ExecutionPlan.execution_request_id == request_id)
+        )
+        artifacts: list[ExecutionArtifact] = []
+        execution_summary: ExecutionSummary | None = None
+        if plan is not None:
+            execution_run = await self._exec_first(
+                select(ExecutionRun)
+                .where(ExecutionRun.execution_plan_id == plan.id)
+                .order_by(ExecutionRun.created_at.desc(), ExecutionRun.id.desc())
+            )
+            if execution_run is not None:
+                artifacts = await self._exec_all(
+                    select(ExecutionArtifact)
+                    .where(ExecutionArtifact.execution_run_id == execution_run.id)
+                    .order_by(ExecutionArtifact.created_at)
+                )
+                final_url, page_title = _extract_page_context(artifacts)
+                execution_summary = ExecutionSummary(
+                    execution_run_id=execution_run.id,
+                    status=execution_run.status,
+                    auth_status=execution_run.auth_status,
+                    duration_ms=execution_run.duration_ms,
+                    failure_category=execution_run.failure_category,
+                    asset_version=execution_run.asset_version,
+                    snapshot_version=execution_run.snapshot_version,
+                    final_url=final_url,
+                    page_title=page_title,
+                )
+
+        needs_recrawl = False
+        needs_recompile = False
+        extracted_recrawl: bool | None = None
+        extracted_recompile: bool | None = None
+        if artifacts:
+            extracted_recrawl, extracted_recompile = _extract_probe_hints(artifacts)
+            if extracted_recrawl is not None:
+                needs_recrawl = extracted_recrawl
+            if extracted_recompile is not None:
+                needs_recompile = extracted_recompile
+
+        if (
+            extracted_recrawl is None
+            and extracted_recompile is None
+            and plan is not None
+            and execution_summary is not None
+            and execution_summary.status == "passed"
+            and plan.execution_track == "realtime_probe"
+            and plan.resolved_page_asset_id is None
+        ):
+            needs_recrawl = True
+            needs_recompile = True
+
+        return CheckResultView(
+            request_id=request.id,
+            plan_id=plan.id if plan else None,
+            page_check_id=plan.resolved_page_check_id if plan else None,
+            execution_track=_normalize_public_execution_track(plan.execution_track) if plan else None,
+            execution_summary=execution_summary,
+            artifacts=[
+                ArtifactItem(
+                    id=artifact.id,
+                    artifact_kind=artifact.artifact_kind,
+                    result_status=_normalize_enum_value(artifact.result_status),
+                    artifact_uri=artifact.artifact_uri,
+                    payload=artifact.payload,
+                    created_at=artifact.created_at,
+                )
+                for artifact in artifacts
+            ],
+            needs_recrawl=needs_recrawl,
+            needs_recompile=needs_recompile,
         )
 
     async def get_page_check_run_target(
@@ -493,3 +783,70 @@ class SqlControlPlaneRepository:
 def _is_unique_system_id_violation(*, exc: IntegrityError, table_name: str) -> bool:
     message = str(exc).lower()
     return "unique" in message and table_name in message and "system_id" in message
+
+
+def _normalize_public_execution_track(track: str | None) -> str | None:
+    if track == "realtime":
+        return "realtime_probe"
+    return track
+
+
+def _extract_page_context(
+    artifacts: list[ExecutionArtifact],
+) -> tuple[str | None, str | None]:
+    for artifact in artifacts:
+        if artifact.artifact_kind == "module_execution":
+            final_url = _get_payload_text(artifact.payload, "final_url")
+            page_title = _get_payload_text(artifact.payload, "page_title")
+            if final_url is not None or page_title is not None:
+                return final_url, page_title
+
+    for artifact in artifacts:
+        final_url = _get_payload_text(artifact.payload, "final_url")
+        page_title = _get_payload_text(artifact.payload, "page_title")
+        if final_url is not None or page_title is not None:
+            return final_url, page_title
+
+    return None, None
+
+
+def _get_payload_text(payload: dict[str, object] | None, key: str) -> str | None:
+    if not payload:
+        return None
+    value = payload.get(key)
+    if isinstance(value, str):
+        return value or None
+    return None
+
+
+def _normalize_enum_value(value: object) -> str:
+    normalized = getattr(value, "value", value)
+    return str(normalized)
+
+
+def _extract_probe_hints(
+    artifacts: list[ExecutionArtifact],
+) -> tuple[bool | None, bool | None]:
+    needs_recrawl: bool | None = None
+    needs_recompile: bool | None = None
+    for artifact in artifacts:
+        if not artifact.payload:
+            continue
+        recrawl = _get_payload_bool(artifact.payload, "needs_recrawl")
+        recompile = _get_payload_bool(artifact.payload, "needs_recompile")
+        if recrawl is not None:
+            needs_recrawl = recrawl
+        if recompile is not None:
+            needs_recompile = recompile
+        if needs_recrawl is not None or needs_recompile is not None:
+            break
+    return needs_recrawl, needs_recompile
+
+
+def _get_payload_bool(payload: dict[str, object] | None, key: str) -> bool | None:
+    if not payload:
+        return None
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return None
