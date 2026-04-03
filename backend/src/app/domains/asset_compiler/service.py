@@ -427,7 +427,9 @@ class AssetCompilerService:
                 retired_asset_ids=[str(asset_id) for asset_id in retired_asset_ids],
                 retired_check_ids=[str(check_id) for check_id in retired_check_ids],
                 disabled_alias_ids=[str(alias_id) for alias_id in alias_ids_to_disable],
+                enabled_alias_ids=[str(alias_id) for alias_id in alias_ids_to_enable],
                 paused_published_job_ids=[str(job_id) for job_id in published_job_ids_to_pause],
+                resumed_published_job_ids=[str(job_id) for job_id in published_job_ids_to_resume],
                 retire_reasons=retire_reason_payloads,
             )
         )
@@ -568,7 +570,7 @@ class AssetCompilerService:
         )
         selected_alias_ids: list[UUID] = []
         for alias in aliases:
-            if (alias.asset_key, alias.check_alias) in check_target_set:
+            if (alias.asset_key, alias.check_alias) in check_target_set and _is_system_disabled_alias(alias):
                 selected_alias_ids.append(alias.id)
         return selected_alias_ids
 
@@ -585,12 +587,13 @@ class AssetCompilerService:
     async def _query_published_jobs_to_resume(self, *, page_check_ids: list[UUID]) -> list[PublishedJob]:
         if not page_check_ids:
             return []
-        return await self._exec_all(
+        paused_jobs = await self._exec_all(
             select(PublishedJob)
             .where(PublishedJob.page_check_id.in_(page_check_ids))
             .where(PublishedJob.state == PublishedJobState.PAUSED)
             .order_by(PublishedJob.id)
         )
+        return [job for job in paused_jobs if _is_system_paused_job(job)]
 
     async def _ensure_intent_aliases(
         self,
@@ -737,3 +740,25 @@ def _dedupe_uuids(values: list[UUID]) -> list[UUID]:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_system_disabled_alias(alias: IntentAlias) -> bool:
+    if alias.disabled_by_snapshot_id is None:
+        return False
+    reason = (alias.disabled_reason or "").strip().lower()
+    if not reason:
+        return False
+    return reason.startswith("retired_") or reason.startswith("asset_retired") or "retired" in reason
+
+
+def _is_system_paused_job(job: PublishedJob) -> bool:
+    reason = (job.pause_reason or "").strip().lower()
+    if "retired" not in reason:
+        return False
+    return any(
+        (
+            job.paused_by_snapshot_id is not None,
+            job.paused_by_asset_id is not None,
+            job.paused_by_page_check_id is not None,
+        )
+    )

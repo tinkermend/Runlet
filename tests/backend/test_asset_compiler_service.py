@@ -6,6 +6,7 @@ from sqlmodel import select
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint
 from app.domains.asset_compiler.schemas import CompileSnapshotResult
 from app.infrastructure.db.models.assets import (
+    AssetReconciliationAudit,
     AssetSnapshot,
     IntentAlias,
     ModulePlan,
@@ -793,6 +794,19 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
         disabled_by_snapshot_id=retired_snapshot.id,
     )
     db_session.add(retired_alias)
+    manually_disabled_alias = IntentAlias(
+        system_alias=seeded_system.code,
+        page_alias=retired_page.page_title,
+        check_alias=retired_page_open_check.check_code,
+        route_hint=retired_page.route_path,
+        asset_key=retired_asset.asset_key,
+        confidence=1.0,
+        source="manual",
+        is_active=False,
+        disabled_reason="manual_disabled",
+        disabled_by_snapshot_id=None,
+    )
+    db_session.add(manually_disabled_alias)
     paused_job = PublishedJob(
         job_key="erp_users_page_open",
         page_check_id=retired_page_open_check.id,
@@ -806,6 +820,19 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
         paused_by_page_check_id=retired_page_open_check.id,
     )
     db_session.add(paused_job)
+    manually_paused_job = PublishedJob(
+        job_key="erp_users_page_open_manual",
+        page_check_id=retired_page_open_check.id,
+        asset_version=retired_asset.asset_version,
+        runtime_policy="published",
+        schedule_expr="*/10 * * * *",
+        state=PublishedJobState.PAUSED,
+        pause_reason="manual_pause",
+        paused_by_snapshot_id=None,
+        paused_by_asset_id=None,
+        paused_by_page_check_id=None,
+    )
+    db_session.add(manually_paused_job)
     db_session.commit()
 
     current_snapshot = _create_snapshot(db_session, seeded_system, quality_score=0.95, degraded=False)
@@ -828,6 +855,10 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
         .where(PageCheck.page_asset_id == retired_asset.id)
         .where(PageCheck.check_code == "page_open")
     ).one()
+    reconciliation_audit = db_session.exec(
+        select(AssetReconciliationAudit)
+        .where(AssetReconciliationAudit.snapshot_id == current_snapshot.id)
+    ).one()
 
     assert result.assets_updated >= 1
     assert retired_asset.lifecycle_status == AssetLifecycleStatus.ACTIVE
@@ -844,5 +875,9 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
     assert retired_alias.disabled_by_snapshot_id == retired_snapshot.id
     assert result.alias_enable_decision_count == 1
     assert result.alias_ids_to_enable == [retired_alias.id]
+    assert manually_disabled_alias.id not in result.alias_ids_to_enable
     assert result.published_job_resume_decision_count == 1
     assert result.published_job_ids_to_resume == [paused_job.id]
+    assert manually_paused_job.id not in result.published_job_ids_to_resume
+    assert reconciliation_audit.enabled_alias_ids == [str(retired_alias.id)]
+    assert reconciliation_audit.resumed_published_job_ids == [str(paused_job.id)]

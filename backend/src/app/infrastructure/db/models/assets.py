@@ -195,11 +195,19 @@ class AssetReconciliationAudit(BaseModel, table=True):
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
+    enabled_alias_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
     retire_reasons: list[dict[str, object]] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
     paused_published_job_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=sa.Column(json_type, nullable=False),
+    )
+    resumed_published_job_ids: list[str] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
@@ -212,7 +220,9 @@ class AssetReconciliationAudit(BaseModel, table=True):
         "retired_asset_ids",
         "retired_check_ids",
         "disabled_alias_ids",
+        "enabled_alias_ids",
         "paused_published_job_ids",
+        "resumed_published_job_ids",
         mode="before",
     )
     @classmethod
