@@ -10,6 +10,7 @@ from app.domains.control_plane.job_types import RUN_CHECK_JOB_TYPE
 from app.infrastructure.db.models.assets import ModulePlan, PageCheck
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
+from app.shared.enums import AssetLifecycleStatus
 from app.workers.runner import WorkerRunner
 
 
@@ -95,6 +96,15 @@ def queued_run_check_job(db_session, seeded_run_check_target):
     db_session.commit()
     db_session.refresh(job)
     return job
+
+
+@pytest.fixture
+def retire_run_check_target(db_session, seeded_run_check_target):
+    seeded_run_check_target.lifecycle_status = AssetLifecycleStatus.RETIRED_MISSING
+    db_session.add(seeded_run_check_target)
+    db_session.commit()
+    db_session.refresh(seeded_run_check_target)
+    return seeded_run_check_target
 
 
 @pytest.fixture
@@ -253,6 +263,21 @@ async def test_run_check_job_creates_execution_run(job_runner, queued_run_check_
     assert refreshed.result_payload is not None
     assert refreshed.result_payload["status"] == "passed"
     assert execution_run is not None
+
+
+@pytest.mark.anyio
+async def test_run_check_job_skips_when_target_was_retired_after_enqueue(
+    job_runner,
+    queued_run_check_job,
+    retire_run_check_target,
+    db_session,
+):
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "skipped"
+    assert refreshed.failure_message == "asset_retired_missing"
 
 
 @pytest.mark.anyio

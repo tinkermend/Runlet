@@ -101,6 +101,10 @@ class ControlPlaneService:
             page_hint=payload.page_hint,
             check_goal=payload.check_goal,
         )
+        if page_asset is not None and page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="asset is retired")
+        if page_check is not None and page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="page check is retired")
         if page_check is None:
             retired_target = await self.repository.resolve_retired_page_asset_or_check(
                 system_hint=payload.system_hint,
@@ -153,6 +157,10 @@ class ControlPlaneService:
             if lookup.page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
                 raise HTTPException(status_code=409, detail="asset is retired")
             raise HTTPException(status_code=404, detail="page check not found")
+        if target.page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="page check is retired")
+        if target.page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="asset is retired")
 
         return await self._accept_check_request(
             payload=CreateCheckRequest(

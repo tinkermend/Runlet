@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 收紧退休资产执行阻断：`ControlPlaneService.run_page_check` 与请求解析路径新增显式 lifecycle 冲突校验，退休 `page_check/page_asset` 统一返回 `409`；`RunCheckJobHandler` 在真正调用 runner 前会重新加载目标并做最终退休守卫，若目标已退休或关联发布任务因退休暂停则将队列项标记为 `skipped`，并写入 `failure_message=asset_retired_missing`。
 - 补齐 asset compile 生产执行链路：`AssetCompileJobHandler` 在 `compile_snapshot` 后会调用 `ControlPlaneService.apply_reconciliation_cascades` 执行 alias 失效与发布任务暂停，并把实际执行计数 `aliases_disabled/published_jobs_paused` 回写到 compile job `result_payload`；worker 组装同时注入 control plane 协调器，避免级联逻辑成为死代码。
 - 强化 reconciliation 级联一致性与对称性：`apply_reconciliation_cascades` 改为单事务执行 `disable/enable alias` 与 `pause/resume published jobs`，任一步骤失败会统一 rollback；生产链路现在同时消费 `alias_ids_to_enable` 与 `published_job_ids_to_resume`，并回写 `aliases_enabled/published_jobs_resumed` 实际执行计数。
 - control_plane 收口退役级联执行：新增 `PublishedJobService.pause_jobs_for_retired_page_check`，并由 `ControlPlaneService.apply_reconciliation_cascades` 统一执行 alias 失效与发布任务暂停；同时把请求解析路径收紧为 `active alias -> active asset -> active check`，对 `retired_missing` 目标返回显式 `409`（不再回退 realtime probe），并在 page-check 列表读模型补齐 `drift_status/lifecycle_status`。
