@@ -950,6 +950,49 @@ async def test_teardown_system_removes_related_rows_and_scheduler_jobs(
 
 
 @pytest.mark.anyio
+async def test_teardown_system_removes_orphaned_intent_aliases_from_real_service_path(
+    onboarded_system,
+    system_admin_service,
+    db_session,
+):
+    system = db_session.exec(
+        select(System).where(System.code == onboarded_system.system_code)
+    ).one()
+    orphan_alias = IntentAlias(
+        system_alias=system.code,
+        page_alias="orphan",
+        check_alias="table_render",
+        route_hint="/orphan",
+        asset_key="orphan.intent.alias.asset",
+        source="teardown_test",
+    )
+    db_session.add(orphan_alias)
+    db_session.commit()
+
+    await system_admin_service.teardown_system(system_code=onboarded_system.system_code)
+
+    assert db_session.exec(select(IntentAlias)).all() == []
+
+
+@pytest.mark.anyio
+async def test_teardown_system_respects_fk_safe_delete_order_for_script_render_and_execution_artifact(
+    onboarded_system_with_execution_residue,
+    system_admin_service,
+    db_session,
+):
+    pragma_result = db_session.connection().exec_driver_sql("PRAGMA foreign_keys = ON")
+    pragma_result.close()
+    fk_enabled = db_session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one()
+    assert fk_enabled == 1
+
+    await system_admin_service.teardown_system(
+        system_code=onboarded_system_with_execution_residue.system_code
+    )
+
+    _assert_models_empty(db_session, ScriptRender, ExecutionArtifact)
+
+
+@pytest.mark.anyio
 async def test_teardown_system_is_idempotent_when_system_is_missing(system_admin_service):
     result = await system_admin_service.teardown_system(system_code="missing-system")
 

@@ -264,8 +264,13 @@ class SqlSystemAdminRepository:
         )
         intent_alias_ids = await self._select_ids(
             select(IntentAlias.id)
-            .join(PageAsset, IntentAlias.asset_key == PageAsset.asset_key)
-            .where(PageAsset.system_id == system_id)
+            .outerjoin(PageAsset, IntentAlias.asset_key == PageAsset.asset_key)
+            .where(
+                or_(
+                    PageAsset.system_id == system_id,
+                    IntentAlias.system_alias == system.code,
+                )
+            )
             .distinct()
             .order_by(IntentAlias.id)
         )
@@ -587,6 +592,7 @@ class SqlSystemAdminRepository:
                 .where(
                     or_(
                         PageAsset.system_id == system_id,
+                        IntentAlias.system_alias == system_code,
                         IntentAlias.id.in_(teardown_ids.intent_alias_ids),
                     )
                 ),
