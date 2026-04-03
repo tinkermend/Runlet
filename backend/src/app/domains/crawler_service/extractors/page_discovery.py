@@ -88,30 +88,47 @@ class PageDiscoveryExtractor:
         page_store: dict[str, _PageStore] = {}
         quality_hints: list[float] = []
         framework_hints: list[str] = []
-        for signal in [*route_signals, *nav_signals, *network_signals]:
+        merged_signals = [*route_signals, *nav_signals, *network_signals]
+        interaction_signals: list[tuple[dict[str, Any], list[dict[str, object]]]] = []
+
+        for signal in merged_signals:
+            entry_candidates = self._to_entry_candidates(signal)
+            if self._is_interaction_only_signal(signal=signal, entry_candidates=entry_candidates):
+                interaction_signals.append((signal, entry_candidates))
+                continue
+
             route_path = self._extract_route_path(signal)
             if route_path is None:
                 continue
             page = page_store.setdefault(route_path, _PageStore())
-            page.title = page.title or self._clean_text(
-                signal.get("page_title") or signal.get("title") or signal.get("label") or signal.get("name")
+            self._merge_signal_to_page(
+                page=page,
+                signal=signal,
+                entry_candidates=entry_candidates,
+                include_label_as_title=True,
             )
-            page.sources.update(self._extract_sources(signal))
-            context_constraints = self._to_dict(signal.get("context_constraints"))
-            if context_constraints:
-                page.context_constraints.update(context_constraints)
-            for entry_candidate in self._to_entry_candidates(signal):
-                serialized = json.dumps(entry_candidate, ensure_ascii=False, sort_keys=True)
-                if serialized in page.entry_keys:
-                    continue
-                page.entry_keys.add(serialized)
-                page.entry_candidates.append(entry_candidate)
-            quality_hint = signal.get("quality_score_hint")
-            if isinstance(quality_hint, (int, float)):
-                quality_hints.append(float(quality_hint))
-            framework_hint = self._clean_text(signal.get("framework_hint"))
-            if framework_hint is not None:
-                framework_hints.append(framework_hint)
+            self._collect_extraction_hints(
+                signal=signal,
+                quality_hints=quality_hints,
+                framework_hints=framework_hints,
+            )
+
+        for signal, entry_candidates in interaction_signals:
+            route_path = self._resolve_interaction_target_route(signal=signal, page_store=page_store)
+            if route_path is None:
+                continue
+            page = page_store.setdefault(route_path, _PageStore())
+            self._merge_signal_to_page(
+                page=page,
+                signal=signal,
+                entry_candidates=entry_candidates,
+                include_label_as_title=False,
+            )
+            self._collect_extraction_hints(
+                signal=signal,
+                quality_hints=quality_hints,
+                framework_hints=framework_hints,
+            )
 
         for metadata in metadata_signals:
             route_path = self._extract_route_path(metadata)
@@ -310,6 +327,75 @@ class PageDiscoveryExtractor:
         if route_path is None and isinstance(signal.get("url"), str):
             route_path = signal["url"]
         return self._normalize_path(route_path)
+
+    def _resolve_interaction_target_route(
+        self,
+        *,
+        signal: dict[str, Any],
+        page_store: dict[str, "_PageStore"],
+    ) -> str | None:
+        page_route_path = self._normalize_path(signal.get("page_route_path"))
+        if page_route_path is not None:
+            return page_route_path
+        route_path = self._extract_route_path(signal)
+        if route_path is not None and route_path in page_store:
+            return route_path
+        return None
+
+    def _is_interaction_only_signal(
+        self,
+        *,
+        signal: dict[str, Any],
+        entry_candidates: list[dict[str, object]],
+    ) -> bool:
+        if not entry_candidates:
+            return False
+        if self._normalize_entry_type(signal.get("entry_type") or signal.get("interaction_type")) is not None:
+            return True
+        if self._normalize_entry_type(signal.get("interaction")) is not None:
+            return True
+        page_route_path = self._normalize_path(signal.get("page_route_path"))
+        route_path = self._normalize_path(signal.get("route_path") or signal.get("path"))
+        if page_route_path is not None and route_path is not None and page_route_path != route_path:
+            return True
+        return False
+
+    def _merge_signal_to_page(
+        self,
+        *,
+        page: "_PageStore",
+        signal: dict[str, Any],
+        entry_candidates: list[dict[str, object]],
+        include_label_as_title: bool,
+    ) -> None:
+        title_candidate = self._clean_text(signal.get("page_title") or signal.get("title") or signal.get("name"))
+        if title_candidate is None and include_label_as_title:
+            title_candidate = self._clean_text(signal.get("label"))
+        page.title = page.title or title_candidate
+        page.sources.update(self._extract_sources(signal))
+        context_constraints = self._to_dict(signal.get("context_constraints"))
+        if context_constraints:
+            page.context_constraints.update(context_constraints)
+        for entry_candidate in entry_candidates:
+            serialized = json.dumps(entry_candidate, ensure_ascii=False, sort_keys=True)
+            if serialized in page.entry_keys:
+                continue
+            page.entry_keys.add(serialized)
+            page.entry_candidates.append(entry_candidate)
+
+    def _collect_extraction_hints(
+        self,
+        *,
+        signal: dict[str, Any],
+        quality_hints: list[float],
+        framework_hints: list[str],
+    ) -> None:
+        quality_hint = signal.get("quality_score_hint")
+        if isinstance(quality_hint, (int, float)):
+            quality_hints.append(float(quality_hint))
+        framework_hint = self._clean_text(signal.get("framework_hint"))
+        if framework_hint is not None:
+            framework_hints.append(framework_hint)
 
     def _to_entry_candidates(self, signal: dict[str, Any]) -> list[dict[str, object]]:
         candidates: list[dict[str, object]] = []

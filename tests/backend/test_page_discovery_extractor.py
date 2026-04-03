@@ -16,12 +16,14 @@ class FakeDiscoverySession:
             {"label": "报表中心", "route_path": "/reports", "role": "menuitem"},
             {
                 "label": "用户标签页",
+                "route_path": "/users/tab/security",
                 "page_route_path": "/users",
                 "entry_type": "tab_switch",
                 "role": "tab",
             },
             {
                 "label": "新增用户",
+                "route_path": "/users/modal/create",
                 "page_route_path": "/users",
                 "entry_type": "open_modal",
                 "role": "button",
@@ -64,6 +66,8 @@ async def test_page_discovery_marks_tabs_and_modal_triggers_as_entry_candidates(
 
     users_page = next(page for page in result.pages if page.route_path == "/users")
     assert {"tab_switch", "open_modal"} <= {entry["entry_type"] for entry in users_page.entry_candidates}
+    assert "/users/tab/security" not in {page.route_path for page in result.pages}
+    assert "/users/modal/create" not in {page.route_path for page in result.pages}
 
 
 @pytest.mark.anyio
