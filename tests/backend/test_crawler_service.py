@@ -249,6 +249,17 @@ class FakeDomMenuExtractor:
         return self.result
 
 
+class FakePageDiscoveryExtractor:
+    def __init__(self, result: CrawlExtractionResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def extract(self, *, browser_session, system, crawl_scope: str) -> CrawlExtractionResult:
+        del browser_session, system, crawl_scope
+        self.calls += 1
+        return self.result
+
+
 @pytest.mark.anyio
 async def test_run_crawl_persists_snapshot_pages_and_elements(
     db_session,
@@ -382,6 +393,63 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
             "selector": "data-testid=add-user",
         },
     ]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_uses_page_discovery_as_primary_page_source(
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            quality_score=0.9,
+            pages=[
+                PageCandidate(route_path="/dashboard", page_title="仪表盘", discovery_sources=["runtime_route_hints"]),
+                PageCandidate(
+                    route_path="/users",
+                    page_title="用户管理",
+                    discovery_sources=["dom_menu_tree", "network_route_config"],
+                ),
+            ],
+        )
+    )
+    router_extractor = FakeRouterExtractor(
+        CrawlExtractionResult(pages=[PageCandidate(route_path="/legacy", page_title="遗留路由")])
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[
+                MenuCandidate(
+                    label="用户管理",
+                    route_path="/users",
+                    depth=0,
+                    sort_order=0,
+                    playwright_locator="role=menuitem[name='用户管理']",
+                    page_route_path="/users",
+                )
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        router_extractor=router_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.pages_saved == 2
+    assert page_discovery_extractor.calls == 1
+    assert router_extractor.calls == 0
+    assert dom_menu_extractor.calls == 1
+
+    pages = db_session.exec(select(Page).order_by(Page.route_path, Page.id)).all()
+    assert [page.route_path for page in pages] == ["/dashboard", "/users"]
 
 
 @pytest.mark.anyio

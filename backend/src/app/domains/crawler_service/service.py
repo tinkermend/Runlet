@@ -13,6 +13,10 @@ from app.domains.crawler_service.extractors.dom_menu import (
     DomMenuExtractor,
     DomMenuTraversalExtractor,
 )
+from app.domains.crawler_service.extractors.page_discovery import (
+    PageDiscoveryExtractor,
+    PageDiscoveryProtocol,
+)
 from app.domains.crawler_service.extractors.router_runtime import (
     RuntimeRouteHintExtractor,
     RouterRuntimeExtractor,
@@ -41,6 +45,10 @@ class BrowserSession(Protocol):
     async def collect_dom_menu_nodes(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
     async def collect_dom_elements(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
+    async def collect_network_route_configs(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
+    async def collect_page_metadata(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
     async def close(self) -> None: ...
 
@@ -365,6 +373,24 @@ class PlaywrightBrowserFactory:
                         elements.append(payload)
                 return elements
 
+            async def collect_network_route_configs(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                return []
+
+            async def collect_page_metadata(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                return []
+
             async def _wait_for_route_render(self_nonlocal) -> None:
                 waiter = getattr(page, "wait_for_function", None)
                 if not callable(waiter):
@@ -394,6 +420,7 @@ class CrawlerService:
         *,
         session: Session | AsyncSession,
         browser_factory: BrowserFactory,
+        page_discovery_extractor: PageDiscoveryProtocol | None = None,
         router_extractor: RouterRuntimeExtractor | None = None,
         dom_menu_extractor: DomMenuExtractor | None = None,
     ) -> None:
@@ -401,6 +428,13 @@ class CrawlerService:
         self.browser_factory = browser_factory
         self.router_extractor = router_extractor or RuntimeRouteHintExtractor()
         self.dom_menu_extractor = dom_menu_extractor or DomMenuTraversalExtractor()
+        discovery_dom_extractor = self.dom_menu_extractor
+        if not callable(getattr(discovery_dom_extractor, "collect_navigation_signals", None)):
+            discovery_dom_extractor = None
+        self.page_discovery_extractor = page_discovery_extractor or PageDiscoveryExtractor(
+            runtime_extractor=self.router_extractor,
+            dom_menu_extractor=discovery_dom_extractor,
+        )
 
     async def run_crawl(
         self,
@@ -426,7 +460,7 @@ class CrawlerService:
         )
 
         try:
-            runtime_result = await self.router_extractor.extract(
+            page_discovery_result = await self.page_discovery_extractor.extract(
                 browser_session=browser_session,
                 system=system,
                 crawl_scope=crawl_scope,
@@ -439,7 +473,7 @@ class CrawlerService:
         finally:
             await browser_session.close()
 
-        combined = self._combine_results(system=system, runtime=runtime_result, dom=dom_result)
+        combined = self._combine_results(system=system, discovery=page_discovery_result, dom=dom_result)
         snapshot = self._build_snapshot(
             system_id=system_id,
             crawl_scope=crawl_scope,
@@ -486,11 +520,11 @@ class CrawlerService:
         self,
         *,
         system,
-        runtime: CrawlExtractionResult,
+        discovery: CrawlExtractionResult,
         dom: CrawlExtractionResult,
     ) -> CrawlExtractionResult:
         page_candidates: dict[str, PageCandidate] = {}
-        for candidate in runtime.pages + dom.pages:
+        for candidate in discovery.pages + dom.pages:
             page_candidates[candidate.route_path] = candidate
 
         title_route_map = self._build_title_route_map(page_candidates.values())
@@ -521,14 +555,14 @@ class CrawlerService:
             if element.page_route_path not in page_candidates:
                 page_candidates[element.page_route_path] = PageCandidate(route_path=element.page_route_path)
 
-        quality_candidates = [value for value in (runtime.quality_score, dom.quality_score) if value is not None]
+        quality_candidates = [value for value in (discovery.quality_score, dom.quality_score) if value is not None]
         quality_score = max(quality_candidates) if quality_candidates else None
-        failure_reason = runtime.failure_reason or dom.failure_reason
-        warning_messages = [*runtime.warning_messages, *dom.warning_messages]
-        degraded = runtime.degraded or dom.degraded or len(page_candidates) == 0
+        failure_reason = discovery.failure_reason or dom.failure_reason
+        warning_messages = [*discovery.warning_messages, *dom.warning_messages]
+        degraded = discovery.degraded or dom.degraded or len(page_candidates) == 0
 
         return CrawlExtractionResult(
-            framework_detected=runtime.framework_detected or dom.framework_detected or system.framework_type,
+            framework_detected=discovery.framework_detected or dom.framework_detected or system.framework_type,
             quality_score=quality_score,
             pages=list(page_candidates.values()),
             menus=normalized_dom_menus,

@@ -28,6 +28,34 @@ class NullRouterRuntimeExtractor:
 
 
 class RuntimeRouteHintExtractor:
+    async def collect_route_signals(
+        self,
+        *,
+        browser_session,
+        crawl_scope: str,
+    ) -> list[dict[str, Any]]:
+        route_hints = await self._collect_route_hints(
+            browser_session=browser_session,
+            crawl_scope=crawl_scope,
+        )
+        signals: list[dict[str, Any]] = []
+        for hint in route_hints:
+            route_path = self._normalize_path(hint.get("path") or hint.get("route_path"))
+            if route_path is None:
+                continue
+            signal: dict[str, Any] = {
+                "route_path": route_path,
+                "discovery_sources": ["runtime_route_hints"],
+            }
+            page_title = self._to_clean_text(hint.get("title") or hint.get("label") or hint.get("name"))
+            if page_title is not None:
+                signal["page_title"] = page_title
+            context_constraints = hint.get("context_constraints")
+            if isinstance(context_constraints, dict):
+                signal["context_constraints"] = context_constraints
+            signals.append(signal)
+        return signals
+
     async def extract(
         self,
         *,
@@ -40,23 +68,30 @@ class RuntimeRouteHintExtractor:
         failure_reason: str | None = None
         pages: list[PageCandidate] = []
         try:
-            route_hints = await self._collect_route_hints(
+            route_signals = await self.collect_route_signals(
                 browser_session=browser_session,
                 crawl_scope=crawl_scope,
             )
         except Exception as exc:  # pragma: no cover - exercised via service tests
-            route_hints = []
+            route_signals = []
             failure_reason = f"runtime route hint extraction failed: {exc}"
             warnings.append(f"route hints degraded: {exc}")
 
         seen: set[str] = set()
-        for hint in route_hints:
-            route_path = self._normalize_path(hint.get("path") or hint.get("route_path"))
+        for signal in route_signals:
+            route_path = self._normalize_path(signal.get("route_path"))
             if route_path is None or route_path in seen:
                 continue
             seen.add(route_path)
-            page_title = self._to_clean_text(hint.get("title") or hint.get("label") or hint.get("name"))
-            pages.append(PageCandidate(route_path=route_path, page_title=page_title))
+            page_title = self._to_clean_text(signal.get("page_title"))
+            discovery_sources = signal.get("discovery_sources")
+            pages.append(
+                PageCandidate(
+                    route_path=route_path,
+                    page_title=page_title,
+                    discovery_sources=discovery_sources if isinstance(discovery_sources, list) else [],
+                )
+            )
 
         quality_score = min(1.0, 0.6 + (0.1 * len(pages))) if pages else 0.0
         return CrawlExtractionResult(
