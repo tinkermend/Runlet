@@ -286,6 +286,17 @@ class FakePageDiscoveryExtractor:
         return self.result
 
 
+class FakeStateProbeExtractor:
+    def __init__(self, result: CrawlExtractionResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def extract(self, *, browser_session, system, crawl_scope: str) -> CrawlExtractionResult:
+        del browser_session, system, crawl_scope
+        self.calls += 1
+        return self.result
+
+
 @pytest.mark.anyio
 async def test_run_crawl_persists_snapshot_pages_and_elements(
     db_session,
@@ -801,4 +812,97 @@ async def test_playwright_browser_factory_metadata_reports_current_page_only(mon
 
     assert page_metadata == [
         {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200}
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_merges_state_probe_elements_with_state_context(
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            quality_score=0.91,
+            pages=[
+                PageCandidate(route_path="/users", page_title="用户管理", discovery_sources=["runtime_route_hints"]),
+            ],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[
+                MenuCandidate(
+                    label="用户管理",
+                    route_path="/users",
+                    page_route_path="/users",
+                    playwright_locator="role=menuitem[name='用户管理']",
+                )
+            ]
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            quality_score=0.77,
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"active_tab": "default"},
+                    locator_candidates=[
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='新增用户']",
+                        }
+                    ],
+                    playwright_locator="role=button[name='新增用户']",
+                    element_role="button",
+                    element_text="新增用户",
+                ),
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:modal=create",
+                    state_context={"modal_title": "create"},
+                    locator_candidates=[
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='确认']",
+                        }
+                    ],
+                    playwright_locator="role=button[name='确认']",
+                    element_role="button",
+                    element_text="确认",
+                ),
+            ],
+            warning_messages=["interaction_budget_exhausted"],
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.pages_saved == 1
+    assert result.menus_saved == 1
+    assert result.elements_saved == 2
+    assert result.warning_messages == ["interaction_budget_exhausted"]
+    assert state_probe_extractor.calls == 1
+
+    elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
+    assert elements[0].state_context == {"active_tab": "default"}
+    assert elements[0].locator_candidates == [
+        {
+            "strategy_type": "semantic",
+            "selector": "role=button[name='新增用户']",
+        }
     ]

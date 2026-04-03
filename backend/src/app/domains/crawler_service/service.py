@@ -21,6 +21,10 @@ from app.domains.crawler_service.extractors.router_runtime import (
     RuntimeRouteHintExtractor,
     RouterRuntimeExtractor,
 )
+from app.domains.crawler_service.extractors.state_probe import (
+    ControlledStateProbeExtractor,
+    StateProbeExtractor,
+)
 from app.domains.crawler_service.schemas import (
     CrawlExtractionResult,
     CrawlRunResult,
@@ -588,6 +592,7 @@ class CrawlerService:
         page_discovery_extractor: PageDiscoveryProtocol | None = None,
         router_extractor: RouterRuntimeExtractor | None = None,
         dom_menu_extractor: DomMenuExtractor | None = None,
+        state_probe_extractor: StateProbeExtractor | None = None,
     ) -> None:
         self.session = session
         self.browser_factory = browser_factory
@@ -600,6 +605,7 @@ class CrawlerService:
             runtime_extractor=self.router_extractor,
             dom_menu_extractor=discovery_dom_extractor,
         )
+        self.state_probe_extractor = state_probe_extractor or ControlledStateProbeExtractor()
 
     async def run_crawl(
         self,
@@ -635,10 +641,20 @@ class CrawlerService:
                 system=system,
                 crawl_scope=crawl_scope,
             )
+            probe_result = await self.state_probe_extractor.extract(
+                browser_session=browser_session,
+                system=system,
+                crawl_scope=crawl_scope,
+            )
         finally:
             await browser_session.close()
 
-        combined = self._combine_results(system=system, discovery=page_discovery_result, dom=dom_result)
+        combined = self._combine_results(
+            system=system,
+            discovery=page_discovery_result,
+            dom=dom_result,
+            probe=probe_result,
+        )
         snapshot = self._build_snapshot(
             system_id=system_id,
             crawl_scope=crawl_scope,
@@ -687,9 +703,11 @@ class CrawlerService:
         system,
         discovery: CrawlExtractionResult,
         dom: CrawlExtractionResult,
+        probe: CrawlExtractionResult,
     ) -> CrawlExtractionResult:
+        representative_elements = probe.elements or [item for item in dom.elements if item.state_signature]
         page_candidates: dict[str, PageCandidate] = {}
-        for candidate in discovery.pages + dom.pages:
+        for candidate in discovery.pages + dom.pages + probe.pages:
             page_candidates[candidate.route_path] = candidate
 
         title_route_map = self._build_title_route_map(page_candidates.values())
@@ -716,22 +734,29 @@ class CrawlerService:
             if route_path and route_path not in page_candidates:
                 page_candidates[route_path] = PageCandidate(route_path=route_path, page_title=menu.label)
 
-        for element in dom.elements:
+        for element in representative_elements:
             if element.page_route_path not in page_candidates:
                 page_candidates[element.page_route_path] = PageCandidate(route_path=element.page_route_path)
 
-        quality_candidates = [value for value in (discovery.quality_score, dom.quality_score) if value is not None]
+        quality_candidates = [
+            value for value in (discovery.quality_score, dom.quality_score, probe.quality_score) if value is not None
+        ]
         quality_score = max(quality_candidates) if quality_candidates else None
-        failure_reason = discovery.failure_reason or dom.failure_reason
-        warning_messages = [*discovery.warning_messages, *dom.warning_messages]
+        failure_reason = discovery.failure_reason or dom.failure_reason or probe.failure_reason
+        warning_messages = [*discovery.warning_messages, *dom.warning_messages, *probe.warning_messages]
         degraded = discovery.degraded or dom.degraded or len(page_candidates) == 0
 
         return CrawlExtractionResult(
-            framework_detected=discovery.framework_detected or dom.framework_detected or system.framework_type,
+            framework_detected=(
+                discovery.framework_detected
+                or probe.framework_detected
+                or dom.framework_detected
+                or system.framework_type
+            ),
             quality_score=quality_score,
             pages=list(page_candidates.values()),
             menus=normalized_dom_menus,
-            elements=dom.elements,
+            elements=representative_elements,
             failure_reason=failure_reason,
             warning_messages=warning_messages,
             degraded=degraded,

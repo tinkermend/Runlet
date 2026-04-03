@@ -1,8 +1,34 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+StateProbeActionType = Literal[
+    "tab_switch",
+    "expand_panel",
+    "open_modal",
+    "open_drawer",
+    "toggle_view",
+    "paginate_probe",
+    "tree_expand",
+]
+ALLOWED_STATE_PROBE_ACTIONS: set[str] = {
+    "tab_switch",
+    "expand_panel",
+    "open_modal",
+    "open_drawer",
+    "toggle_view",
+    "paginate_probe",
+    "tree_expand",
+}
+StateProbeReason = Literal[
+    "blocked_by_permission",
+    "unsafe_action_rejected",
+    "interaction_budget_exhausted",
+    "state_signature_duplicate",
+]
 
 
 class PageCandidate(BaseModel):
