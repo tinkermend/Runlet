@@ -33,6 +33,11 @@ class ModuleExecutionResult(BaseModel):
     step_results: list[StepExecutionResult]
 
 
+class PageProbePlan(BaseModel):
+    route_path: str
+    steps_json: list[dict[str, object]]
+
+
 class RunPageCheckResult(BaseModel):
     page_check_id: UUID | None = None
     execution_run_id: UUID

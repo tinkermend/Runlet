@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.domains.runner_service.schemas import PageProbePlan
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 
 
@@ -133,3 +134,19 @@ async def test_realtime_probe_rejects_legacy_realtime_execution_track(
         await realtime_probe_runner_service.run_realtime_probe(
             execution_plan_id=legacy_realtime_execution_plan_id,
         )
+
+
+@pytest.mark.anyio
+async def test_realtime_probe_builds_explicit_page_level_probe_plan(
+    realtime_probe_runner_service,
+):
+    probe_plan = realtime_probe_runner_service._build_page_probe_plan(route_path="/users")
+
+    assert isinstance(probe_plan, PageProbePlan)
+    assert probe_plan.route_path == "/users"
+    assert [step["module"] for step in probe_plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "assert.page_open",
+        "page.wait_ready",
+    ]

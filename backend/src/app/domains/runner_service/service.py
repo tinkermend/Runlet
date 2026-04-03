@@ -13,6 +13,7 @@ from app.domains.runner_service.module_executor import ModuleExecutor, RunnerRun
 from app.domains.runner_service.schemas import (
     AuthInjectStatus,
     ModuleExecutionResult,
+    PageProbePlan,
     RunPageCheckResult,
     RunnerRunStatus,
     StepExecutionResult,
@@ -276,11 +277,12 @@ class RunnerService:
         page_title: str | None = None
         page_probe: dict[str, object] | None = None
         screenshot_bytes: bytes | None = None
+        probe_plan = self._build_page_probe_plan(route_path=page.route_path)
 
         await self._configure_runtime(base_url=system.base_url)
         try:
             execution_result = await self.module_executor.execute(
-                steps_json=self._build_realtime_probe_plan(route_path=page.route_path),
+                steps_json=probe_plan.steps_json,
                 storage_state=auth_state.storage_state,
             )
             final_url = await self._read_runtime_text("get_final_url")
@@ -314,7 +316,7 @@ class RunnerService:
                 ),
                 "page_asset_id": str(page_asset.id),
                 "system_id": str(system.id),
-                "route_path": page.route_path,
+                "route_path": probe_plan.route_path,
                 "step_results": [step.model_dump(mode="json") for step in execution_result.step_results],
                 "final_url": final_url,
                 "page_title": page_title,
@@ -446,28 +448,31 @@ class RunnerService:
         )
 
     @staticmethod
-    def _build_realtime_probe_plan(*, route_path: str) -> list[dict[str, object]]:
-        return [
-            {
-                "module": "auth.inject_state",
-                "params": {"policy": "server_injected"},
-            },
-            {
-                "module": "nav.menu_chain",
-                "params": {
-                    "menu_chain": [],
-                    "route_path": route_path,
+    def _build_page_probe_plan(*, route_path: str) -> PageProbePlan:
+        return PageProbePlan(
+            route_path=route_path,
+            steps_json=[
+                {
+                    "module": "auth.inject_state",
+                    "params": {"policy": "server_injected"},
                 },
-            },
-            {
-                "module": "assert.page_open",
-                "params": {"route_path": route_path},
-            },
-            {
-                "module": "page.wait_ready",
-                "params": {"route_path": route_path},
-            },
-        ]
+                {
+                    "module": "nav.menu_chain",
+                    "params": {
+                        "menu_chain": [],
+                        "route_path": route_path,
+                    },
+                },
+                {
+                    "module": "assert.page_open",
+                    "params": {"route_path": route_path},
+                },
+                {
+                    "module": "page.wait_ready",
+                    "params": {"route_path": route_path},
+                },
+            ],
+        )
 
     async def _resolve_execution_plan(
         self,
