@@ -30,6 +30,7 @@ def build_module_plan(
             "module": "locator.assert",
             "params": {
                 "assertion": _assertion_name(check_code),
+                "expected_element_type": _expected_element_type(check_code),
                 "locator_bundle": locator_bundle or {"candidates": []},
             },
         }
@@ -50,3 +51,11 @@ def _assertion_name(check_code: str) -> str:
     if check_code == "open_create_modal":
         return "modal_visible"
     return "page_ready"
+
+
+def _expected_element_type(check_code: str) -> str:
+    if check_code in {"table_render", "tab_switch_render"}:
+        return "table"
+    if check_code == "open_create_modal":
+        return "dialog"
+    return "page"

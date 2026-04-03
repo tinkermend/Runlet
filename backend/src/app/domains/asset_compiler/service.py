@@ -226,6 +226,7 @@ class AssetCompilerService:
                 page_check = await self._find_page_check(
                     page_asset_id=page_asset.id,
                     check_code=check_definition.check_code,
+                    state_signature=check_state_signature,
                 )
                 created_check = page_check is None
                 if page_check is None:
@@ -483,13 +484,31 @@ class AssetCompilerService:
             .order_by(PageAsset.id)
         )
 
-    async def _find_page_check(self, *, page_asset_id: UUID, check_code: str) -> PageCheck | None:
-        return await self._exec_first(
+    async def _find_page_check(
+        self,
+        *,
+        page_asset_id: UUID,
+        check_code: str,
+        state_signature: str | None,
+    ) -> PageCheck | None:
+        page_checks = await self._exec_all(
             select(PageCheck)
             .where(PageCheck.page_asset_id == page_asset_id)
             .where(PageCheck.check_code == check_code)
             .order_by(PageCheck.id)
         )
+        expected_state_signature = _normalize_text(state_signature)
+
+        for page_check in page_checks:
+            existing_state_signature = _extract_page_check_state_signature(page_check)
+            if existing_state_signature == expected_state_signature:
+                return page_check
+
+        if expected_state_signature.endswith(":default"):
+            for page_check in page_checks:
+                if not _extract_page_check_state_signature(page_check):
+                    return page_check
+        return None
 
     async def _find_latest_asset_snapshot(self, *, page_asset_id: UUID) -> AssetSnapshot | None:
         return await self._exec_first(
@@ -836,7 +855,7 @@ def _expected_element_type_for_check(check_code: str) -> str | None:
     if check_code in {"table_render", "tab_switch_render"}:
         return "table"
     if check_code == "open_create_modal":
-        return "button"
+        return "dialog"
     return None
 
 
@@ -851,6 +870,13 @@ def _infer_strategy_type(playwright_locator: str) -> str:
     if "get_by_text" in locator or locator.startswith("text="):
         return "text_anchor"
     return "css"
+
+
+def _extract_page_check_state_signature(page_check: PageCheck) -> str:
+    input_schema = page_check.input_schema
+    if not isinstance(input_schema, dict):
+        return ""
+    return _normalize_text(input_schema.get("state_signature"))
 
 
 def previous_snapshot_to_dict(previous_snapshot: AssetSnapshot | None) -> dict[str, str] | None:

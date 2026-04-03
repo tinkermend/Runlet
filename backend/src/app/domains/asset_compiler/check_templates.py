@@ -48,11 +48,12 @@ def build_standard_checks(
     )
 
     deduped_checks: list[StandardCheckDefinition] = []
-    seen_check_codes: set[str] = set()
+    seen_check_keys: set[tuple[str, str]] = set()
     for check in checks:
-        if check.check_code in seen_check_codes:
+        dedupe_key = (check.check_code, _clean_text(check.state_signature))
+        if dedupe_key in seen_check_keys:
             continue
-        seen_check_codes.add(check.check_code)
+        seen_check_keys.add(dedupe_key)
         deduped_checks.append(check)
 
     return deduped_checks
