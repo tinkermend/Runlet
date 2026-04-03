@@ -190,6 +190,7 @@ class SystemAdminService:
                 remaining_reference_tables=[],
             )
 
+        self._require_scheduler_registry_for_teardown()
         teardown_ids = await self.repository.collect_system_teardown_ids(system=system)
         scheduler_job_ids = self._remove_scheduler_jobs(teardown_ids=teardown_ids)
 
@@ -249,7 +250,13 @@ class SystemAdminService:
             return []
         return sorted(job.id for job in self.scheduler_registry.scheduler.get_jobs())
 
+    def _require_scheduler_registry_for_teardown(self) -> SchedulerRegistry:
+        if self.scheduler_registry is None:
+            raise RuntimeError("scheduler_registry is required for teardown")
+        return self.scheduler_registry
+
     def _remove_scheduler_jobs(self, *, teardown_ids: SystemTeardownIds) -> list[str]:
+        scheduler_registry = self._require_scheduler_registry_for_teardown()
         scheduler_job_ids = [
             build_auth_policy_job_id(teardown_ids.system_id),
             build_crawl_policy_job_id(teardown_ids.system_id),
@@ -258,22 +265,18 @@ class SystemAdminService:
                 for published_job_id in teardown_ids.published_job_ids
             ],
         ]
-        if self.scheduler_registry is None:
-            return scheduler_job_ids
-
-        self.scheduler_registry.remove_job(build_auth_policy_job_id(teardown_ids.system_id))
-        self.scheduler_registry.remove_job(build_crawl_policy_job_id(teardown_ids.system_id))
+        scheduler_registry.remove_job(build_auth_policy_job_id(teardown_ids.system_id))
+        scheduler_registry.remove_job(build_crawl_policy_job_id(teardown_ids.system_id))
         for published_job_id in teardown_ids.published_job_ids:
-            self.scheduler_registry.remove_job(build_published_job_id(published_job_id))
+            scheduler_registry.remove_job(build_published_job_id(published_job_id))
         return scheduler_job_ids
 
     def _remaining_scheduler_job_ids(self, *, scheduler_job_ids: list[str]) -> list[str]:
-        if self.scheduler_registry is None:
-            return []
+        scheduler_registry = self._require_scheduler_registry_for_teardown()
         return sorted(
             job_id
             for job_id in scheduler_job_ids
-            if self.scheduler_registry.scheduler.get_job(job_id) is not None
+            if scheduler_registry.scheduler.get_job(job_id) is not None
         )
 
     async def _ensure_job_completed_successfully(

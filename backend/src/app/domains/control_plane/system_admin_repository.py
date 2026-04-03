@@ -420,34 +420,288 @@ class SqlSystemAdminRepository:
         *,
         teardown_ids: SystemTeardownIds,
     ) -> list[str]:
+        system_id = teardown_ids.system_id
+        system_code = teardown_ids.system_code
+        system_id_text = str(system_id)
+
+        page_asset_ids = select(PageAsset.id).where(PageAsset.system_id == system_id)
+        page_check_ids = (
+            select(PageCheck.id)
+            .join(PageAsset, PageCheck.page_asset_id == PageAsset.id)
+            .where(PageAsset.system_id == system_id)
+        )
+        module_plan_ids = (
+            select(ModulePlan.id)
+            .join(PageAsset, ModulePlan.page_asset_id == PageAsset.id)
+            .where(PageAsset.system_id == system_id)
+        )
+        crawl_snapshot_ids = select(CrawlSnapshot.id).where(CrawlSnapshot.system_id == system_id)
+        auth_policy_ids = select(SystemAuthPolicy.id).where(SystemAuthPolicy.system_id == system_id)
+        crawl_policy_ids = select(SystemCrawlPolicy.id).where(SystemCrawlPolicy.system_id == system_id)
+        execution_request_ids = select(ExecutionRequest.id).where(
+            ExecutionRequest.system_hint == system_code
+        )
+        execution_plan_ids = select(ExecutionPlan.id).where(
+            or_(
+                ExecutionPlan.resolved_system_id == system_id,
+                ExecutionPlan.resolved_page_asset_id.in_(page_asset_ids),
+                ExecutionPlan.resolved_page_check_id.in_(page_check_ids),
+                ExecutionPlan.module_plan_id.in_(module_plan_ids),
+                ExecutionPlan.execution_request_id.in_(execution_request_ids),
+            )
+        )
+        execution_run_ids = select(ExecutionRun.id).where(
+            ExecutionRun.execution_plan_id.in_(execution_plan_ids)
+        )
+        execution_artifact_ids = select(ExecutionArtifact.id).where(
+            ExecutionArtifact.execution_run_id.in_(execution_run_ids)
+        )
+        published_job_ids = select(PublishedJob.id).where(
+            or_(
+                PublishedJob.page_check_id.in_(page_check_ids),
+                PublishedJob.paused_by_page_check_id.in_(page_check_ids),
+                PublishedJob.paused_by_asset_id.in_(page_asset_ids),
+                PublishedJob.paused_by_snapshot_id.in_(crawl_snapshot_ids),
+            )
+        )
+        published_job_script_render_ids = select(PublishedJob.script_render_id).where(
+            PublishedJob.id.in_(published_job_ids),
+            PublishedJob.script_render_id.is_not(None),
+        )
+        script_render_ids = select(ScriptRender.id).where(
+            or_(
+                ScriptRender.execution_plan_id.in_(execution_plan_ids),
+                ScriptRender.execution_artifact_id.in_(execution_artifact_ids),
+                ScriptRender.id.in_(published_job_script_render_ids),
+            )
+        )
+
         remaining_tables: list[str] = []
-        for model, ids in [
-            (JobRun, teardown_ids.job_run_ids),
-            (PublishedJob, teardown_ids.published_job_ids),
-            (QueuedJob, teardown_ids.queued_job_ids),
-            (ExecutionArtifact, teardown_ids.execution_artifact_ids),
-            (ScriptRender, teardown_ids.script_render_ids),
-            (ExecutionRun, teardown_ids.execution_run_ids),
-            (ExecutionPlan, teardown_ids.execution_plan_ids),
-            (ExecutionRequest, teardown_ids.execution_request_ids),
-            (AssetReconciliationAudit, teardown_ids.reconciliation_audit_ids),
-            (AssetSnapshot, teardown_ids.asset_snapshot_ids),
-            (ModulePlan, teardown_ids.module_plan_ids),
-            (IntentAlias, teardown_ids.intent_alias_ids),
-            (PageCheck, teardown_ids.page_check_ids),
-            (PageAsset, teardown_ids.page_asset_ids),
-            (PageElement, teardown_ids.page_element_ids),
-            (MenuNode, teardown_ids.menu_node_ids),
-            (Page, teardown_ids.page_ids),
-            (CrawlSnapshot, teardown_ids.crawl_snapshot_ids),
-            (AuthState, teardown_ids.auth_state_ids),
-            (SystemCredential, teardown_ids.system_credential_ids),
-            (SystemAuthPolicy, teardown_ids.auth_policy_ids),
-            (SystemCrawlPolicy, teardown_ids.crawl_policy_ids),
-            (System, [teardown_ids.system_id]),
-        ]:
-            if ids and await self._has_any_rows(model=model, ids=ids):
-                remaining_tables.append(model.__tablename__)
+        checks = [
+            (
+                JobRun.__tablename__,
+                select(JobRun.id).where(
+                    or_(
+                        JobRun.published_job_id.in_(published_job_ids),
+                        JobRun.execution_run_id.in_(execution_run_ids),
+                        JobRun.script_render_id.in_(script_render_ids),
+                        JobRun.published_job_id.in_(teardown_ids.published_job_ids),
+                        JobRun.execution_run_id.in_(teardown_ids.execution_run_ids),
+                        JobRun.script_render_id.in_(teardown_ids.script_render_ids),
+                        JobRun.queued_job_id.in_(teardown_ids.queued_job_ids),
+                        JobRun.policy_id.in_(
+                            teardown_ids.auth_policy_ids + teardown_ids.crawl_policy_ids
+                        ),
+                    )
+                ),
+            ),
+            (
+                PublishedJob.__tablename__,
+                select(PublishedJob.id).where(
+                    or_(
+                        PublishedJob.id.in_(published_job_ids),
+                        PublishedJob.id.in_(teardown_ids.published_job_ids),
+                    )
+                ),
+            ),
+            (
+                QueuedJob.__tablename__,
+                None,
+            ),
+            (
+                ExecutionArtifact.__tablename__,
+                select(ExecutionArtifact.id).where(
+                    or_(
+                        ExecutionArtifact.id.in_(execution_artifact_ids),
+                        ExecutionArtifact.id.in_(teardown_ids.execution_artifact_ids),
+                    )
+                ),
+            ),
+            (
+                ScriptRender.__tablename__,
+                select(ScriptRender.id).where(
+                    or_(
+                        ScriptRender.id.in_(script_render_ids),
+                        ScriptRender.id.in_(teardown_ids.script_render_ids),
+                    )
+                ),
+            ),
+            (
+                ExecutionRun.__tablename__,
+                select(ExecutionRun.id).where(
+                    or_(
+                        ExecutionRun.id.in_(execution_run_ids),
+                        ExecutionRun.id.in_(teardown_ids.execution_run_ids),
+                    )
+                ),
+            ),
+            (
+                ExecutionPlan.__tablename__,
+                select(ExecutionPlan.id).where(
+                    or_(
+                        ExecutionPlan.id.in_(execution_plan_ids),
+                        ExecutionPlan.id.in_(teardown_ids.execution_plan_ids),
+                    )
+                ),
+            ),
+            (
+                ExecutionRequest.__tablename__,
+                select(ExecutionRequest.id).where(
+                    or_(
+                        ExecutionRequest.system_hint == system_code,
+                        ExecutionRequest.id.in_(teardown_ids.execution_request_ids),
+                    )
+                ),
+            ),
+            (
+                AssetReconciliationAudit.__tablename__,
+                select(AssetReconciliationAudit.id).where(
+                    or_(
+                        AssetReconciliationAudit.snapshot_id.in_(crawl_snapshot_ids),
+                        AssetReconciliationAudit.id.in_(teardown_ids.reconciliation_audit_ids),
+                    )
+                ),
+            ),
+            (
+                AssetSnapshot.__tablename__,
+                select(AssetSnapshot.id).where(
+                    or_(
+                        AssetSnapshot.page_asset_id.in_(page_asset_ids),
+                        AssetSnapshot.id.in_(teardown_ids.asset_snapshot_ids),
+                    )
+                ),
+            ),
+            (
+                ModulePlan.__tablename__,
+                select(ModulePlan.id).where(
+                    or_(
+                        ModulePlan.page_asset_id.in_(page_asset_ids),
+                        ModulePlan.id.in_(teardown_ids.module_plan_ids),
+                    )
+                ),
+            ),
+            (
+                IntentAlias.__tablename__,
+                select(IntentAlias.id)
+                .join(PageAsset, IntentAlias.asset_key == PageAsset.asset_key)
+                .where(
+                    or_(
+                        PageAsset.system_id == system_id,
+                        IntentAlias.id.in_(teardown_ids.intent_alias_ids),
+                    )
+                ),
+            ),
+            (
+                PageCheck.__tablename__,
+                select(PageCheck.id).where(
+                    or_(
+                        PageCheck.page_asset_id.in_(page_asset_ids),
+                        PageCheck.id.in_(teardown_ids.page_check_ids),
+                    )
+                ),
+            ),
+            (
+                PageAsset.__tablename__,
+                select(PageAsset.id).where(
+                    or_(
+                        PageAsset.system_id == system_id,
+                        PageAsset.id.in_(teardown_ids.page_asset_ids),
+                    )
+                ),
+            ),
+            (
+                PageElement.__tablename__,
+                select(PageElement.id).where(
+                    or_(
+                        PageElement.system_id == system_id,
+                        PageElement.id.in_(teardown_ids.page_element_ids),
+                    )
+                ),
+            ),
+            (
+                MenuNode.__tablename__,
+                select(MenuNode.id).where(
+                    or_(
+                        MenuNode.system_id == system_id,
+                        MenuNode.id.in_(teardown_ids.menu_node_ids),
+                    )
+                ),
+            ),
+            (
+                Page.__tablename__,
+                select(Page.id).where(
+                    or_(
+                        Page.system_id == system_id,
+                        Page.id.in_(teardown_ids.page_ids),
+                    )
+                ),
+            ),
+            (
+                CrawlSnapshot.__tablename__,
+                select(CrawlSnapshot.id).where(
+                    or_(
+                        CrawlSnapshot.system_id == system_id,
+                        CrawlSnapshot.id.in_(teardown_ids.crawl_snapshot_ids),
+                    )
+                ),
+            ),
+            (
+                AuthState.__tablename__,
+                select(AuthState.id).where(
+                    or_(
+                        AuthState.system_id == system_id,
+                        AuthState.id.in_(teardown_ids.auth_state_ids),
+                    )
+                ),
+            ),
+            (
+                SystemCredential.__tablename__,
+                select(SystemCredential.id).where(
+                    or_(
+                        SystemCredential.system_id == system_id,
+                        SystemCredential.id.in_(teardown_ids.system_credential_ids),
+                    )
+                ),
+            ),
+            (
+                SystemAuthPolicy.__tablename__,
+                select(SystemAuthPolicy.id).where(
+                    or_(
+                        SystemAuthPolicy.system_id == system_id,
+                        SystemAuthPolicy.id.in_(teardown_ids.auth_policy_ids),
+                    )
+                ),
+            ),
+            (
+                SystemCrawlPolicy.__tablename__,
+                select(SystemCrawlPolicy.id).where(
+                    or_(
+                        SystemCrawlPolicy.system_id == system_id,
+                        SystemCrawlPolicy.id.in_(teardown_ids.crawl_policy_ids),
+                    )
+                ),
+            ),
+            (
+                System.__tablename__,
+                select(System.id).where(
+                    or_(
+                        System.id == system_id,
+                        System.code == system_code,
+                    )
+                ),
+            ),
+        ]
+        for table_name, statement in checks:
+            if table_name == QueuedJob.__tablename__:
+                if await self._has_remaining_queued_jobs(
+                    system_id_text=system_id_text,
+                    system_code=system_code,
+                    teardown_ids=teardown_ids,
+                ):
+                    remaining_tables.append(table_name)
+                continue
+            if statement is not None and await self._statement_has_rows(statement):
+                remaining_tables.append(table_name)
 
         return remaining_tables
 
@@ -492,6 +746,9 @@ class SqlSystemAdminRepository:
     async def _has_any_rows(self, *, model: type, ids: list[UUID]) -> bool:
         statement = select(model.id).where(model.id.in_(ids)).limit(1)
         return await self._exec_first(statement) is not None
+
+    async def _statement_has_rows(self, statement) -> bool:
+        return await self._exec_first(statement.limit(1)) is not None
 
     def _build_execution_plan_id_statement(
         self,
@@ -621,6 +878,116 @@ class SqlSystemAdminRepository:
             return []
         statement = select(JobRun).where(or_(*clauses)).order_by(JobRun.id)
         return await self._exec_all(statement)
+
+    async def _has_remaining_queued_jobs(
+        self,
+        *,
+        system_id_text: str,
+        system_code: str,
+        teardown_ids: SystemTeardownIds,
+    ) -> bool:
+        current_execution_request_ids = {
+            str(identifier)
+            for identifier in await self._select_ids(
+                select(ExecutionRequest.id).where(ExecutionRequest.system_hint == system_code)
+            )
+        }
+        current_execution_plan_ids = {
+            str(identifier)
+            for identifier in await self._select_ids(
+                self._build_execution_plan_id_statement(
+                    system_id=teardown_ids.system_id,
+                    page_asset_ids=await self._select_ids(
+                        select(PageAsset.id).where(PageAsset.system_id == teardown_ids.system_id)
+                    ),
+                    page_check_ids=await self._select_ids(
+                        select(PageCheck.id)
+                        .join(PageAsset, PageCheck.page_asset_id == PageAsset.id)
+                        .where(PageAsset.system_id == teardown_ids.system_id)
+                    ),
+                    module_plan_ids=await self._select_ids(
+                        select(ModulePlan.id)
+                        .join(PageAsset, ModulePlan.page_asset_id == PageAsset.id)
+                        .where(PageAsset.system_id == teardown_ids.system_id)
+                    ),
+                    execution_request_ids=[UUID(value) for value in current_execution_request_ids],
+                )
+            )
+        }
+        current_page_check_ids = {
+            str(identifier)
+            for identifier in await self._select_ids(
+                select(PageCheck.id)
+                .join(PageAsset, PageCheck.page_asset_id == PageAsset.id)
+                .where(PageAsset.system_id == teardown_ids.system_id)
+            )
+        }
+        current_snapshot_ids = {
+            str(identifier)
+            for identifier in await self._select_ids(
+                select(CrawlSnapshot.id).where(CrawlSnapshot.system_id == teardown_ids.system_id)
+            )
+        }
+        current_policy_ids = {
+            *[
+                str(identifier)
+                for identifier in await self._select_ids(
+                    select(SystemAuthPolicy.id).where(
+                        SystemAuthPolicy.system_id == teardown_ids.system_id
+                    )
+                )
+            ],
+            *[
+                str(identifier)
+                for identifier in await self._select_ids(
+                    select(SystemCrawlPolicy.id).where(
+                        SystemCrawlPolicy.system_id == teardown_ids.system_id
+                    )
+                )
+            ],
+        }
+        fallback_snapshot_ids = {str(identifier) for identifier in teardown_ids.crawl_snapshot_ids}
+        fallback_execution_request_ids = {
+            str(identifier) for identifier in teardown_ids.execution_request_ids
+        }
+        fallback_execution_plan_ids = {
+            str(identifier) for identifier in teardown_ids.execution_plan_ids
+        }
+        fallback_page_check_ids = {str(identifier) for identifier in teardown_ids.page_check_ids}
+        fallback_policy_ids = {
+            str(identifier)
+            for identifier in teardown_ids.auth_policy_ids + teardown_ids.crawl_policy_ids
+        }
+
+        queued_jobs = await self._exec_all(select(QueuedJob).order_by(QueuedJob.id))
+        for job in queued_jobs:
+            payload = job.payload or {}
+            result_payload = job.result_payload or {}
+            if payload.get("system_id") == system_id_text:
+                return True
+            if job.policy_id is not None and (
+                str(job.policy_id) in current_policy_ids or str(job.policy_id) in fallback_policy_ids
+            ):
+                return True
+            if payload.get("execution_request_id") in current_execution_request_ids.union(
+                fallback_execution_request_ids
+            ):
+                return True
+            if payload.get("execution_plan_id") in current_execution_plan_ids.union(
+                fallback_execution_plan_ids
+            ):
+                return True
+            if payload.get("page_check_id") in current_page_check_ids.union(
+                fallback_page_check_ids
+            ):
+                return True
+            if payload.get("snapshot_id") in current_snapshot_ids.union(fallback_snapshot_ids):
+                return True
+            if result_payload.get("snapshot_id") in current_snapshot_ids.union(
+                fallback_snapshot_ids
+            ):
+                return True
+        return False
 
     async def commit(self) -> None:
         if isinstance(self.session, AsyncSession):

@@ -12,6 +12,7 @@ from app.domains.control_plane.job_types import (
     ASSET_COMPILE_JOB_TYPE,
     AUTH_REFRESH_JOB_TYPE,
     CRAWL_JOB_TYPE,
+    RUN_CHECK_JOB_TYPE,
 )
 from app.domains.control_plane.repository import SqlControlPlaneRepository
 from app.domains.control_plane.scheduler_registry import (
@@ -25,16 +26,35 @@ from app.domains.control_plane.system_admin_schemas import WebSystemManifest
 from app.domains.crawler_service.schemas import CrawlRunResult
 from app.domains.runner_service.scheduler import PublishedJobService
 from app.domains.runner_service.script_renderer import ScriptRenderer
-from app.infrastructure.db.models.assets import ModulePlan, PageAsset, PageCheck
+from app.infrastructure.db.models.assets import (
+    AssetReconciliationAudit,
+    AssetSnapshot,
+    IntentAlias,
+    ModulePlan,
+    PageAsset,
+    PageCheck,
+)
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
-from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob
+from app.infrastructure.db.models.execution import (
+    ExecutionArtifact,
+    ExecutionPlan,
+    ExecutionRequest,
+    ExecutionRun,
+    ScriptRender,
+)
+from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.infrastructure.db.models.systems import AuthState, System, SystemCredential
 from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 from app.jobs.asset_compile_job import AssetCompileJobHandler
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
 from app.jobs.crawl_job import CrawlJobHandler
-from app.shared.enums import AssetLifecycleStatus, AssetStatus
+from app.shared.enums import (
+    AssetLifecycleStatus,
+    AssetStatus,
+    ExecutionResultStatus,
+    RenderResultStatus,
+)
 
 
 class StubAuthService:
@@ -287,6 +307,112 @@ async def onboarded_system(system_admin_service):
     return await system_admin_service.onboard_system(manifest=manifest)
 
 
+@pytest.fixture
+def onboarded_system_with_execution_residue(db_session, onboarded_system):
+    system = db_session.exec(select(System).where(System.code == onboarded_system.system_code)).one()
+    page_asset = db_session.exec(
+        select(PageAsset).where(PageAsset.system_id == system.id).order_by(PageAsset.id)
+    ).first()
+    assert page_asset is not None
+    page_check = db_session.exec(
+        select(PageCheck)
+        .join(PageAsset, PageCheck.page_asset_id == PageAsset.id)
+        .where(PageAsset.system_id == system.id)
+        .order_by(PageCheck.id)
+    ).first()
+    assert page_check is not None
+    published_job = db_session.get(PublishedJob, onboarded_system.published_job_id)
+    assert published_job is not None
+
+    execution_request = ExecutionRequest(
+        request_source="teardown_test",
+        system_hint=system.code,
+        page_hint=page_asset.asset_key,
+        check_goal=page_check.goal,
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(execution_request)
+    db_session.flush()
+
+    execution_plan = ExecutionPlan(
+        execution_request_id=execution_request.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=page_asset.id,
+        resolved_page_check_id=page_check.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+        module_plan_id=page_check.module_plan_id,
+    )
+    db_session.add(execution_plan)
+    db_session.flush()
+
+    queued_job = QueuedJob(
+        job_type=RUN_CHECK_JOB_TYPE,
+        payload={
+            "system_id": str(system.id),
+            "execution_request_id": str(execution_request.id),
+            "execution_plan_id": str(execution_plan.id),
+            "page_check_id": str(page_check.id),
+            "execution_track": "precompiled",
+        },
+        status="completed",
+    )
+    db_session.add(queued_job)
+    db_session.flush()
+
+    execution_run = ExecutionRun(
+        execution_plan_id=execution_plan.id,
+        status="passed",
+        duration_ms=321,
+        auth_status="reused",
+        asset_version=page_asset.asset_version,
+    )
+    db_session.add(execution_run)
+    db_session.flush()
+
+    execution_artifact = ExecutionArtifact(
+        execution_run_id=execution_run.id,
+        artifact_kind="module_execution",
+        result_status=ExecutionResultStatus.SUCCESS,
+        payload={"final_url": f"{system.base_url}/dashboard/users"},
+    )
+    db_session.add(execution_artifact)
+    db_session.flush()
+
+    script_render = ScriptRender(
+        execution_artifact_id=execution_artifact.id,
+        execution_plan_id=execution_plan.id,
+        render_mode="published",
+        render_result=RenderResultStatus.SUCCESS,
+        script_body="print('teardown test')",
+        render_metadata={
+            "system_id": str(system.id),
+            "page_asset_id": str(page_asset.id),
+            "page_check_id": str(page_check.id),
+            "asset_version": page_asset.asset_version,
+        },
+    )
+    db_session.add(script_render)
+    db_session.flush()
+
+    job_run = JobRun(
+        published_job_id=published_job.id,
+        queued_job_id=queued_job.id,
+        execution_run_id=execution_run.id,
+        script_render_id=script_render.id,
+        asset_version=page_asset.asset_version,
+        runtime_policy="default",
+        schedule_expr=published_job.schedule_expr,
+        trigger_source="manual",
+        run_status="completed",
+    )
+    db_session.add(job_run)
+    db_session.commit()
+
+    return onboarded_system
+
+
 def _seed_existing_publish_target(db_session) -> None:
     system = System(
         code="hotgo_test3",
@@ -385,6 +511,11 @@ def _seed_publish_target_candidate(
     db_session.add(page_check)
     db_session.flush()
     return page_asset, page_check
+
+
+def _assert_models_empty(db_session, *models) -> None:
+    for model in models:
+        assert db_session.exec(select(model)).all() == []
 
 
 def test_web_system_manifest_accepts_nested_yaml_sections() -> None:
@@ -771,19 +902,51 @@ async def test_get_publish_target_prefers_newest_active_asset(db_session):
 
 @pytest.mark.anyio
 async def test_teardown_system_removes_related_rows_and_scheduler_jobs(
-    onboarded_system,
+    onboarded_system_with_execution_residue,
     system_admin_service,
+    db_session,
     scheduler,
 ):
-    assert scheduler.get_job(build_auth_policy_job_id(onboarded_system.system_id)) is not None
-    assert scheduler.get_job(build_crawl_policy_job_id(onboarded_system.system_id)) is not None
-    assert scheduler.get_job(build_published_job_id(onboarded_system.published_job_id)) is not None
+    system_id = onboarded_system_with_execution_residue.system_id
+    published_job_id = onboarded_system_with_execution_residue.published_job_id
+    assert scheduler.get_job(build_auth_policy_job_id(system_id)) is not None
+    assert scheduler.get_job(build_crawl_policy_job_id(system_id)) is not None
+    assert scheduler.get_job(build_published_job_id(published_job_id)) is not None
 
     result = await system_admin_service.teardown_system(system_code="vben_test1")
 
     assert result.system_found is True
     assert result.remaining_scheduler_job_ids == []
     assert result.remaining_reference_tables == []
+    assert scheduler.get_job(build_auth_policy_job_id(system_id)) is None
+    assert scheduler.get_job(build_crawl_policy_job_id(system_id)) is None
+    assert scheduler.get_job(build_published_job_id(published_job_id)) is None
+    _assert_models_empty(
+        db_session,
+        JobRun,
+        PublishedJob,
+        QueuedJob,
+        ExecutionArtifact,
+        ScriptRender,
+        ExecutionRun,
+        ExecutionPlan,
+        ExecutionRequest,
+        AssetReconciliationAudit,
+        AssetSnapshot,
+        ModulePlan,
+        IntentAlias,
+        PageCheck,
+        PageAsset,
+        PageElement,
+        MenuNode,
+        Page,
+        CrawlSnapshot,
+        AuthState,
+        SystemCredential,
+        SystemAuthPolicy,
+        SystemCrawlPolicy,
+        System,
+    )
 
 
 @pytest.mark.anyio
@@ -791,6 +954,123 @@ async def test_teardown_system_is_idempotent_when_system_is_missing(system_admin
     result = await system_admin_service.teardown_system(system_code="missing-system")
 
     assert result.system_found is False
+
+
+@pytest.mark.anyio
+async def test_teardown_system_requires_scheduler_registry_for_existing_system(
+    onboarded_system,
+    db_session,
+):
+    from app.domains.control_plane.system_admin_repository import SqlSystemAdminRepository
+    from app.domains.control_plane.system_admin_service import SystemAdminService
+
+    control_plane_service = ControlPlaneService(
+        repository=SqlControlPlaneRepository(db_session),
+        dispatcher=SqlQueueDispatcher(db_session),
+        script_renderer=ScriptRenderer(session=db_session),
+        published_job_service=PublishedJobService(
+            session=db_session,
+            dispatcher=SqlQueueDispatcher(db_session),
+        ),
+        scheduler_registry=None,
+    )
+    service = SystemAdminService(
+        repository=SqlSystemAdminRepository(db_session),
+        control_plane_service=control_plane_service,
+        job_executor=InProcessJobExecutor(
+            db_session=db_session,
+            auth_service=StubAuthService(db_session),
+            crawler_service=StubCrawlerService(db_session),
+            control_plane_service=control_plane_service,
+        ),
+        crypto=LocalCredentialCrypto(secret="test-secret"),
+        scheduler_registry=None,
+    )
+
+    with pytest.raises(RuntimeError, match="scheduler_registry is required for teardown"):
+        await service.teardown_system(system_code=onboarded_system.system_code)
+
+
+@pytest.mark.anyio
+async def test_teardown_system_residue_scan_requeries_system_links_without_precollected_ids(
+    db_session,
+):
+    from app.domains.control_plane.system_admin_repository import (
+        SqlSystemAdminRepository,
+        SystemTeardownIds,
+    )
+
+    system = System(
+        code="residue-scan-test",
+        name="residue scan",
+        base_url="https://residue.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    page_asset, page_check = _seed_publish_target_candidate(
+        db_session,
+        system_id=system.id,
+        route_path="/scan",
+        asset_key="residue.scan",
+        asset_version="20260404000000",
+    )
+    db_session.add(
+        AuthState(
+            system_id=system.id,
+            status="valid",
+            auth_mode="storage_state",
+            is_valid=True,
+        )
+    )
+    db_session.add(
+        ExecutionRequest(
+            request_source="teardown_test",
+            system_hint=system.code,
+            page_hint=page_asset.asset_key,
+            check_goal=page_check.goal,
+            strictness="balanced",
+            time_budget_ms=20_000,
+        )
+    )
+    db_session.commit()
+
+    repo = SqlSystemAdminRepository(db_session)
+    remaining = await repo.list_remaining_reference_tables(
+        teardown_ids=SystemTeardownIds(
+            system_id=system.id,
+            system_code=system.code,
+            job_run_ids=[],
+            published_job_ids=[],
+            page_check_ids=[],
+            page_asset_ids=[],
+            intent_alias_ids=[],
+            module_plan_ids=[],
+            asset_snapshot_ids=[],
+            reconciliation_audit_ids=[],
+            page_ids=[],
+            menu_node_ids=[],
+            page_element_ids=[],
+            crawl_snapshot_ids=[],
+            auth_state_ids=[],
+            system_credential_ids=[],
+            auth_policy_ids=[],
+            crawl_policy_ids=[],
+            execution_plan_ids=[],
+            execution_run_ids=[],
+            execution_artifact_ids=[],
+            execution_request_ids=[],
+            script_render_ids=[],
+            queued_job_ids=[],
+        )
+    )
+
+    assert "systems" in remaining
+    assert "page_assets" in remaining
+    assert "page_checks" in remaining
+    assert "auth_states" in remaining
+    assert "execution_requests" in remaining
 
 
 @pytest.mark.anyio
