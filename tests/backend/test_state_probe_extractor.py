@@ -120,3 +120,16 @@ async def test_state_probe_stops_when_interaction_budget_is_exhausted():
     )
 
     assert "interaction_budget_exhausted" in result.warning_messages
+
+
+@pytest.mark.anyio
+async def test_state_probe_dedups_elements_by_state_signature():
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=FakeStateProbeSession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    signatures = [element.state_signature for element in result.elements]
+    assert signatures.count("users:modal=create") == 1
+    assert "state_signature_duplicate" in result.warning_messages
