@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session
 
+from app.domains.runner_service.service import ExecutionBlockedError
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
 from app.shared.enums import AssetLifecycleStatus, PublishedJobState, QueuedJobStatus
@@ -79,11 +80,12 @@ class RunCheckJobHandler:
                     job_run=job_run,
                 )
                 return
-        if await self._should_skip_retired_target(
+        skip_reason = await self._resolve_retirement_skip_reason(
             page_check_id=parsed_page_check_id,
             published_job_id=published_job_id,
-        ):
-            await self._mark_skipped(job, message="asset_retired_missing", job_run=job_run)
+        )
+        if skip_reason is not None:
+            await self._mark_skipped(job, message=skip_reason, job_run=job_run)
             return
 
         job.status = QueuedJobStatus.RUNNING.value
@@ -98,6 +100,9 @@ class RunCheckJobHandler:
                 page_check_id=parsed_page_check_id,
                 execution_plan_id=UUID(execution_plan_id) if execution_plan_id else None,
             )
+        except ExecutionBlockedError as exc:
+            await self._mark_skipped(job, message=exc.reason, job_run=job_run)
+            return
         except Exception as exc:
             await self._mark_failed(job, message=str(exc), job_run=job_run)
             return
@@ -170,33 +175,34 @@ class RunCheckJobHandler:
             job_run.failure_message = message
         await self._commit()
 
-    async def _should_skip_retired_target(
+    async def _resolve_retirement_skip_reason(
         self,
         *,
         page_check_id: UUID,
         published_job_id: UUID | None,
-    ) -> bool:
+    ) -> str | None:
         page_check = await self._get(PageCheck, page_check_id)
         if page_check is None:
-            return True
-        if page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
-            return True
+            return "asset_retired_missing"
+        check_retired_reason = _retirement_failure_message(page_check.lifecycle_status)
+        if check_retired_reason is not None:
+            return check_retired_reason
 
         page_asset = await self._get(PageAsset, page_check.page_asset_id)
         if page_asset is None:
-            return True
-        if page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
-            return True
+            return "asset_retired_missing"
+        asset_retired_reason = _retirement_failure_message(page_asset.lifecycle_status)
+        if asset_retired_reason is not None:
+            return asset_retired_reason
 
         if published_job_id is None:
-            return False
+            return None
         published_job = await self._get(PublishedJob, published_job_id)
         if published_job is None:
-            return False
+            return None
         if published_job.state != PublishedJobState.PAUSED:
-            return False
-        pause_reason = (published_job.pause_reason or "").lower()
-        return "retired" in pause_reason
+            return None
+        return _retired_pause_reason(published_job.pause_reason)
 
     def _build_result_payload(
         self,
@@ -261,3 +267,31 @@ def _parse_uuid(value: str | None) -> UUID | None:
         return UUID(value)
     except (TypeError, ValueError):
         return None
+
+
+def _retirement_failure_message(
+    lifecycle_status: AssetLifecycleStatus | str | None,
+) -> str | None:
+    if lifecycle_status is None:
+        return None
+    normalized = (
+        lifecycle_status.value
+        if isinstance(lifecycle_status, AssetLifecycleStatus)
+        else str(lifecycle_status).strip().lower()
+    )
+    if normalized == AssetLifecycleStatus.ACTIVE.value:
+        return None
+    if normalized.startswith("retired_"):
+        return f"asset_{normalized}"
+    return "asset_retired_missing"
+
+
+def _retired_pause_reason(pause_reason: str | None) -> str | None:
+    normalized = (pause_reason or "").strip().lower()
+    if not normalized or "retired" not in normalized:
+        return None
+    if normalized.startswith("asset_retired_"):
+        return normalized
+    if normalized.startswith("retired_"):
+        return f"asset_{normalized}"
+    return "asset_retired_missing"

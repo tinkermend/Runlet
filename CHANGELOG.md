@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 修复退休阻断代码审查问题：`RunnerService.run_page_check` 新增执行入口 lifecycle 阻断（抛出 `ExecutionBlockedError`），关闭 `run_check` worker 在“预检后到实际执行前”窗口内的 TOCTOU 漏洞；`RunCheckJobHandler` 现在会保留细粒度退休原因（如 `asset_retired_replaced`）并在发布任务因退休暂停时透传 `pause_reason`，不再统一折叠为 `asset_retired_missing`。
 - 收紧退休资产执行阻断：`ControlPlaneService.run_page_check` 与请求解析路径新增显式 lifecycle 冲突校验，退休 `page_check/page_asset` 统一返回 `409`；`RunCheckJobHandler` 在真正调用 runner 前会重新加载目标并做最终退休守卫，若目标已退休或关联发布任务因退休暂停则将队列项标记为 `skipped`，并写入 `failure_message=asset_retired_missing`。
 - 补齐 asset compile 生产执行链路：`AssetCompileJobHandler` 在 `compile_snapshot` 后会调用 `ControlPlaneService.apply_reconciliation_cascades` 执行 alias 失效与发布任务暂停，并把实际执行计数 `aliases_disabled/published_jobs_paused` 回写到 compile job `result_payload`；worker 组装同时注入 control plane 协调器，避免级联逻辑成为死代码。
 - 强化 reconciliation 级联一致性与对称性：`apply_reconciliation_cascades` 改为单事务执行 `disable/enable alias` 与 `pause/resume published jobs`，任一步骤失败会统一 rollback；生产链路现在同时消费 `alias_ids_to_enable` 与 `published_job_ids_to_resume`，并回写 `aliases_enabled/published_jobs_resumed` 实际执行计数。
