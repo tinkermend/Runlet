@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.domains.runner_service.failure_categories import FailureCategory
@@ -23,6 +24,15 @@ class RunnerRuntime(Protocol):
     async def assert_page_open(self, *, route_path: str) -> bool: ...
 
     async def open_create_modal(self) -> bool: ...
+
+    async def enter_state(self, *, state_signature: str) -> bool: ...
+
+    async def resolve_locator_bundle(
+        self,
+        *,
+        locator_bundle: dict[str, object],
+        context_constraints: dict[str, object] | None = None,
+    ) -> dict[str, object]: ...
 
     async def capture_screenshot(self) -> bytes: ...
 
@@ -141,6 +151,87 @@ class ModuleExecutor:
                             status=RunnerRunStatus.PASSED,
                         )
                     )
+                elif module == "state.enter":
+                    state_signature = str(params.get("state_signature") or "")
+                    try:
+                        reached = await self.runtime.enter_state(state_signature=state_signature)
+                    except Exception as exc:
+                        detail = str(exc).strip() or "state_not_reached"
+                        step_results.append(
+                            StepExecutionResult(
+                                module=module,
+                                status=RunnerRunStatus.FAILED,
+                                detail=detail,
+                                output={
+                                    "state_signature": state_signature,
+                                    "failure_category": "state_not_reached",
+                                },
+                            )
+                        )
+                        return ModuleExecutionResult(
+                            status=RunnerRunStatus.FAILED,
+                            auth_status=auth_status,
+                            step_results=step_results,
+                        )
+                    if not reached:
+                        step_results.append(
+                            StepExecutionResult(
+                                module=module,
+                                status=RunnerRunStatus.FAILED,
+                                detail=f"state_not_reached: state signature {state_signature} was not reached",
+                                output={
+                                    "state_signature": state_signature,
+                                    "failure_category": "state_not_reached",
+                                },
+                            )
+                        )
+                        return ModuleExecutionResult(
+                            status=RunnerRunStatus.FAILED,
+                            auth_status=auth_status,
+                            step_results=step_results,
+                        )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                            output={"state_signature": state_signature},
+                        )
+                    )
+                elif module == "locator.assert":
+                    locator_bundle = _coerce_params(params.get("locator_bundle"))
+                    context_constraints = _coerce_optional_dict(params.get("context_constraints"))
+                    locator_match = _coerce_locator_match(
+                        await self.runtime.resolve_locator_bundle(
+                            locator_bundle=locator_bundle,
+                            context_constraints=context_constraints,
+                        )
+                    )
+                    output = _build_locator_output(
+                        assertion=_optional_text(params.get("assertion")),
+                        expected_element_type=_optional_text(params.get("expected_element_type")),
+                        locator_match=locator_match,
+                    )
+                    if not locator_match.matched:
+                        step_results.append(
+                            StepExecutionResult(
+                                module=module,
+                                status=RunnerRunStatus.FAILED,
+                                detail=f"locator assert failed: {locator_match.failure_category}",
+                                output=output,
+                            )
+                        )
+                        return ModuleExecutionResult(
+                            status=RunnerRunStatus.FAILED,
+                            auth_status=auth_status,
+                            step_results=step_results,
+                        )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                            output=output,
+                        )
+                    )
                 else:
                     raise ValueError(f"unsupported module: {module}")
             except Exception as exc:
@@ -201,11 +292,86 @@ def _optional_text(value: object) -> str | None:
     return normalized or None
 
 
+def _coerce_optional_dict(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+@dataclass(slots=True)
+class _LocatorMatch:
+    matched: bool
+    matched_rank: int | None
+    strategy_type: str | None
+    failure_category: str
+    context_mismatch: bool
+    ambiguous_match: bool
+
+
+def _coerce_locator_match(value: object) -> _LocatorMatch:
+    payload = value if isinstance(value, dict) else {}
+    matched = bool(payload.get("matched"))
+    matched_rank = _coerce_positive_int(payload.get("matched_rank"))
+    strategy_type = _optional_text(payload.get("strategy_type"))
+    failure_category = _optional_text(payload.get("failure_category"))
+    context_mismatch = bool(payload.get("context_mismatch"))
+    ambiguous_match = bool(payload.get("ambiguous_match"))
+    if matched:
+        return _LocatorMatch(
+            matched=True,
+            matched_rank=matched_rank or 1,
+            strategy_type=strategy_type,
+            failure_category="",
+            context_mismatch=context_mismatch,
+            ambiguous_match=ambiguous_match,
+        )
+    return _LocatorMatch(
+        matched=False,
+        matched_rank=None,
+        strategy_type=None,
+        failure_category=failure_category or "locator_all_failed",
+        context_mismatch=context_mismatch,
+        ambiguous_match=ambiguous_match,
+    )
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
+
+def _build_locator_output(
+    *,
+    assertion: str | None,
+    expected_element_type: str | None,
+    locator_match: _LocatorMatch,
+) -> dict[str, object]:
+    output: dict[str, object] = {
+        "matched_rank": locator_match.matched_rank,
+        "strategy_type": locator_match.strategy_type,
+        "failure_category": None if locator_match.matched else locator_match.failure_category,
+    }
+    if assertion:
+        output["assertion"] = assertion
+    if expected_element_type:
+        output["expected_element_type"] = expected_element_type
+    if locator_match.context_mismatch:
+        output["context_mismatch"] = True
+    if locator_match.ambiguous_match:
+        output["ambiguous_match"] = True
+    return output
+
+
 def _failure_category_for_module(module: str) -> FailureCategory:
     if module == "nav.menu_chain":
         return FailureCategory.NAVIGATION_FAILED
     if module == "page.wait_ready":
         return FailureCategory.PAGE_NOT_READY
+    if module == "locator.assert":
+        return FailureCategory.ASSERTION_FAILED
     if module.startswith("assert."):
         return FailureCategory.ASSERTION_FAILED
     return FailureCategory.RUNTIME_ERROR

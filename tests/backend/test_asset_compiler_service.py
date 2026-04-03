@@ -26,18 +26,66 @@ def test_build_standard_checks_for_table_page_returns_page_open_and_table_render
     assert {"page_open", "table_render"} <= {check.check_code for check in checks}
 
 
+def test_build_standard_checks_adds_representative_state_checks():
+    from app.domains.asset_compiler.check_templates import build_standard_checks
+
+    checks = build_standard_checks(
+        page_summary="用户管理",
+        has_table=True,
+        representative_states=[
+            {"state_signature": "users:tab=disabled", "entry_type": "tab_switch"},
+            {"state_signature": "users:modal=create", "entry_type": "open_modal"},
+        ],
+    )
+
+    assert {"tab_switch_render", "open_create_modal_state"} <= {check.check_code for check in checks}
+
+
+def test_build_standard_checks_preserves_default_and_state_open_modal_checks():
+    from app.domains.asset_compiler.check_templates import build_standard_checks
+
+    checks = build_standard_checks(
+        page_summary="用户管理，支持新增用户",
+        has_table=False,
+        has_create_action=True,
+        representative_states=[
+            {"state_signature": "users:modal=create", "entry_type": "open_modal"},
+        ],
+        default_state_signature="users:default",
+    )
+
+    default_modal_checks = [check for check in checks if check.check_code == "open_create_modal"]
+    state_modal_checks = [check for check in checks if check.check_code == "open_create_modal_state"]
+    assert len(default_modal_checks) == 1
+    assert len(state_modal_checks) == 1
+    assert default_modal_checks[0].state_signature == "users:default"
+    assert state_modal_checks[0].state_signature == "users:modal=create"
+
+
 def test_build_module_plan_for_table_render_contains_expected_steps():
     from app.domains.asset_compiler.module_plan_builder import build_module_plan
 
+    locator_bundle = {
+        "candidates": [
+            {"strategy_type": "semantic", "selector": "role=table[name='用户列表']"},
+            {"strategy_type": "css", "selector": ".users-table"},
+        ]
+    }
     page_context = {
         "system_code": "erp",
         "page_title": "用户管理",
         "route_path": "/users",
         "menu_chain": ["系统管理", "用户管理"],
         "has_table": True,
+        "default_state_signature": "users:default",
     }
 
-    plan = build_module_plan(check_code="table_render", page_context=page_context)
+    plan = build_module_plan(
+        check_code="table_render",
+        page_context=page_context,
+        state_signature="users:tab=disabled",
+        locator_bundle=locator_bundle,
+    )
 
     assert plan.plan_version == "v1"
     assert plan.steps_json[0]["module"] == "auth.inject_state"
@@ -45,7 +93,36 @@ def test_build_module_plan_for_table_render_contains_expected_steps():
         "auth.inject_state",
         "nav.menu_chain",
         "page.wait_ready",
-        "assert.table_visible",
+        "state.enter",
+        "locator.assert",
+    ]
+    assert plan.steps_json[-1]["params"]["locator_bundle"] == locator_bundle
+
+
+def test_build_module_plan_for_default_open_create_modal_uses_action_step():
+    from app.domains.asset_compiler.module_plan_builder import build_module_plan
+
+    page_context = {
+        "system_code": "erp",
+        "page_title": "用户管理",
+        "route_path": "/users",
+        "menu_chain": ["系统管理", "用户管理"],
+        "default_state_signature": "users:default",
+    }
+
+    plan = build_module_plan(
+        check_code="open_create_modal",
+        page_context=page_context,
+        state_signature="users:default",
+        locator_bundle={"candidates": []},
+    )
+
+    assert [step["module"] for step in plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "locator.assert",
+        "action.open_create_modal",
     ]
 
 
@@ -317,6 +394,170 @@ def seeded_previous_snapshot(db_session, seeded_system):
     return current_snapshot
 
 
+@pytest.fixture
+def seeded_stateful_crawl_snapshot(db_session, seeded_system):
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="系统管理",
+            depth=0,
+            sort_order=1,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=1,
+            sort_order=1,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="启用用户列表",
+            playwright_locator="get_by_role('table', name='启用用户列表')",
+            state_signature="users:default",
+            state_context={"active_tab": "enabled"},
+            locator_candidates=[
+                {"strategy_type": "semantic", "selector": "role=table[name='启用用户列表']"},
+                {"strategy_type": "css", "selector": ".users-table"},
+            ],
+            usage_description="展示用户列表",
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="禁用用户列表",
+            playwright_locator="get_by_role('table', name='禁用用户列表')",
+            state_signature="users:tab=disabled",
+            state_context={"active_tab": "disabled", "entry_type": "tab_switch"},
+            locator_candidates=[
+                {"strategy_type": "semantic", "selector": "role=table[name='禁用用户列表']"},
+                {"strategy_type": "label", "selector": "label=禁用用户"},
+            ],
+            usage_description="展示禁用用户列表",
+        )
+    )
+    db_session.commit()
+    db_session.refresh(snapshot)
+    return snapshot
+
+
+@pytest.fixture
+def seeded_modal_stateful_crawl_snapshot(db_session, seeded_system):
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表，支持新增用户",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="系统管理",
+            depth=0,
+            sort_order=1,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=1,
+            sort_order=1,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="button",
+            element_role="button",
+            element_text="新增用户",
+            playwright_locator="get_by_role('button', name='新增用户')",
+            state_signature="users:default",
+            state_context={"entry_type": "default"},
+            locator_candidates=[
+                {"strategy_type": "semantic", "selector": "role=button[name='新增用户']"},
+                {"strategy_type": "css", "selector": ".create-user"},
+            ],
+            usage_description="打开新增用户弹窗",
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="dialog",
+            element_role="dialog",
+            element_text="新增用户",
+            playwright_locator="get_by_role('dialog', name='新增用户')",
+            state_signature="users:modal=create",
+            state_context={"entry_type": "open_modal", "modal_title": "新增用户"},
+            locator_candidates=[
+                {"strategy_type": "semantic", "selector": "role=dialog[name='新增用户']"},
+                {"strategy_type": "label", "selector": "label=新增用户弹窗"},
+            ],
+            usage_description="新增用户弹窗",
+        )
+    )
+    db_session.commit()
+    db_session.refresh(snapshot)
+    return snapshot
+
+
 @pytest.mark.anyio
 async def test_compile_snapshot_creates_page_assets_and_checks(
     asset_compiler_service,
@@ -337,6 +578,160 @@ async def test_compile_snapshot_marks_asset_suspect_when_drift_is_medium(
     result = await asset_compiler_service.compile_snapshot(snapshot_id=seeded_previous_snapshot.id)
 
     assert result.drift_state in {AssetStatus.SAFE, AssetStatus.SUSPECT, AssetStatus.STALE}
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_builds_state_signature_module_plan_with_locator_bundle(
+    db_session,
+    asset_compiler_service,
+    seeded_stateful_crawl_snapshot,
+):
+    await asset_compiler_service.compile_snapshot(snapshot_id=seeded_stateful_crawl_snapshot.id)
+
+    stateful_plan = db_session.exec(
+        select(ModulePlan)
+        .where(ModulePlan.check_code == "tab_switch_render")
+        .order_by(ModulePlan.id.desc())
+    ).first()
+
+    assert stateful_plan is not None
+    assert [step["module"] for step in stateful_plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "state.enter",
+        "locator.assert",
+    ]
+    assert (
+        stateful_plan.steps_json[-1]["params"]["locator_bundle"]["candidates"][0]["strategy_type"]
+        == "semantic"
+    )
+    assert stateful_plan.steps_json[3]["params"]["state_signature"] == "users:tab=disabled"
+
+
+@pytest.mark.anyio
+async def test_task6_compile_baseline_locator_bundle_plan_keeps_state_enter_step(
+    db_session,
+    asset_compiler_service,
+    seeded_stateful_crawl_snapshot,
+):
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=seeded_stateful_crawl_snapshot.id)
+
+    assert result.status == "success"
+    assert result.assets_created >= 1
+    assert result.checks_created >= 1
+
+    stateful_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "tab_switch_render")
+        .order_by(PageCheck.id.desc())
+    ).first()
+    assert stateful_check is not None
+    assert (stateful_check.input_schema or {}).get("state_signature") == "users:tab=disabled"
+
+    stateful_plan = db_session.exec(
+        select(ModulePlan)
+        .where(ModulePlan.id == stateful_check.module_plan_id)
+        .order_by(ModulePlan.id.desc())
+    ).one()
+    assert [step["module"] for step in stateful_plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "state.enter",
+        "locator.assert",
+    ]
+
+    locator_step = stateful_plan.steps_json[-1]
+    locator_candidates = locator_step["params"]["locator_bundle"]["candidates"]
+    assert locator_step["module"] == "locator.assert"
+    assert locator_candidates
+    assert locator_candidates[0]["strategy_type"] == "semantic"
+    assert locator_candidates[0]["selector"] == "role=table[name='禁用用户列表']"
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_modal_locator(
+    db_session,
+    asset_compiler_service,
+    seeded_modal_stateful_crawl_snapshot,
+):
+    await asset_compiler_service.compile_snapshot(snapshot_id=seeded_modal_stateful_crawl_snapshot.id)
+
+    modal_checks = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "open_create_modal_state")
+        .order_by(PageCheck.id)
+    ).all()
+    assert len(modal_checks) == 1
+    representative_check = modal_checks[0]
+    assert (representative_check.input_schema or {}).get("state_signature") == "users:modal=create"
+    representative_plan = db_session.exec(
+        select(ModulePlan).where(ModulePlan.id == representative_check.module_plan_id)
+    ).one()
+
+    assert [step["module"] for step in representative_plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "state.enter",
+        "locator.assert",
+    ]
+    assert representative_plan.steps_json[-1]["params"]["assertion"] == "modal_visible"
+    assert (
+        representative_plan.steps_json[-1]["params"]["locator_bundle"]["candidates"][0]["selector"]
+        == "role=dialog[name='新增用户']"
+    )
+
+    default_modal_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "open_create_modal")
+        .order_by(PageCheck.id.desc())
+    ).first()
+    assert default_modal_check is not None
+    assert (default_modal_check.input_schema or {}).get("state_signature") == "users:default"
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_keeps_default_open_create_modal_active_without_modal_state(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    snapshot = _create_snapshot(db_session, seeded_system, quality_score=0.95, degraded=False)
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        snapshot,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表，支持新增用户",
+        include_table=False,
+        include_button=True,
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=snapshot.id)
+
+    modal_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "open_create_modal")
+        .order_by(PageCheck.id.desc())
+    ).first()
+    assert modal_check is not None
+    assert modal_check.lifecycle_status == AssetLifecycleStatus.ACTIVE
+    assert result.checks_retired == 0
+
+    plan = db_session.exec(
+        select(ModulePlan).where(ModulePlan.id == modal_check.module_plan_id)
+    ).one()
+    assert [step["module"] for step in plan.steps_json] == [
+        "auth.inject_state",
+        "nav.menu_chain",
+        "page.wait_ready",
+        "locator.assert",
+        "action.open_create_modal",
+    ]
 
 
 def test_compile_snapshot_result_exposes_reconciliation_counts():

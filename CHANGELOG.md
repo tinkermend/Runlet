@@ -12,11 +12,15 @@
 
 ## 2026-04-04
 
+- 完成采集完整性增强 Task 6 回归收口：新增 `crawl -> compile -> run` 第一阶段基线回归测试，锁定 crawl 侧 `state_signature/locator_candidates` 持久化、compile 侧 `state.enter + locator_bundle` 计划产出、runner 侧 primary/fallback locator telemetry 记录；并新增指标基线常量断言（`main_nav_coverage=0.95`、`representative_state_coverage=0.80`、`key_element_precision=0.90`、`primary_locator_hit_rate=0.85`）。
+- 完成采集完整性增强 Task 4 收口：`asset_compiler` 新增 locator bundle 编译与状态感知 module plan 生成能力，补齐默认态与代表态弹窗检查模板（默认 `open_create_modal` + 代表态 `open_create_modal_state`）并消除同名检查歧义；同时为指纹比较加入 legacy hash 兼容桥接，避免升级首轮把存量稳定页面误判为漂移。
+- 完成采集完整性增强 Task 5：`runner_service` 新增 `state.enter + locator.assert` 执行协议与 locator bundle 顺序回放，执行产物新增定位命中 telemetry（主命中、fallback、matched_rank、context/ambiguous mismatch），并补齐 `element_became_hidden` 等失败分类分支与回归测试，保证状态回放和定位失败诊断可追踪。
 - 新增 Web 前端管理平台一期实施计划，明确前端工程根目录为 `front/`，要求在页面实现前先使用 `ui-ux-pro-max-skill` 产出关键页面设计，并按“前端壳、简单 Web 登录、控制面聚合 API、任务向导、资产浏览、结果页”顺序拆解落地任务。
 - 新增面向客户的 Web 前端管理平台一期设计文档，明确采用任务中心型信息架构，以“配置检查任务并定时运行”为第一主流程，收敛一级导航为 `Dashboard / 检查任务 / 采集资产 / 系统接入 / 运行结果`，并确定前端技术选型为 `React + Vite` 轻量自建、明确不使用重型后台脚手架。
 
 ## 2026-04-03
 
+- 完成 Task 1 采集事实契约发布：为 `pages/menu_nodes/page_elements` 扩展状态与上下文字段契约，`CrawlerService` 持久化链路补齐 `discovery_sources/entry_candidates/context_constraints/state_signature/state_context/locator_candidates` 回写，`0011_crawl_state_and_locator_evidence` 迁移 JSON 列与 ORM `json_type`（PostgreSQL JSONB 变体）对齐，并补充 crawler round-trip 持久化断言覆盖。
 - 新增 Vue/React Web 系统采集完整性增强实施计划，按事实层扩展、页面发现、状态探测、locator bundle 编译、runner telemetry 与回归验收六个任务拆解后端落地步骤。
 - 新增 Vue/React Web 系统采集完整性增强设计文档，明确以“页面发现高召回 + 状态探测高精度”为核心策略，补充受控交互采集、多重定位证据与 locator bundle 资产化方案，并定义完整性指标与验收口径。
 - 新增 `openweb web-system add/remove` CLI：`add` 现在支持从 YAML 清单加载 Web 测试系统配置并同步调用后端 `SystemAdminService` 完成正式接入；`remove` 同时支持 `--file` 与 `--system-code` 解析删除目标，并输出接入/清理结果摘要。CLI 运行时同时显式依赖 monorepo `backend` 包，避免纯 `uv run --project cli openweb ...` 场景下因缺少后端依赖而在命令执行时崩溃。

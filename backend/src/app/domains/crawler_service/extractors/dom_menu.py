@@ -79,6 +79,34 @@ class DomMenuTraversalExtractor:
             degraded=len(menus) == 0 and len(elements) == 0,
         )
 
+    async def collect_navigation_signals(
+        self,
+        *,
+        browser_session,
+        crawl_scope: str,
+    ) -> list[dict[str, Any]]:
+        menu_items = await self._collect_menu_items(browser_session=browser_session, crawl_scope=crawl_scope)
+        signals: list[dict[str, Any]] = []
+        for item in menu_items:
+            route_path = self._normalize_path(item.get("route_path") or item.get("path"))
+            page_route_path = self._normalize_path(item.get("page_route_path") or route_path)
+            if route_path is None and page_route_path is None:
+                continue
+            signal: dict[str, Any] = {
+                "route_path": route_path,
+                "page_route_path": page_route_path,
+                "label": self._clean_text(item.get("label") or item.get("text") or item.get("name")),
+                "discovery_sources": ["dom_menu_tree"],
+            }
+            entry_type = self._normalize_entry_type(item.get("entry_type") or item.get("interaction_type"))
+            if entry_type is not None:
+                signal["entry_type"] = entry_type
+            context_constraints = item.get("context_constraints")
+            if isinstance(context_constraints, dict):
+                signal["context_constraints"] = context_constraints
+            signals.append(signal)
+        return signals
+
     async def _collect_menu_items(self, *, browser_session, crawl_scope: str) -> list[dict[str, Any]]:
         collector = getattr(browser_session, "collect_dom_menu_nodes", None)
         if callable(collector):
@@ -104,6 +132,15 @@ class DomMenuTraversalExtractor:
             aria_label=aria_label,
             fallback_tag="li",
         )
+        entry_candidates: list[dict[str, object]] = []
+        entry_type = self._normalize_entry_type(item.get("entry_type") or item.get("interaction_type"))
+        if entry_type is not None:
+            entry_candidates.append(
+                {
+                    "entry_type": entry_type,
+                    "label": label,
+                }
+            )
         return MenuCandidate(
             label=label,
             route_path=route_path,
@@ -112,6 +149,8 @@ class DomMenuTraversalExtractor:
             playwright_locator=locator,
             parent_label=self._clean_text(item.get("parent_label")),
             page_route_path=self._normalize_path(item.get("page_route_path") or route_path),
+            discovery_sources=["dom_menu_tree"],
+            entry_candidates=entry_candidates,
         )
 
     def _to_element_candidate(self, item: dict[str, Any]) -> ElementCandidate | None:
@@ -235,3 +274,18 @@ class DomMenuTraversalExtractor:
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    def _normalize_entry_type(self, value: Any) -> str | None:
+        clean_value = self._clean_text(value)
+        if clean_value is None:
+            return None
+        normalized = clean_value.strip().lower().replace("-", "_")
+        if normalized in {"tab", "switch_tab"}:
+            return "tab_switch"
+        if normalized in {"modal", "show_modal"}:
+            return "open_modal"
+        if normalized in {"drawer", "show_drawer"}:
+            return "open_drawer"
+        if normalized in {"expand_filter", "open_filter", "toggle_filter"}:
+            return "filter_expand"
+        return normalized

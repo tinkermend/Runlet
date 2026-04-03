@@ -61,6 +61,18 @@ class Page(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
     )
+    discovery_sources: list[str] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    entry_candidates: list[dict[str, object]] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    context_constraints: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
     crawled_at: datetime = Field(
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
@@ -82,6 +94,18 @@ class MenuNode(BaseModel, table=True):
     playwright_locator: str | None = Field(
         default=None,
         sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    discovery_sources: list[str] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    entry_candidates: list[dict[str, object]] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    context_constraints: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
     )
 
 
@@ -105,6 +129,15 @@ class PageElement(BaseModel, table=True):
     playwright_locator: str | None = Field(
         default=None,
         sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    state_signature: str | None = Field(default=None, max_length=255)
+    state_context: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    locator_candidates: list[dict[str, object]] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
     )
     stability_score: float | None = Field(default=None)
     usage_description: str | None = Field(

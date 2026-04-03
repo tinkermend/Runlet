@@ -15,6 +15,12 @@ from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowse
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 
 
+def test_page_element_schema_exposes_state_and_locator_candidates():
+    assert "state_signature" in ElementCandidate.model_fields
+    assert "state_context" in ElementCandidate.model_fields
+    assert "locator_candidates" in ElementCandidate.model_fields
+
+
 class FakeBrowserSession:
     def __init__(self) -> None:
         self.closed = False
@@ -62,9 +68,11 @@ class FakeCrawlerPage:
         self.wait_for_timeout_calls: list[int] = []
         self.closed = False
         self.settled = False
+        self.current_url = "about:blank"
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         self.goto_calls.append((url, wait_until))
+        self.current_url = url
 
     async def evaluate(self, script: str):
         if not self.settled:
@@ -73,6 +81,14 @@ class FakeCrawlerPage:
             if "__RUNLET_MENU_NODES__" in script:
                 return []
             if "__RUNLET_PAGE_ELEMENTS__" in script:
+                return []
+            if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+                return []
+            if "__RUNLET_NETWORK_RESOURCES__" in script:
+                return []
+            if "__RUNLET_NETWORK_REQUESTS__" in script:
+                return []
+            if "__RUNLET_PAGE_METADATA__" in script:
                 return []
         if "__RUNLET_ROUTE_HINTS__" in script:
             assert "__NEXT_DATA__" in script
@@ -96,6 +112,22 @@ class FakeCrawlerPage:
                     "text": "刷新",
                 }
             ]
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return [{"route_path": "/reports", "source": "runtime_route_manifest"}]
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return [{"route_path": "/users", "source": "network_resource"}]
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return [{"path": "/dashboard", "source": "network_request"}]
+        if "__RUNLET_PAGE_METADATA__" in script:
+            if self.current_url.endswith("/users"):
+                return [
+                    {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200},
+                ]
+            if self.current_url.endswith("/dashboard"):
+                return [
+                    {"route_path": "/dashboard", "page_title": "仪表盘", "reachable": True, "status_code": 200},
+                ]
+            return [{"route_path": "/", "page_title": "首页", "reachable": True, "status_code": 200}]
         raise AssertionError(f"unexpected script: {script[:80]}")
 
     async def wait_for_timeout(self, timeout: int) -> None:
@@ -154,6 +186,122 @@ class FakeCrawlerPlaywright:
         self.stopped = True
 
 
+class StateProbeAwareFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.settled = False
+        self.current_url = "about:blank"
+        self.current_route = "/dashboard"
+        self.active_states: dict[str, str] = {}
+        self.executed_probe_actions: list[str] = []
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+        if "//" in url:
+            path = "/" + url.split("//", 1)[1].split("/", 1)[1] if "/" in url.split("//", 1)[1] else "/"
+            self.current_route = path
+
+    async def evaluate(self, script: str, *args):
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [
+                {"path": "/dashboard", "title": "仪表盘"},
+                {"path": "/users", "title": "用户管理"},
+            ]
+        if "__RUNLET_MENU_NODES__" in script:
+            if self.current_route == "/users":
+                return [
+                    {"label": "用户管理", "route_path": "/users", "role": "menuitem"},
+                    {"label": "禁用用户", "route_path": "/users", "role": "tab"},
+                ]
+            return [{"label": "仪表盘", "route_path": "/dashboard", "role": "menuitem"}]
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            if self.current_route == "/dashboard":
+                return [
+                    {
+                        "page_route_path": "/dashboard",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ]
+            state = self.active_states.get("/users", "default")
+            if state == "tab=disabled":
+                return [
+                    {
+                        "page_route_path": "/users",
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "禁用用户列表",
+                    }
+                ]
+            if state == "modal=create":
+                return [
+                    {
+                        "page_route_path": "/users",
+                        "element_type": "input",
+                        "role": "textbox",
+                        "text": "新增用户表单",
+                    }
+                ]
+            if state == "page=2":
+                return [
+                    {
+                        "page_route_path": "/users",
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "第2页用户列表",
+                    }
+                ]
+            return [
+                {
+                    "page_route_path": "/users",
+                    "element_type": "table",
+                    "role": "grid",
+                    "text": "默认用户列表",
+                },
+                {
+                    "page_route_path": "/users",
+                    "element_type": "button",
+                    "role": "button",
+                    "text": "新增用户",
+                },
+                {
+                    "page_route_path": "/users",
+                    "element_type": "button",
+                    "role": "button",
+                    "text": "2",
+                },
+            ]
+        if "__RUNLET_STATE_PROBE_EXECUTE__" in script:
+            action = args[0] if args else {}
+            if not isinstance(action, dict):
+                action = {}
+            entry_type = str(action.get("entry_type") or "")
+            self.executed_probe_actions.append(entry_type)
+            context = action.get("state_context")
+            if not isinstance(context, dict):
+                context = {}
+            if entry_type == "tab_switch":
+                self.active_states["/users"] = f"tab={context.get('active_tab', 'default')}"
+            if entry_type == "open_modal":
+                self.active_states["/users"] = f"modal={context.get('modal_title', 'create')}"
+            if entry_type == "paginate_probe":
+                self.active_states["/users"] = f"page={context.get('page_number', 1)}"
+            return {"applied": True}
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def install_fake_crawler_async_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[
@@ -164,6 +312,32 @@ def install_fake_crawler_async_api(
     FakeCrawlerPlaywright,
 ]:
     page = FakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
+def install_state_probe_aware_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    StateProbeAwareFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = StateProbeAwareFakeCrawlerPage()
     context = FakeCrawlerContext(page)
     browser = FakeCrawlerBrowser(context)
     chromium = FakeCrawlerChromium(browser)
@@ -243,6 +417,28 @@ class FakeDomMenuExtractor:
         return self.result
 
 
+class FakePageDiscoveryExtractor:
+    def __init__(self, result: CrawlExtractionResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def extract(self, *, browser_session, system, crawl_scope: str) -> CrawlExtractionResult:
+        del browser_session, system, crawl_scope
+        self.calls += 1
+        return self.result
+
+
+class FakeStateProbeExtractor:
+    def __init__(self, result: CrawlExtractionResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def extract(self, *, browser_session, system, crawl_scope: str) -> CrawlExtractionResult:
+        del browser_session, system, crawl_scope
+        self.calls += 1
+        return self.result
+
+
 @pytest.mark.anyio
 async def test_run_crawl_persists_snapshot_pages_and_elements(
     db_session,
@@ -259,6 +455,14 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
                     route_path="/users",
                     page_title="用户管理",
                     page_summary="用户列表页面",
+                    discovery_sources=["runtime_route_hints", "network_route_config"],
+                    entry_candidates=[
+                        {
+                            "entry_type": "tab_switch",
+                            "label": "用户列表",
+                        }
+                    ],
+                    context_constraints={"auth_scope": "admin"},
                 )
             ],
         )
@@ -273,12 +477,32 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
                     sort_order=0,
                     playwright_locator="role=menuitem[name='用户管理']",
                     page_route_path="/users",
+                    discovery_sources=["dom_menu_tree"],
+                    entry_candidates=[
+                        {
+                            "entry_type": "open_modal",
+                            "label": "新增用户",
+                        }
+                    ],
+                    context_constraints={"requires_permission": "user.read"},
                 )
             ],
             elements=[
                 ElementCandidate(
                     page_route_path="/users",
                     element_type="button",
+                    state_signature="/users|tab=default",
+                    state_context={"active_tab": "default"},
+                    locator_candidates=[
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='新增用户']",
+                        },
+                        {
+                            "strategy_type": "testid",
+                            "selector": "data-testid=add-user",
+                        },
+                    ],
                     element_role="button",
                     element_text="新增用户",
                     playwright_locator="role=button[name='新增用户']",
@@ -326,10 +550,85 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
     assert snapshot.degraded is False
     assert len(pages) == 1
     assert pages[0].route_path == "/users"
+    assert pages[0].discovery_sources == ["runtime_route_hints", "network_route_config"]
+    assert pages[0].entry_candidates == [{"entry_type": "tab_switch", "label": "用户列表"}]
+    assert pages[0].context_constraints == {"auth_scope": "admin"}
     assert len(menus) == 1
     assert menus[0].playwright_locator == "role=menuitem[name='用户管理']"
+    assert menus[0].discovery_sources == ["dom_menu_tree"]
+    assert menus[0].entry_candidates == [{"entry_type": "open_modal", "label": "新增用户"}]
+    assert menus[0].context_constraints == {"requires_permission": "user.read"}
     assert len(elements) == 1
     assert elements[0].playwright_locator == "role=button[name='新增用户']"
+    assert elements[0].state_signature == "/users|tab=default"
+    assert elements[0].state_context == {"active_tab": "default"}
+    assert elements[0].locator_candidates == [
+        {
+            "strategy_type": "semantic",
+            "selector": "role=button[name='新增用户']",
+        },
+        {
+            "strategy_type": "testid",
+            "selector": "data-testid=add-user",
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_uses_page_discovery_as_primary_page_source(
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            quality_score=0.9,
+            pages=[
+                PageCandidate(route_path="/dashboard", page_title="仪表盘", discovery_sources=["runtime_route_hints"]),
+                PageCandidate(
+                    route_path="/users",
+                    page_title="用户管理",
+                    discovery_sources=["dom_menu_tree", "network_route_config"],
+                ),
+            ],
+        )
+    )
+    router_extractor = FakeRouterExtractor(
+        CrawlExtractionResult(pages=[PageCandidate(route_path="/legacy", page_title="遗留路由")])
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[
+                MenuCandidate(
+                    label="用户管理",
+                    route_path="/users",
+                    depth=0,
+                    sort_order=0,
+                    playwright_locator="role=menuitem[name='用户管理']",
+                    page_route_path="/users",
+                )
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        router_extractor=router_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.pages_saved == 2
+    assert page_discovery_extractor.calls == 1
+    assert router_extractor.calls == 0
+    assert dom_menu_extractor.calls == 1
+
+    pages = db_session.exec(select(Page).order_by(Page.route_path, Page.id)).all()
+    assert [page.route_path for page in pages] == ["/dashboard", "/users"]
 
 
 @pytest.mark.anyio
@@ -610,11 +909,21 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     route_hints = await session.collect_route_hints(crawl_scope="full")
     menu_nodes = await session.collect_dom_menu_nodes(crawl_scope="full")
     dom_elements = await session.collect_dom_elements(crawl_scope="full")
+    network_route_configs = await session.collect_network_route_configs(crawl_scope="full")
+    network_resource_hints = await session.collect_network_resource_hints(crawl_scope="full")
+    network_requests = await session.collect_network_requests(crawl_scope="full")
+    page_metadata = await session.collect_page_metadata(crawl_scope="full")
     await session.close()
 
     assert route_hints[0]["path"] == "/dashboard"
     assert menu_nodes[1]["label"] == "用户管理"
     assert dom_elements[0]["element_type"] == "button"
+    assert network_route_configs[0]["route_path"] == "/reports"
+    assert network_resource_hints[0]["route_path"] == "/users"
+    assert network_requests[0]["path"] == "/dashboard"
+    assert len(page_metadata) == 1
+    assert page_metadata[0]["route_path"] == "/users"
+    assert page_metadata[0]["status_code"] == 200
     assert page.goto_calls == [
         ("https://erp.example.com", "domcontentloaded"),
         ("https://erp.example.com/dashboard", "domcontentloaded"),
@@ -626,3 +935,486 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert context.closed is True
     assert browser.closed is True
     assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_session_exposes_controlled_state_probe_hooks(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    baseline = await session.collect_state_probe_baseline(crawl_scope="full")
+    actions = await session.collect_state_probe_actions(crawl_scope="full")
+    executed = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "tab_switch",
+            "state_context": {"active_tab": "default"},
+        },
+        crawl_scope="full",
+    )
+    await session.close()
+
+    assert baseline
+    assert isinstance(baseline[0], dict)
+    assert baseline[0]["route_path"] in {"/dashboard", "/users"}
+    assert baseline[0]["state_context"] == {"active_tab": "default"}
+    assert isinstance(baseline[0]["elements"], list)
+    assert actions
+    assert all("entry_type" in action for action in actions)
+    assert executed["route_path"] == "/users"
+    assert executed["state_context"] == {"active_tab": "default"}
+    assert isinstance(executed["elements"], list)
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_state_probe_executes_real_action_specific_states(monkeypatch):
+    page, context, browser, chromium, playwright = install_state_probe_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    tab_result = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "tab_switch",
+            "state_context": {"active_tab": "disabled"},
+        },
+        crawl_scope="full",
+    )
+    modal_result = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "open_modal",
+            "state_context": {"modal_title": "create"},
+        },
+        crawl_scope="full",
+    )
+    pagination_result = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "paginate_probe",
+            "state_context": {"page_number": 2},
+        },
+        crawl_scope="full",
+    )
+    await session.close()
+
+    assert any(item.get("text") == "禁用用户列表" for item in tab_result["elements"])
+    assert any(item.get("text") == "新增用户表单" for item in modal_result["elements"])
+    assert any(item.get("text") == "第2页用户列表" for item in pagination_result["elements"])
+    assert page.executed_probe_actions == ["tab_switch", "open_modal", "paginate_probe"]
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_state_probe_actions_include_non_current_discovered_routes(monkeypatch):
+    page, context, browser, chromium, playwright = install_state_probe_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    actions = await session.collect_state_probe_actions(crawl_scope="full")
+    await session.close()
+
+    assert any(action.get("route_path") == "/users" for action in actions)
+    assert any(action.get("entry_type") in {"tab_switch", "open_modal", "paginate_probe"} for action in actions)
+    assert any(call[0].endswith("/users") for call in page.goto_calls)
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_metadata_reports_current_page_only(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    # Drive route transitions first, then collect metadata for current loaded page only.
+    await session.collect_dom_elements(crawl_scope="full")
+    page_metadata = await session.collect_page_metadata(crawl_scope="full")
+    await session.close()
+
+    assert page_metadata == [
+        {"route_path": "/users", "page_title": "用户管理", "reachable": True, "status_code": 200}
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_merges_state_probe_elements_with_state_context(
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            quality_score=0.91,
+            pages=[
+                PageCandidate(route_path="/users", page_title="用户管理", discovery_sources=["runtime_route_hints"]),
+            ],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[
+                MenuCandidate(
+                    label="用户管理",
+                    route_path="/users",
+                    page_route_path="/users",
+                    playwright_locator="role=menuitem[name='用户管理']",
+                )
+            ]
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            quality_score=0.77,
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"active_tab": "default"},
+                    locator_candidates=[
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='新增用户']",
+                        }
+                    ],
+                    playwright_locator="role=button[name='新增用户']",
+                    element_role="button",
+                    element_text="新增用户",
+                ),
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:modal=create",
+                    state_context={"modal_title": "create"},
+                    locator_candidates=[
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='确认']",
+                        }
+                    ],
+                    playwright_locator="role=button[name='确认']",
+                    element_role="button",
+                    element_text="确认",
+                ),
+            ],
+            warning_messages=["interaction_budget_exhausted"],
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.pages_saved == 1
+    assert result.menus_saved == 1
+    assert result.elements_saved == 2
+    assert result.warning_messages == ["interaction_budget_exhausted"]
+    assert state_probe_extractor.calls == 1
+
+    elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
+    assert elements[0].state_context == {"active_tab": "default"}
+    assert elements[0].locator_candidates == [
+        {
+            "strategy_type": "semantic",
+            "selector": "role=button[name='新增用户']",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_merges_probe_and_dom_stateful_elements_instead_of_replacing(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[PageCandidate(route_path="/users", page_title="用户管理")],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")],
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"active_tab": "default"},
+                    playwright_locator="role=button[name='刷新']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='刷新']"},
+                    ],
+                    element_role="button",
+                    element_text="刷新",
+                )
+            ],
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:modal=create",
+                    state_context={"modal_title": "create"},
+                    playwright_locator="role=button[name='确认']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='确认']"},
+                    ],
+                    element_role="button",
+                    element_text="确认",
+                )
+            ]
+        )
+    )
+
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 2
+    elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_preserves_multiple_elements_under_same_state_signature(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(pages=[PageCandidate(route_path="/users", page_title="用户管理")]),
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")])
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:tab=disabled",
+                    state_context={"active_tab": "disabled"},
+                    element_role="button",
+                    element_text="启用用户",
+                    playwright_locator="role=button[name='启用用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='启用用户']"},
+                    ],
+                ),
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:tab=disabled",
+                    state_context={"active_tab": "disabled"},
+                    element_role="button",
+                    element_text="批量恢复",
+                    playwright_locator="role=button[name='批量恢复']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='批量恢复']"},
+                    ],
+                ),
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 2
+    elements = db_session.exec(select(PageElement).order_by(PageElement.element_text, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:tab=disabled", "users:tab=disabled"]
+    assert [element.element_text for element in elements] == ["启用用户", "批量恢复"]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_merges_same_element_from_dom_and_probe_with_enriched_metadata(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(pages=[PageCandidate(route_path="/users", page_title="用户管理")]),
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")],
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"active_tab": "default"},
+                    element_role="button",
+                    element_text="新增用户",
+                    playwright_locator="role=button[name='新增用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='新增用户']"},
+                    ],
+                    attributes={"data_testid": "create-user"},
+                )
+            ],
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"modal_title": "create"},
+                    element_role="button",
+                    element_text="新增用户",
+                    playwright_locator="text='新增用户'",
+                    locator_candidates=[
+                        {"strategy_type": "text", "selector": "text='新增用户'"},
+                    ],
+                    attributes={"aria_label": "新增用户"},
+                )
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 1
+    elements = db_session.exec(select(PageElement)).all()
+    assert len(elements) == 1
+    assert elements[0].element_text == "新增用户"
+    assert elements[0].state_signature == "users:default"
+    assert elements[0].locator_candidates == [
+        {"strategy_type": "semantic", "selector": "role=button[name='新增用户']"},
+        {"strategy_type": "text", "selector": "text='新增用户'"},
+    ]
+    assert elements[0].attributes == {"data_testid": "create-user", "aria_label": "新增用户"}
+    assert elements[0].state_context == {"active_tab": "default", "modal_title": "create"}
+
+
+@pytest.mark.anyio
+async def test_task6_crawl_baseline_state_signature_elements_keep_locator_candidates(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[PageCandidate(route_path="/users", page_title="用户管理")],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")],
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="table",
+                    state_signature="users:default",
+                    state_context={"entry_type": "default"},
+                    element_role="table",
+                    element_text="用户列表",
+                    playwright_locator="role=table[name='用户列表']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=table[name='用户列表']"},
+                    ],
+                ),
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="dialog",
+                    state_signature="users:modal=create",
+                    state_context={"entry_type": "open_modal"},
+                    element_role="dialog",
+                    element_text="新增用户",
+                    playwright_locator="role=dialog[name='新增用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=dialog[name='新增用户']"},
+                    ],
+                ),
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 2
+
+    elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
+    assert all(element.locator_candidates for element in elements)
+    assert elements[0].locator_candidates[0]["strategy_type"] == "semantic"
