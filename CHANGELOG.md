@@ -1,5 +1,7 @@
 ## 2026-04-03
 
+- 修复 `asset_compiler` 对真实采集孤儿菜单的兼容性：`build_current_snapshot_truth` 现在会对 `page_id=None` 的 `menu_nodes` 使用空值安全排序，并继续忽略无法映射到页面路由的菜单，避免 `asset_compile` 在 reconciliation 阶段因 `None/UUID` 比较抛错。
+- 修复资产生命周期时间列的 ORM 元数据偏差：`page_assets.retired_at`、`page_checks.retired_at`、`intent_aliases.disabled_at` 现在显式声明为 timezone-aware，消除真实 PostgreSQL/asyncpg 在 reconciliation 写入 UTC 时间时的 `TIMESTAMP WITHOUT TIME ZONE` 绑定错误。
 - 合并采集同步一致性分支回 `main` 时收敛 Alembic 双 head：新增 merge revision `0010_merge_exec_run_recon` 统一 `execution_run created_at` 与 `asset reconciliation` 两条迁移分支，同时修正 worker 构建链路里的重复 `control_plane_service` 传参，恢复主分支 schema 升级与全量 backend 回归可执行性。
 - 新增 `docs/summary/2026-04-03-backend-runtime-check-and-realtime-probe-summary.md`，总结本轮后端检查执行与受控实时探测计划的目标、落地内容、边界、验证结果与后续建议，作为阶段性收口文档。
 - 修正仓库级 `AGENTS.md` 约束描述：更新后端真实领域目录为 `backend/src/app/domains/*`，补充已落地的 `auth_policy/crawl_policy` 调度对象，并将实施顺序说明改为“基础四阶段 + 后续以最新 spec/plan 为准”，避免继续引用过时规则。

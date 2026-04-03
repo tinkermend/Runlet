@@ -86,7 +86,13 @@ def build_current_snapshot_truth(
     menu_chain_by_route: dict[str, list[str]] = {}
     menus_sorted = sorted(
         menus,
-        key=lambda row: (row.page_id, row.depth, row.sort_order, str(row.id)),
+        key=lambda row: (
+            row.page_id is None,
+            str(row.page_id or ""),
+            row.depth,
+            row.sort_order,
+            str(row.id),
+        ),
     )
     for menu in menus_sorted:
         route_path = page_route_by_id.get(menu.page_id, "")

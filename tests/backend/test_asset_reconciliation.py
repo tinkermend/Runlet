@@ -7,9 +7,11 @@ from app.domains.asset_compiler.reconciliation import (
     ActivePageTruth,
     SnapshotTruth,
     build_blocking_dependency_json,
+    build_current_snapshot_truth,
     evaluate_retirement_quality_gate,
     reconcile_retirement_decisions,
 )
+from app.infrastructure.db.models.crawl import MenuNode, Page, PageElement
 
 
 def test_build_blocking_dependency_json_derives_menu_chain_and_required_elements():
@@ -31,6 +33,67 @@ def test_build_blocking_dependency_json_derives_menu_chain_and_required_elements
             {"kind": "button", "text": "新增用户"},
             {"kind": "table", "role": "table"},
         ],
+    }
+
+
+def test_build_current_snapshot_truth_ignores_orphan_menus_without_page_id():
+    system_id = uuid4()
+    snapshot_id = uuid4()
+    page_id = uuid4()
+    page = Page(
+        id=page_id,
+        system_id=system_id,
+        snapshot_id=snapshot_id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表",
+    )
+
+    snapshot_truth = build_current_snapshot_truth(
+        pages=[page],
+        menus=[
+            MenuNode(
+                system_id=system_id,
+                snapshot_id=snapshot_id,
+                page_id=None,
+                label="巡检管理巡检模板巡检任务巡检结果巡检项",
+                depth=0,
+                sort_order=0,
+            ),
+            MenuNode(
+                system_id=system_id,
+                snapshot_id=snapshot_id,
+                page_id=page_id,
+                label="系统管理",
+                depth=0,
+                sort_order=1,
+            ),
+            MenuNode(
+                system_id=system_id,
+                snapshot_id=snapshot_id,
+                page_id=page_id,
+                label="用户管理",
+                route_path="/users",
+                depth=1,
+                sort_order=1,
+            ),
+        ],
+        elements=[
+            PageElement(
+                system_id=system_id,
+                snapshot_id=snapshot_id,
+                page_id=page_id,
+                element_type="button",
+                element_role="button",
+                element_text="新增用户",
+            )
+        ],
+    )
+
+    assert snapshot_truth.route_paths == {"/users"}
+    assert snapshot_truth.menu_chain_by_route == {"/users": ["系统管理", "用户管理"]}
+    assert snapshot_truth.elements_by_route == {
+        "/users": [{"kind": "button", "role": "button", "text": "新增用户"}]
     }
 
 

@@ -405,6 +405,16 @@ def test_runtime_datetime_columns_are_timezone_aware_in_metadata():
     assert all(column.type.timezone is True for column in runtime_columns)
 
 
+def test_asset_lifecycle_datetime_columns_are_timezone_aware_in_metadata():
+    lifecycle_columns = [
+        BaseModel.metadata.tables["page_assets"].c["retired_at"],
+        BaseModel.metadata.tables["page_checks"].c["retired_at"],
+        BaseModel.metadata.tables["intent_aliases"].c["disabled_at"],
+    ]
+
+    assert all(column.type.timezone is True for column in lifecycle_columns)
+
+
 def test_runtime_policy_tables_exist(inspector):
     table_names = set(inspector.get_table_names())
     assert "system_auth_policies" in table_names

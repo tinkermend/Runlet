@@ -86,7 +86,10 @@ class PageAsset(BaseModel, table=True):
         ),
     )
     retired_reason: str | None = Field(default=None, max_length=64)
-    retired_at: datetime | None = Field(default=None)
+    retired_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
     retired_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     compiled_from_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     last_verified_at: datetime | None = Field(default=None)
@@ -108,7 +111,10 @@ class PageCheck(BaseModel, table=True):
         ),
     )
     retired_reason: str | None = Field(default=None, max_length=64)
-    retired_at: datetime | None = Field(default=None)
+    retired_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
     retired_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     input_schema: dict[str, object] | None = Field(
         default=None,
@@ -143,7 +149,10 @@ class IntentAlias(BaseModel, table=True):
         sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.true()),
     )
     disabled_reason: str | None = Field(default=None, max_length=64)
-    disabled_at: datetime | None = Field(default=None)
+    disabled_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
     disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
 
 
