@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 新增 `docs/summary/2026-04-03-backend-runtime-check-and-realtime-probe-summary.md`，总结本轮后端检查执行与受控实时探测计划的目标、落地内容、边界、验证结果与后续建议，作为阶段性收口文档。
 - 修正仓库级 `AGENTS.md` 约束描述：更新后端真实领域目录为 `backend/src/app/domains/*`，补充已落地的 `auth_policy/crawl_policy` 调度对象，并将实施顺序说明改为“基础四阶段 + 后续以最新 spec/plan 为准”，避免继续引用过时规则。
 - 新增后端采集同步一致性与资产退役实施计划，按生命周期字段、reconciliation、调度暂停、执行阻断和回归验证拆分后端落地步骤。
 - 新增后端采集同步一致性与资产退役设计文档，明确高质量 `full crawl` 作为页面资产真相源，引入 reconciliation、生命周期状态、alias 失效、调度暂停与执行阻断的统一收敛方案。
