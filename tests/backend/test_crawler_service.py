@@ -796,6 +796,45 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
 
 
 @pytest.mark.anyio
+async def test_playwright_browser_factory_session_exposes_controlled_state_probe_hooks(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    baseline = await session.collect_state_probe_baseline(crawl_scope="full")
+    actions = await session.collect_state_probe_actions(crawl_scope="full")
+    executed = await session.perform_state_probe_action(
+        action={
+            "route_path": "/users",
+            "entry_type": "tab_switch",
+            "state_context": {"active_tab": "default"},
+        },
+        crawl_scope="full",
+    )
+    await session.close()
+
+    assert baseline
+    assert isinstance(baseline[0], dict)
+    assert baseline[0]["route_path"] in {"/dashboard", "/users"}
+    assert baseline[0]["state_context"] == {"active_tab": "default"}
+    assert isinstance(baseline[0]["elements"], list)
+    assert actions
+    assert all("entry_type" in action for action in actions)
+    assert executed["route_path"] == "/users"
+    assert executed["state_context"] == {"active_tab": "default"}
+    assert isinstance(executed["elements"], list)
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
 async def test_playwright_browser_factory_metadata_reports_current_page_only(monkeypatch):
     page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
     factory = PlaywrightBrowserFactory()
@@ -906,3 +945,68 @@ async def test_run_crawl_merges_state_probe_elements_with_state_context(
             "selector": "role=button[name='新增用户']",
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_merges_probe_and_dom_stateful_elements_instead_of_replacing(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[PageCandidate(route_path="/users", page_title="用户管理")],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")],
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"active_tab": "default"},
+                    playwright_locator="role=button[name='刷新']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='刷新']"},
+                    ],
+                    element_role="button",
+                    element_text="刷新",
+                )
+            ],
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:modal=create",
+                    state_context={"modal_title": "create"},
+                    playwright_locator="role=button[name='确认']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='确认']"},
+                    ],
+                    element_role="button",
+                    element_text="确认",
+                )
+            ]
+        )
+    )
+
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 2
+    elements = db_session.exec(select(PageElement).order_by(PageElement.state_signature, PageElement.id)).all()
+    assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]

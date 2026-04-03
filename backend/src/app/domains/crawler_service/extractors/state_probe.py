@@ -44,15 +44,19 @@ class ControlledStateProbeExtractor:
     ) -> CrawlExtractionResult:
         del system
         warnings: list[str] = []
-        failure_reason: str | None = None
         elements: list[ElementCandidate] = []
         visited_signatures: set[str] = set()
         actions_consumed: dict[str, int] = defaultdict(int)
 
-        for baseline_state in await self._collect_baseline_states(
-            browser_session=browser_session,
-            crawl_scope=crawl_scope,
-        ):
+        try:
+            baseline_states = await self._collect_baseline_states(
+                browser_session=browser_session,
+                crawl_scope=crawl_scope,
+            )
+        except Exception:
+            baseline_states = []
+            self._append_warning(warnings, "state_probe_baseline_degraded")
+        for baseline_state in baseline_states:
             self._collect_state_elements(
                 state=baseline_state,
                 elements=elements,
@@ -60,7 +64,11 @@ class ControlledStateProbeExtractor:
                 visited_signatures=visited_signatures,
             )
 
-        actions = await self._collect_actions(browser_session=browser_session, crawl_scope=crawl_scope)
+        try:
+            actions = await self._collect_actions(browser_session=browser_session, crawl_scope=crawl_scope)
+        except Exception:
+            actions = []
+            self._append_warning(warnings, "state_probe_actions_degraded")
         for action in actions:
             route_path = self._normalize_route_path(action.get("route_path") or action.get("page_route_path"))
             if route_path is None:
@@ -73,8 +81,6 @@ class ControlledStateProbeExtractor:
 
             if self._is_permission_blocked(action):
                 self._append_warning(warnings, "blocked_by_permission")
-                if failure_reason is None:
-                    failure_reason = "blocked_by_permission"
                 continue
 
             if actions_consumed[route_path] >= self.max_actions_per_page:
@@ -90,13 +96,9 @@ class ControlledStateProbeExtractor:
                 )
             except PermissionError:
                 self._append_warning(warnings, "blocked_by_permission")
-                if failure_reason is None:
-                    failure_reason = "blocked_by_permission"
                 continue
             except Exception:
                 self._append_warning(warnings, "unsafe_action_rejected")
-                if failure_reason is None:
-                    failure_reason = "unsafe_action_rejected"
                 continue
 
             state = self._to_state_payload(default_route=route_path, action=action, payload=state_payload)
@@ -112,7 +114,7 @@ class ControlledStateProbeExtractor:
             framework_detected=self._clean_text(getattr(browser_session, "framework_hint", None)),
             quality_score=quality_score if elements else 0.0,
             elements=elements,
-            failure_reason=failure_reason,
+            failure_reason=None,
             warning_messages=warnings,
             degraded=False,
         )
@@ -273,6 +275,10 @@ class ControlledStateProbeExtractor:
                 value = self._clean_text(merged.get(key))
                 if value is not None:
                     state_context[key] = value
+            for numeric_key in ("page_number", "page_index", "page", "tree_level"):
+                numeric_value = merged.get(numeric_key)
+                if isinstance(numeric_value, (int, float)) and not isinstance(numeric_value, bool):
+                    state_context[numeric_key] = int(numeric_value) if float(numeric_value).is_integer() else numeric_value
         merged["state_context"] = state_context
         merged["elements"] = self._ensure_dict_list(merged.get("elements"))
         return merged
@@ -378,8 +384,10 @@ def build_state_signature(route_path: str, state_context: dict[str, object]) -> 
     route_segment = normalized_route.strip("/").replace("/", ":") or "root"
 
     suffixes: list[str] = []
+    consumed_keys: set[str] = set()
     active_tab = _normalize_signature_value(state_context.get("active_tab"))
     if active_tab is not None:
+        consumed_keys.add("active_tab")
         if active_tab == "default":
             suffixes.append("default")
         else:
@@ -387,23 +395,41 @@ def build_state_signature(route_path: str, state_context: dict[str, object]) -> 
 
     modal_title = _normalize_signature_value(state_context.get("modal_title"))
     if modal_title is not None:
+        consumed_keys.add("modal_title")
         suffixes.append(f"modal={modal_title}")
 
     drawer_title = _normalize_signature_value(state_context.get("drawer_title"))
     if drawer_title is not None:
+        consumed_keys.add("drawer_title")
         suffixes.append(f"drawer={drawer_title}")
 
     view_mode = _normalize_signature_value(state_context.get("view_mode"))
     if view_mode is not None:
+        consumed_keys.add("view_mode")
         suffixes.append(f"view={view_mode}")
 
     panel_title = _normalize_signature_value(state_context.get("panel_title"))
     if panel_title is not None:
+        consumed_keys.add("panel_title")
         suffixes.append(f"panel={panel_title}")
 
     tree_node = _normalize_signature_value(state_context.get("tree_node"))
     if tree_node is not None:
+        consumed_keys.add("tree_node")
         suffixes.append(f"tree={tree_node}")
+
+    extra_fields: list[str] = []
+    for key in sorted(state_context):
+        if key in consumed_keys:
+            continue
+        normalized_value = _normalize_signature_value(state_context.get(key))
+        if normalized_value is None:
+            continue
+        normalized_key = key.strip().lower().replace("-", "_").replace(" ", "_")
+        if not normalized_key:
+            continue
+        extra_fields.append(f"{normalized_key}={normalized_value}")
+    suffixes.extend(extra_fields)
 
     if not suffixes:
         suffixes.append("default")
@@ -411,7 +437,15 @@ def build_state_signature(route_path: str, state_context: dict[str, object]) -> 
 
 
 def _normalize_signature_value(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower().replace(" ", "_")
-    return normalized or None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return format(value, "g")
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace(" ", "_")
+        return normalized or None
+    return None

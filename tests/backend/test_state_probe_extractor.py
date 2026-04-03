@@ -1,6 +1,9 @@
 import pytest
 
-from app.domains.crawler_service.extractors.state_probe import ControlledStateProbeExtractor
+from app.domains.crawler_service.extractors.state_probe import (
+    ControlledStateProbeExtractor,
+    build_state_signature,
+)
 
 
 class FakeStateProbeSession:
@@ -98,6 +101,38 @@ class FakeStateProbeSession:
         }
 
 
+class MixedProbeWarningSession(FakeStateProbeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.actions = [
+            {
+                "route_path": "/users",
+                "entry_type": "tab_switch",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "用户列表",
+                    }
+                ],
+            },
+            {
+                "route_path": "/users",
+                "entry_type": "open_modal",
+                "blocked_by_permission": True,
+                "state_context": {"modal_title": "create"},
+                "elements": [],
+            },
+            {
+                "route_path": "/users",
+                "entry_type": "submit_form",
+                "state_context": {"modal_title": "create"},
+                "elements": [],
+            },
+        ]
+
+
 @pytest.mark.anyio
 async def test_state_probe_collects_representative_states_without_unsafe_actions():
     extractor = ControlledStateProbeExtractor()
@@ -133,3 +168,26 @@ async def test_state_probe_dedups_elements_by_state_signature():
     signatures = [element.state_signature for element in result.elements]
     assert signatures.count("users:modal=create") == 1
     assert "state_signature_duplicate" in result.warning_messages
+
+
+def test_build_state_signature_includes_numeric_pagination_context():
+    page_1 = build_state_signature("/users", {"active_tab": "default", "page_number": 1})
+    page_2 = build_state_signature("/users", {"active_tab": "default", "page_number": 2})
+
+    assert page_1 != page_2
+    assert "page_number=1" in page_1
+    assert "page_number=2" in page_2
+
+
+@pytest.mark.anyio
+async def test_state_probe_permission_and_unsafe_actions_only_emit_warnings_when_usable():
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=MixedProbeWarningSession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert result.failure_reason is None
+    assert result.elements
+    assert "blocked_by_permission" in result.warning_messages
+    assert "unsafe_action_rejected" in result.warning_messages
