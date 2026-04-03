@@ -347,12 +347,23 @@ class AssetCompilerService:
         retired_asset_ids = _dedupe_uuids(retired_asset_ids)
         retired_check_ids = _dedupe_uuids(retired_check_ids)
 
-        alias_ids_to_disable = await self._query_alias_ids_to_disable(
-            asset_keys=[
+        retired_asset_keys = [
                 active_assets_by_id[asset_id].asset_key
                 for asset_id in retired_asset_ids
                 if asset_id in active_assets_by_id
-            ]
+        ]
+        retired_check_targets = [
+            (
+                active_assets_by_id[active_checks_by_id[check_id].page_asset_id].asset_key,
+                active_checks_by_id[check_id].check_code,
+            )
+            for check_id in retired_check_ids
+            if check_id in active_checks_by_id
+            and active_checks_by_id[check_id].page_asset_id in active_assets_by_id
+        ]
+        alias_ids_to_disable = await self._query_alias_ids_to_disable(
+            retired_asset_keys=retired_asset_keys,
+            retired_check_targets=retired_check_targets,
         )
         published_jobs_to_pause = await self._query_published_jobs_to_pause(
             page_check_ids=retired_check_ids,
@@ -479,16 +490,35 @@ class AssetCompilerService:
         )
         return {row.id: row for row in module_plans}
 
-    async def _query_alias_ids_to_disable(self, *, asset_keys: list[str]) -> list[UUID]:
-        if not asset_keys:
+    async def _query_alias_ids_to_disable(
+        self,
+        *,
+        retired_asset_keys: list[str],
+        retired_check_targets: list[tuple[str, str]],
+    ) -> list[UUID]:
+        check_target_set = {
+            (asset_key, check_code)
+            for asset_key, check_code in retired_check_targets
+            if asset_key and check_code
+        }
+        candidate_asset_keys = set(retired_asset_keys) | {asset_key for asset_key, _ in check_target_set}
+        if not candidate_asset_keys:
             return []
         aliases = await self._exec_all(
             select(IntentAlias)
-            .where(IntentAlias.asset_key.in_(asset_keys))
+            .where(IntentAlias.asset_key.in_(sorted(candidate_asset_keys)))
             .where(IntentAlias.is_active.is_(True))
             .order_by(IntentAlias.id)
         )
-        return [row.id for row in aliases]
+        retired_asset_key_set = {asset_key for asset_key in retired_asset_keys if asset_key}
+        selected_alias_ids: list[UUID] = []
+        for alias in aliases:
+            if alias.asset_key in retired_asset_key_set:
+                selected_alias_ids.append(alias.id)
+                continue
+            if (alias.asset_key, alias.check_alias) in check_target_set:
+                selected_alias_ids.append(alias.id)
+        return selected_alias_ids
 
     async def _query_published_jobs_to_pause(self, *, page_check_ids: list[UUID]) -> list[PublishedJob]:
         if not page_check_ids:

@@ -5,7 +5,13 @@ from sqlmodel import select
 
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint
 from app.domains.asset_compiler.schemas import CompileSnapshotResult
-from app.infrastructure.db.models.assets import AssetSnapshot, ModulePlan, PageAsset, PageCheck
+from app.infrastructure.db.models.assets import (
+    AssetSnapshot,
+    IntentAlias,
+    ModulePlan,
+    PageAsset,
+    PageCheck,
+)
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.infrastructure.db.models.jobs import PublishedJob
 from app.shared.enums import AssetLifecycleStatus, AssetStatus, PublishedJobState
@@ -576,16 +582,26 @@ async def test_compile_snapshot_retires_check_when_blocking_menu_chain_is_missin
     db_session.add(module_plan)
     db_session.flush()
 
-    db_session.add(
-        PageCheck(
-            page_asset_id=page_asset.id,
-            check_code="custom_menu_chain_guard",
-            goal="custom_menu_chain_guard",
-            lifecycle_status=AssetLifecycleStatus.ACTIVE,
-            assertion_schema={"assertion": "page_ready"},
-            module_plan_id=module_plan.id,
-        )
+    menu_guard_check = PageCheck(
+        page_asset_id=page_asset.id,
+        check_code="custom_menu_chain_guard",
+        goal="custom_menu_chain_guard",
+        lifecycle_status=AssetLifecycleStatus.ACTIVE,
+        assertion_schema={"assertion": "page_ready"},
+        module_plan_id=module_plan.id,
     )
+    db_session.add(menu_guard_check)
+    db_session.flush()
+    menu_guard_alias = IntentAlias(
+        system_alias=seeded_system.code,
+        page_alias=previous_page.page_title,
+        check_alias=menu_guard_check.check_code,
+        route_hint=previous_page.route_path,
+        asset_key=page_asset.asset_key,
+        source="seed",
+        is_active=True,
+    )
+    db_session.add(menu_guard_alias)
     db_session.commit()
 
     current_snapshot = _create_snapshot(db_session, seeded_system, quality_score=0.95, degraded=False)
@@ -604,6 +620,8 @@ async def test_compile_snapshot_retires_check_when_blocking_menu_chain_is_missin
 
     assert result.checks_retired == 1
     assert result.retire_reasons[0]["reason"] == "missing_menu_chain"
+    assert result.alias_disable_decision_count == 1
+    assert result.alias_ids_to_disable == [menu_guard_alias.id]
 
 
 @pytest.mark.anyio
@@ -652,20 +670,30 @@ async def test_compile_snapshot_retires_check_when_key_element_is_missing(
     db_session.add(module_plan)
     db_session.flush()
 
-    db_session.add(
-        PageCheck(
-            page_asset_id=page_asset.id,
-            check_code="custom_key_element_guard",
-            goal="custom_key_element_guard",
-            lifecycle_status=AssetLifecycleStatus.ACTIVE,
-            assertion_schema={
-                "required_elements": [
-                    {"kind": "button", "text": "新增用户"},
-                ]
-            },
-            module_plan_id=module_plan.id,
-        )
+    key_element_guard_check = PageCheck(
+        page_asset_id=page_asset.id,
+        check_code="custom_key_element_guard",
+        goal="custom_key_element_guard",
+        lifecycle_status=AssetLifecycleStatus.ACTIVE,
+        assertion_schema={
+            "required_elements": [
+                {"kind": "button", "text": "新增用户"},
+            ]
+        },
+        module_plan_id=module_plan.id,
     )
+    db_session.add(key_element_guard_check)
+    db_session.flush()
+    key_element_guard_alias = IntentAlias(
+        system_alias=seeded_system.code,
+        page_alias=previous_page.page_title,
+        check_alias=key_element_guard_check.check_code,
+        route_hint=previous_page.route_path,
+        asset_key=page_asset.asset_key,
+        source="seed",
+        is_active=True,
+    )
+    db_session.add(key_element_guard_alias)
     db_session.commit()
 
     current_snapshot = _create_snapshot(db_session, seeded_system, quality_score=0.95, degraded=False)
@@ -685,6 +713,8 @@ async def test_compile_snapshot_retires_check_when_key_element_is_missing(
 
     assert result.checks_retired == 1
     assert result.retire_reasons[0]["reason"] == "missing_key_element"
+    assert result.alias_disable_decision_count == 1
+    assert result.alias_ids_to_disable == [key_element_guard_alias.id]
 
 
 @pytest.mark.anyio
@@ -761,5 +791,19 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
     db_session.commit()
 
     result = await asset_compiler_service.compile_snapshot(snapshot_id=current_snapshot.id)
+    db_session.refresh(retired_asset)
+    restored_page_open_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.page_asset_id == retired_asset.id)
+        .where(PageCheck.check_code == "page_open")
+    ).one()
 
     assert result.assets_updated >= 1
+    assert retired_asset.lifecycle_status == AssetLifecycleStatus.ACTIVE
+    assert retired_asset.retired_reason is None
+    assert retired_asset.retired_at is None
+    assert retired_asset.retired_by_snapshot_id is None
+    assert restored_page_open_check.lifecycle_status == AssetLifecycleStatus.ACTIVE
+    assert restored_page_open_check.retired_reason is None
+    assert restored_page_open_check.retired_at is None
+    assert restored_page_open_check.retired_by_snapshot_id is None
