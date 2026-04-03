@@ -380,7 +380,9 @@ def test_reconciliation_audit_persists_non_empty_identifier_lists(db_engine):
     retired_asset_id = uuid4()
     retired_check_id = uuid4()
     alias_id = uuid4()
+    enabled_alias_id = uuid4()
     paused_job_id = uuid4()
+    resumed_job_id = uuid4()
 
     with Session(db_engine) as session:
         system = System(
@@ -405,8 +407,10 @@ def test_reconciliation_audit_persists_non_empty_identifier_lists(db_engine):
             retired_asset_ids=[retired_asset_id],
             retired_check_ids=[retired_check_id],
             disabled_alias_ids=[alias_id],
+            enabled_alias_ids=[enabled_alias_id],
             retire_reasons=[{"category": "retired_missing", "asset_id": str(retired_asset_id)}],
             paused_published_job_ids=[paused_job_id],
+            resumed_published_job_ids=[resumed_job_id],
         )
         session.add(audit)
         session.commit()
@@ -415,7 +419,9 @@ def test_reconciliation_audit_persists_non_empty_identifier_lists(db_engine):
         assert audit.retired_asset_ids == [str(retired_asset_id)]
         assert audit.retired_check_ids == [str(retired_check_id)]
         assert audit.disabled_alias_ids == [str(alias_id)]
+        assert audit.enabled_alias_ids == [str(enabled_alias_id)]
         assert audit.paused_published_job_ids == [str(paused_job_id)]
+        assert audit.resumed_published_job_ids == [str(resumed_job_id)]
 
 
 def test_runtime_policy_models_expose_expected_fields():

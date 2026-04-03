@@ -158,8 +158,10 @@ def upgrade() -> None:
         sa.Column("retired_asset_ids", json_type, nullable=False),
         sa.Column("retired_check_ids", json_type, nullable=False),
         sa.Column("disabled_alias_ids", json_type, nullable=False),
+        sa.Column("enabled_alias_ids", json_type, nullable=False),
         sa.Column("retire_reasons", json_type, nullable=False),
         sa.Column("paused_published_job_ids", json_type, nullable=False),
+        sa.Column("resumed_published_job_ids", json_type, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["snapshot_id"], ["crawl_snapshots.id"]),
     )

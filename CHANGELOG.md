@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 落地后端采集同步一致性与资产退役实现，补齐 reconciliation、生命周期状态、调度暂停与执行阻断闭环；同时修正 `0009_asset_reconciliation_retirement` 对恢复路径审计列的漏迁移，确保 `asset_reconciliation_audits` 与 SQLModel 元数据保持一致。
 - 修复退休阻断代码审查问题：`RunnerService.run_page_check` 新增执行入口 lifecycle 阻断（抛出 `ExecutionBlockedError`），关闭 `run_check` worker 在“预检后到实际执行前”窗口内的 TOCTOU 漏洞；`RunCheckJobHandler` 在退休阻断场景统一写入 `failure_message=asset_retired_missing`，并把“发布任务因退休暂停”的判定收紧为 `PAUSED + retired pause_reason + paused_by_snapshot_id/paused_by_asset_id/paused_by_page_check_id` 至少一项存在。
 - 收紧退休资产执行阻断：`ControlPlaneService.run_page_check` 与请求解析路径新增显式 lifecycle 冲突校验，退休 `page_check/page_asset` 统一返回 `409`；`RunCheckJobHandler` 在真正调用 runner 前会重新加载目标并做最终退休守卫，若目标已退休或关联发布任务因退休暂停则将队列项标记为 `skipped`，并写入 `failure_message=asset_retired_missing`。
 - 补齐 asset compile 生产执行链路：`AssetCompileJobHandler` 在 `compile_snapshot` 后会调用 `ControlPlaneService.apply_reconciliation_cascades` 执行 alias 失效与发布任务暂停，并把实际执行计数 `aliases_disabled/published_jobs_paused` 回写到 compile job `result_payload`；worker 组装同时注入 control plane 协调器，避免级联逻辑成为死代码。
