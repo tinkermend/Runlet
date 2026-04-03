@@ -13,11 +13,13 @@
 ## File Structure
 
 **Execution Notes:**
+
 - Frontend project root is **`front/`**.
-- Before implementing visual pages, execution must use **`ui-ux-pro-max-skill`** to produce key screen designs and interaction guidance.
+- Before implementing visual pages, execution must use **`ui-ux-pro-max`** to produce key screen designs and interaction guidance.
 - Keep customer-facing terminology in the UI; do not expose `storage_state` or raw execution internals in primary flows.
 
 **Files to Create:**
+
 - `front/package.json`
 - `front/tsconfig.json`
 - `front/vite.config.ts`
@@ -62,6 +64,7 @@
 - `tests/backend/test_console_results_api.py`
 
 **Files to Modify:**
+
 - `backend/src/app/api/router.py` - register console-facing routers
 - `backend/src/app/api/deps.py` - add authenticated console-user dependency and shared service wiring
 - `backend/src/app/config/settings.py` - add console login/session settings
@@ -72,6 +75,7 @@
 - `CHANGELOG.md`
 
 **Tests to Create or Modify:**
+
 - `tests/backend/test_console_auth_api.py`
 - `tests/backend/test_console_portal_api.py`
 - `tests/backend/test_console_tasks_api.py`
@@ -87,11 +91,12 @@
 ## Task 1: Produce UI Foundation Before Coding
 
 **Files:**
+
 - Create: `docs/front/2026-04-04-frontend-platform-ui-foundation.md`
 - Create: `docs/front/2026-04-04-frontend-platform-key-screens.md`
 - Modify: `docs/superpowers/specs/2026-04-04-frontend-management-platform-design.md` only if the visual design reveals a scope mismatch
 
-- [ ] **Step 1: Use `ui-ux-pro-max-skill` to define visual foundation**
+- [ ] **Step 1: Use `ui-ux-pro-max` to define visual foundation**
 
 Deliver:
 
@@ -134,6 +139,7 @@ git commit -m "docs: add frontend platform ui foundation"
 ## Task 2: Scaffold the React + Vite App in `front/`
 
 **Files:**
+
 - Create: `front/package.json`
 - Create: `front/tsconfig.json`
 - Create: `front/vite.config.ts`
@@ -155,7 +161,9 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 it("redirects anonymous users to /login", async () => {
   render(<RouterProvider router={router} />);
-  expect(await screen.findByRole("heading", { name: "登录 Runlet 平台" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "登录 Runlet 平台" }),
+  ).toBeInTheDocument();
 });
 ```
 
@@ -201,6 +209,7 @@ git commit -m "feat: scaffold frontend management app"
 ## Task 3: Add Simple Console Session Login
 
 **Files:**
+
 - Create: `backend/src/app/infrastructure/security/console_session.py`
 - Create: `backend/src/app/api/endpoints/console_auth.py`
 - Modify: `backend/src/app/config/settings.py`
@@ -284,6 +293,7 @@ git commit -m "feat: add console session login"
 ## Task 4: Add Dashboard, Systems, and Results Console APIs
 
 **Files:**
+
 - Create: `backend/src/app/domains/control_plane/console_schemas.py`
 - Create: `backend/src/app/api/endpoints/console_portal.py`
 - Create: `backend/src/app/api/endpoints/console_results.py`
@@ -358,6 +368,7 @@ git commit -m "feat: add dashboard systems and results console apis"
 ## Task 5: Add Task Wizard, Task List, and Task Detail APIs
 
 **Files:**
+
 - Create: `backend/src/app/api/endpoints/console_tasks.py`
 - Modify: `backend/src/app/domains/control_plane/service.py`
 - Modify: `backend/src/app/domains/control_plane/repository.py`
@@ -431,6 +442,7 @@ git commit -m "feat: add console task management apis"
 ## Task 6: Add Asset Browser and Raw Fact Detail APIs
 
 **Files:**
+
 - Create: `backend/src/app/api/endpoints/console_assets.py`
 - Modify: `backend/src/app/domains/control_plane/service.py`
 - Modify: `backend/src/app/domains/control_plane/repository.py`
@@ -484,6 +496,7 @@ git commit -m "feat: add console asset browser apis"
 ## Task 7: Implement Dashboard, Systems, and Results Pages in `front/`
 
 **Files:**
+
 - Create: `front/src/lib/http/client.ts`
 - Create: `front/src/lib/http/types.ts`
 - Create: `front/src/features/dashboard/pages/dashboard-page.tsx`
@@ -544,6 +557,7 @@ git commit -m "feat: add dashboard systems and results pages"
 ## Task 8: Implement Task Wizard, Task List, Task Detail, and Asset Browser Pages
 
 **Files:**
+
 - Create: `front/src/features/tasks/pages/task-list-page.tsx`
 - Create: `front/src/features/tasks/pages/task-create-page.tsx`
 - Create: `front/src/features/tasks/pages/task-detail-page.tsx`
@@ -616,6 +630,7 @@ git commit -m "feat: add task wizard and asset browser pages"
 ## Task 9: Verify End-to-End Flow, Update Docs, and Close the Slice
 
 **Files:**
+
 - Modify: `front/README.md`
 - Modify: `CHANGELOG.md`
 

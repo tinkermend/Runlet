@@ -1,0 +1,97 @@
+<h2>一期前端管理台信息架构方案</h2>
+<p class="subtitle">目标用户：客户侧普通使用者；主任务：配置检查任务并定时运行</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 A · 任务中心型</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Logo | 首页 | 检查任务 | 采集资产 | 系统接入 | 运行结果</div>
+          <div style="display:flex; gap:12px; margin-top:12px;">
+            <div class="mock-sidebar" style="width:28%;">任务列表<br>待启用<br>运行中<br>异常任务</div>
+            <div class="mock-content" style="width:72%;">
+              <div class="label">主入口</div>
+              <h3>新建检查任务</h3>
+              <p>向导式选择系统、页面、检查项、调度策略。</p>
+              <button class="mock-button">创建任务</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 A：任务中心型</h3>
+      <p>最贴近客户目标，首页和主导航都围绕“创建、管理、查看检查任务”展开。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 B · 调度运营型</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Logo | Dashboard | 调度管理 | 执行记录 | 系统策略 | 资产视图</div>
+          <div style="display:flex; gap:12px; margin-top:12px;">
+            <div class="mock-sidebar" style="width:28%;">Cron 列表<br>失败重试<br>运行窗口<br>策略状态</div>
+            <div class="mock-content" style="width:72%;">
+              <div class="label">主入口</div>
+              <h3>调度看板</h3>
+              <p>突出计划任务、触发历史、运行窗口和底层策略配置。</p>
+              <button class="mock-button">新增调度</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 B：调度运营型</h3>
+      <p>更像平台运维后台，适合内部同学，但对普通客户不够直观。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 C · 资产浏览型</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Logo | Dashboard | 系统 | 页面资产 | 检查项 | 调度 | 原始事实</div>
+          <div style="display:flex; gap:12px; margin-top:12px;">
+            <div class="mock-sidebar" style="width:28%;">系统树<br>页面列表<br>模块视图<br>事实详情</div>
+            <div class="mock-content" style="width:72%;">
+              <div class="label">主入口</div>
+              <h3>页面资产浏览</h3>
+              <p>先浏览系统采集成果，再从页面与检查项反向创建任务。</p>
+              <button class="mock-button">查看资产</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 C：资产浏览型</h3>
+      <p>对理解系统结构很强，但会把资产模型过早暴露给客户，学习成本偏高。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>我的推荐</h4>
+      <ul>
+        <li>优先选方案 A。</li>
+        <li>任务向导作为第一主流程，最符合你刚确认的用户画像和目标。</li>
+        <li>采集资产与原始事实保留为辅助视图，放到任务配置和详情页的二级入口。</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>需要接受的取舍</h4>
+      <ul>
+        <li>一期不会把底层资产模型完全摊平在主导航里。</li>
+        <li>调度管理会成为任务模块的子能力，而不是独立主心智。</li>
+        <li>对高级用户的可见性会弱一些，但客户学习成本最低。</li>
+      </ul>
+    </div>
+  </div>
+</div>
