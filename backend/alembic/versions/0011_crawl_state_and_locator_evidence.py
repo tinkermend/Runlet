@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 
 revision = "0011_crawl_state_loc_evid"
@@ -17,21 +18,24 @@ branch_labels = None
 depends_on = None
 
 
+json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+
+
 def upgrade() -> None:
     with op.batch_alter_table("pages") as batch_op:
-        batch_op.add_column(sa.Column("discovery_sources", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("entry_candidates", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("context_constraints", sa.JSON(), nullable=True))
+        batch_op.add_column(sa.Column("discovery_sources", json_type, nullable=True))
+        batch_op.add_column(sa.Column("entry_candidates", json_type, nullable=True))
+        batch_op.add_column(sa.Column("context_constraints", json_type, nullable=True))
 
     with op.batch_alter_table("menu_nodes") as batch_op:
-        batch_op.add_column(sa.Column("discovery_sources", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("entry_candidates", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("context_constraints", sa.JSON(), nullable=True))
+        batch_op.add_column(sa.Column("discovery_sources", json_type, nullable=True))
+        batch_op.add_column(sa.Column("entry_candidates", json_type, nullable=True))
+        batch_op.add_column(sa.Column("context_constraints", json_type, nullable=True))
 
     with op.batch_alter_table("page_elements") as batch_op:
         batch_op.add_column(sa.Column("state_signature", sa.String(length=255), nullable=True))
-        batch_op.add_column(sa.Column("state_context", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("locator_candidates", sa.JSON(), nullable=True))
+        batch_op.add_column(sa.Column("state_context", json_type, nullable=True))
+        batch_op.add_column(sa.Column("locator_candidates", json_type, nullable=True))
 
 
 def downgrade() -> None:

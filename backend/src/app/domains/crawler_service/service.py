@@ -600,6 +600,9 @@ class CrawlerService:
                 page_title=candidate.page_title,
                 page_summary=candidate.page_summary,
                 keywords=candidate.keywords,
+                discovery_sources=candidate.discovery_sources,
+                entry_candidates=candidate.entry_candidates,
+                context_constraints=candidate.context_constraints,
             )
             self.session.add(page)
             await self._flush()
@@ -628,6 +631,9 @@ class CrawlerService:
                 depth=candidate.depth,
                 sort_order=candidate.sort_order,
                 playwright_locator=candidate.playwright_locator,
+                discovery_sources=candidate.discovery_sources,
+                entry_candidates=candidate.entry_candidates,
+                context_constraints=candidate.context_constraints,
             )
             self.session.add(menu)
             await self._flush()
@@ -654,6 +660,9 @@ class CrawlerService:
                 element_text=candidate.element_text,
                 attributes=candidate.attributes,
                 playwright_locator=candidate.playwright_locator,
+                state_signature=candidate.state_signature,
+                state_context=candidate.state_context,
+                locator_candidates=candidate.locator_candidates,
                 stability_score=candidate.stability_score,
                 usage_description=candidate.usage_description,
             )

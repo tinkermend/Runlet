@@ -265,6 +265,14 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
                     route_path="/users",
                     page_title="用户管理",
                     page_summary="用户列表页面",
+                    discovery_sources=["runtime_route_hints", "network_route_config"],
+                    entry_candidates=[
+                        {
+                            "entry_type": "tab_switch",
+                            "label": "用户列表",
+                        }
+                    ],
+                    context_constraints={"auth_scope": "admin"},
                 )
             ],
         )
@@ -279,12 +287,32 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
                     sort_order=0,
                     playwright_locator="role=menuitem[name='用户管理']",
                     page_route_path="/users",
+                    discovery_sources=["dom_menu_tree"],
+                    entry_candidates=[
+                        {
+                            "entry_type": "open_modal",
+                            "label": "新增用户",
+                        }
+                    ],
+                    context_constraints={"requires_permission": "user.read"},
                 )
             ],
             elements=[
                 ElementCandidate(
                     page_route_path="/users",
                     element_type="button",
+                    state_signature="/users|tab=default",
+                    state_context={"active_tab": "default"},
+                    locator_candidates=[
+                        {
+                            "strategy_type": "semantic",
+                            "selector": "role=button[name='新增用户']",
+                        },
+                        {
+                            "strategy_type": "testid",
+                            "selector": "data-testid=add-user",
+                        },
+                    ],
                     element_role="button",
                     element_text="新增用户",
                     playwright_locator="role=button[name='新增用户']",
@@ -332,10 +360,28 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
     assert snapshot.degraded is False
     assert len(pages) == 1
     assert pages[0].route_path == "/users"
+    assert pages[0].discovery_sources == ["runtime_route_hints", "network_route_config"]
+    assert pages[0].entry_candidates == [{"entry_type": "tab_switch", "label": "用户列表"}]
+    assert pages[0].context_constraints == {"auth_scope": "admin"}
     assert len(menus) == 1
     assert menus[0].playwright_locator == "role=menuitem[name='用户管理']"
+    assert menus[0].discovery_sources == ["dom_menu_tree"]
+    assert menus[0].entry_candidates == [{"entry_type": "open_modal", "label": "新增用户"}]
+    assert menus[0].context_constraints == {"requires_permission": "user.read"}
     assert len(elements) == 1
     assert elements[0].playwright_locator == "role=button[name='新增用户']"
+    assert elements[0].state_signature == "/users|tab=default"
+    assert elements[0].state_context == {"active_tab": "default"}
+    assert elements[0].locator_candidates == [
+        {
+            "strategy_type": "semantic",
+            "selector": "role=button[name='新增用户']",
+        },
+        {
+            "strategy_type": "testid",
+            "selector": "data-testid=add-user",
+        },
+    ]
 
 
 @pytest.mark.anyio
