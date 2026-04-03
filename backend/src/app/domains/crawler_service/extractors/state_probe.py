@@ -101,6 +101,10 @@ class ControlledStateProbeExtractor:
                 self._append_warning(warnings, "unsafe_action_rejected")
                 continue
 
+            if not self._action_payload_applied(state_payload):
+                self._append_warning(warnings, "state_transition_not_applied")
+                continue
+
             state = self._to_state_payload(default_route=route_path, action=action, payload=state_payload)
             self._collect_state_elements(
                 state=state,
@@ -252,6 +256,12 @@ class ControlledStateProbeExtractor:
                 return payload
             return {}
         return action
+
+    def _action_payload_applied(self, payload: dict[str, object]) -> bool:
+        applied = payload.get("probe_applied", payload.get("applied"))
+        if isinstance(applied, bool):
+            return applied
+        return True
 
     def _to_state_payload(
         self,

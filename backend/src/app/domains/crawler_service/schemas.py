@@ -28,6 +28,7 @@ StateProbeReason = Literal[
     "unsafe_action_rejected",
     "interaction_budget_exhausted",
     "state_signature_duplicate",
+    "state_transition_not_applied",
     "state_probe_baseline_degraded",
     "state_probe_actions_degraded",
 ]

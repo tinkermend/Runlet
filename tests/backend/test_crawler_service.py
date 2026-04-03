@@ -1281,3 +1281,75 @@ async def test_run_crawl_preserves_multiple_elements_under_same_state_signature(
     elements = db_session.exec(select(PageElement).order_by(PageElement.element_text, PageElement.id)).all()
     assert [element.state_signature for element in elements] == ["users:tab=disabled", "users:tab=disabled"]
     assert [element.element_text for element in elements] == ["启用用户", "批量恢复"]
+
+
+@pytest.mark.anyio
+async def test_run_crawl_merges_same_element_from_dom_and_probe_with_enriched_metadata(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(pages=[PageCandidate(route_path="/users", page_title="用户管理")]),
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")],
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"active_tab": "default"},
+                    element_role="button",
+                    element_text="新增用户",
+                    playwright_locator="role=button[name='新增用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=button[name='新增用户']"},
+                    ],
+                    attributes={"data_testid": "create-user"},
+                )
+            ],
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="button",
+                    state_signature="users:default",
+                    state_context={"modal_title": "create"},
+                    element_role="button",
+                    element_text="新增用户",
+                    playwright_locator="text='新增用户'",
+                    locator_candidates=[
+                        {"strategy_type": "text", "selector": "text='新增用户'"},
+                    ],
+                    attributes={"aria_label": "新增用户"},
+                )
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.elements_saved == 1
+    elements = db_session.exec(select(PageElement)).all()
+    assert len(elements) == 1
+    assert elements[0].element_text == "新增用户"
+    assert elements[0].state_signature == "users:default"
+    assert elements[0].locator_candidates == [
+        {"strategy_type": "semantic", "selector": "role=button[name='新增用户']"},
+        {"strategy_type": "text", "selector": "text='新增用户'"},
+    ]
+    assert elements[0].attributes == {"data_testid": "create-user", "aria_label": "新增用户"}
+    assert elements[0].state_context == {"active_tab": "default", "modal_title": "create"}

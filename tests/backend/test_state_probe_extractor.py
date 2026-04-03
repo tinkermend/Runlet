@@ -133,6 +133,66 @@ class MixedProbeWarningSession(FakeStateProbeSession):
         ]
 
 
+class NotAppliedStateProbeSession(FakeStateProbeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.actions = [
+            {
+                "route_path": "/users",
+                "entry_type": "tab_switch",
+                "state_context": {"active_tab": "disabled"},
+                "elements": [
+                    {
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "禁用用户列表(伪)",
+                    }
+                ],
+            },
+        ]
+
+    async def collect_state_probe_baseline(self, *, crawl_scope: str) -> list[dict[str, object]]:
+        del crawl_scope
+        return []
+
+    async def perform_state_probe_action(
+        self,
+        *,
+        action: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope
+        return {
+            "route_path": action.get("route_path"),
+            "state_context": action.get("state_context"),
+            "elements": action.get("elements"),
+            "probe_applied": False,
+        }
+
+
+class UnsafeOnlyStateProbeSession(FakeStateProbeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.actions = [
+            {
+                "route_path": "/users",
+                "entry_type": "submit_form",
+                "state_context": {"modal_title": "create"},
+                "elements": [
+                    {
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "提交",
+                    }
+                ],
+            },
+        ]
+
+    async def collect_state_probe_baseline(self, *, crawl_scope: str) -> list[dict[str, object]]:
+        del crawl_scope
+        return []
+
+
 @pytest.mark.anyio
 async def test_state_probe_collects_representative_states_without_unsafe_actions():
     extractor = ControlledStateProbeExtractor()
@@ -190,4 +250,30 @@ async def test_state_probe_permission_and_unsafe_actions_only_emit_warnings_when
     assert result.failure_reason is None
     assert result.elements
     assert "blocked_by_permission" in result.warning_messages
+    assert "unsafe_action_rejected" in result.warning_messages
+
+
+@pytest.mark.anyio
+async def test_state_probe_skips_state_when_action_was_not_applied():
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=NotAppliedStateProbeSession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert result.elements == []
+    assert result.failure_reason is None
+    assert "state_transition_not_applied" in result.warning_messages
+
+
+@pytest.mark.anyio
+async def test_state_probe_unsupported_action_is_warning_only_and_produces_no_state():
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=UnsafeOnlyStateProbeSession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert result.failure_reason is None
+    assert result.elements == []
     assert "unsafe_action_rejected" in result.warning_messages

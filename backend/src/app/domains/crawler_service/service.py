@@ -444,9 +444,16 @@ class PlaywrightBrowserFactory:
     if (typeof value === "string" && /^\\d+$/.test(value.trim())) return value.trim();
     return "";
   };
+  const dangerKeywords = [
+    "提交", "删除", "保存", "发布", "审批", "导入", "导出", "下载",
+    "submit", "delete", "remove", "save", "publish", "approve", "import", "export", "download",
+  ];
+  const isDangerous = (text) => dangerKeywords.some((keyword) => text.includes(keyword.toLowerCase()));
   const clickFirst = (nodes, matcher) => {
     for (const node of nodes) {
       if (!(node instanceof HTMLElement) || !visible(node)) continue;
+      const text = textOf(node);
+      if (isDangerous(text)) continue;
       if (!matcher(node)) continue;
       node.click();
       return true;
@@ -468,6 +475,8 @@ class PlaywrightBrowserFactory:
     ));
     applied = clickFirst(tabNodes, (node) => {
       const text = textOf(node);
+      const className = String(node.className || "").toLowerCase();
+      if (node.getAttribute("role") !== "tab" && !className.includes("tab")) return false;
       if (!tabTarget) return node.getAttribute("aria-selected") !== "true";
       return text.includes(tabTarget);
     });
@@ -479,8 +488,14 @@ class PlaywrightBrowserFactory:
     const defaultKeywords = ["新增", "新建", "创建", "添加", "open", "new", "create", "add", "drawer", "modal"];
     applied = clickFirst(triggerNodes, (node) => {
       const text = textOf(node);
-      if (target && text.includes(target)) return true;
-      return defaultKeywords.some((keyword) => text.includes(keyword.toLowerCase()));
+      const actionHint = normalizeText(node.getAttribute("data-action") || node.getAttribute("data-testid"));
+      const hasDialogSemantics = node.getAttribute("aria-haspopup") === "dialog";
+      const hasCreateHint = defaultKeywords.some((keyword) => text.includes(keyword.toLowerCase()))
+        || defaultKeywords.some((keyword) => actionHint.includes(keyword.toLowerCase()))
+        || hasDialogSemantics;
+      if (!hasCreateHint) return false;
+      if (target) return text.includes(target) || actionHint.includes(target);
+      return true;
     });
   } else if (entryType === "toggle_view") {
     const nodes = Array.from(document.querySelectorAll(
@@ -498,6 +513,10 @@ class PlaywrightBrowserFactory:
     ));
     applied = clickFirst(nodes, (node) => {
       const text = textOf(node);
+      const inPager = !!node.closest(
+        '.pagination, .ant-pagination, .el-pagination, .el-pager, [aria-label*="pagination"], [class*="pager"]'
+      );
+      if (!inPager && !/^\\d+$/.test(text)) return false;
       if (pageNumberTarget) return text === pageNumberTarget || text.includes(`page ${pageNumberTarget}`);
       return text.includes("下一页") || text.includes("next");
     });
@@ -838,12 +857,23 @@ class PlaywrightBrowserFactory:
                     PlaywrightBrowserFactory._STATE_PROBE_EXECUTE_ACTION_SCRIPT,
                     action,
                 )
-                if isinstance(execution_result, dict) and execution_result.get("applied"):
+                applied = isinstance(execution_result, dict) and execution_result.get("applied") is True
+                execution_reason = (
+                    execution_result.get("reason")
+                    if isinstance(execution_result, dict) and isinstance(execution_result.get("reason"), str)
+                    else None
+                )
+                if applied:
                     await self_nonlocal._wait_for_route_render()
                     await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
-
-                collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
-                elements = [item for item in collected if isinstance(item, dict)] if isinstance(collected, list) else []
+                    collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
+                    elements = (
+                        [item for item in collected if isinstance(item, dict)]
+                        if isinstance(collected, list)
+                        else []
+                    )
+                else:
+                    elements = []
                 state_context = action.get("state_context")
                 if not isinstance(state_context, dict):
                     state_context = {}
@@ -851,6 +881,8 @@ class PlaywrightBrowserFactory:
                     "route_path": route_path,
                     "state_context": state_context,
                     "elements": elements,
+                    "probe_applied": applied,
+                    "probe_apply_reason": execution_reason,
                 }
 
             async def _evaluate_with_optional_arg(
@@ -1140,16 +1172,17 @@ class CrawlerService:
         return [merged[key] for key in ordered_keys]
 
     def _build_representative_element_key(self, candidate: ElementCandidate) -> str:
-        locator_candidates = self._merge_locator_candidates(candidate.locator_candidates, [])
         payload = {
             "page_route_path": candidate.page_route_path,
             "state_signature": candidate.state_signature,
             "element_type": candidate.element_type,
             "element_role": candidate.element_role,
             "element_text": candidate.element_text,
-            "playwright_locator": candidate.playwright_locator,
-            "locator_candidates": locator_candidates,
-            "attributes": candidate.attributes or {},
+            "playwright_locator_fallback": (
+                candidate.playwright_locator
+                if not candidate.element_role and not candidate.element_text
+                else None
+            ),
         }
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
