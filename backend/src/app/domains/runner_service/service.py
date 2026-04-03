@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import base64
 import inspect
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID
 
 from app.domains.runner_service.failure_categories import FailureCategory
@@ -27,6 +28,8 @@ from app.infrastructure.db.models.execution import (
 )
 from app.infrastructure.db.models.systems import AuthState, System
 from app.shared.enums import ExecutionResultStatus
+
+_SCREENSHOT_ROOT = Path(tempfile.gettempdir()) / "runlet_runtime_artifacts" / "screenshots"
 
 
 def utcnow() -> datetime:
@@ -141,14 +144,18 @@ class RunnerService:
         persisted_artifacts = [artifact]
         screenshot_artifact_ids: list[UUID] = []
         if screenshot_bytes is not None:
+            screenshot_uri = self._persist_screenshot_artifact(
+                execution_run_id=execution_run.id,
+                screenshot_bytes=screenshot_bytes,
+            )
             screenshot_artifact = ExecutionArtifact(
                 execution_run_id=execution_run.id,
                 artifact_kind="screenshot",
                 result_status=ExecutionResultStatus.SUCCESS,
+                artifact_uri=screenshot_uri,
                 payload={
                     "mime_type": "image/png",
-                    "encoding": "base64",
-                    "content": base64.b64encode(screenshot_bytes).decode("ascii"),
+                    "byte_size": len(screenshot_bytes),
                     "final_url": final_url,
                     "page_title": page_title,
                     "page_probe": page_probe,
@@ -261,16 +268,16 @@ class RunnerService:
     ) -> FailureCategory | None:
         if execution_result.status == RunnerRunStatus.PASSED:
             return None
+        failed_step = self._first_failed_step(execution_result.step_results)
+        if failed_step is not None:
+            if isinstance(failed_step.output, dict):
+                raw_category = failed_step.output.get("failure_category")
+                if isinstance(raw_category, str) and raw_category in FailureCategory._value2member_map_:
+                    return FailureCategory(raw_category)
+            return _failure_category_for_module(failed_step.module)
         if execution_result.auth_status == AuthInjectStatus.BLOCKED:
             return FailureCategory.AUTH_BLOCKED
-        failed_step = self._first_failed_step(execution_result.step_results)
-        if failed_step is None:
-            return FailureCategory.RUNTIME_ERROR
-        if isinstance(failed_step.output, dict):
-            raw_category = failed_step.output.get("failure_category")
-            if isinstance(raw_category, str) and raw_category in FailureCategory._value2member_map_:
-                return FailureCategory(raw_category)
-        return _failure_category_for_module(failed_step.module)
+        return FailureCategory.RUNTIME_ERROR
 
     async def _read_runtime_text(self, method_name: str) -> str | None:
         outcome = await self._invoke_runtime_method(method_name)
@@ -325,6 +332,13 @@ class RunnerService:
         result = closer()
         if inspect.isawaitable(result):
             await result
+
+    @staticmethod
+    def _persist_screenshot_artifact(*, execution_run_id: UUID, screenshot_bytes: bytes) -> str:
+        _SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
+        screenshot_path = _SCREENSHOT_ROOT / f"{execution_run_id}.png"
+        screenshot_path.write_bytes(screenshot_bytes)
+        return str(screenshot_path)
 
 
 def _failure_category_for_module(module: str) -> FailureCategory:

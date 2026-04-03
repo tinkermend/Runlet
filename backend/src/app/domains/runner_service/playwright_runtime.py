@@ -85,6 +85,8 @@ class PlaywrightRunnerRuntime:
             trigger = page.get_by_role("link", name=re.compile("新增|新建|创建")).first
         await trigger.wait_for(state="visible")
         await trigger.click()
+        modal = page.get_by_role("dialog").first
+        await modal.wait_for(state="visible")
         return True
 
     async def probe_page(self) -> dict[str, object]:
