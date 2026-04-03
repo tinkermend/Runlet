@@ -132,6 +132,21 @@ def test_build_worker_handlers_registers_run_check_handler(db_session):
     assert RUN_CHECK_JOB_TYPE in handlers
 
 
+def test_build_worker_handlers_wires_control_plane_into_asset_compile_handler(db_session):
+    class StubControlPlaneService:
+        async def apply_reconciliation_cascades(self, **kwargs):
+            return None
+
+    handlers = build_worker_handlers(
+        session=db_session,
+        asset_compiler_service=object(),
+        control_plane_service=StubControlPlaneService(),
+    )
+
+    handler = handlers[ASSET_COMPILE_JOB_TYPE]
+    assert getattr(handler, "control_plane_service") is not None
+
+
 @pytest.mark.anyio
 async def test_worker_runner_marks_job_failed_when_handler_raises(
     db_session,

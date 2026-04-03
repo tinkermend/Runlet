@@ -6,8 +6,10 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session
 
-from app.infrastructure.db.models.jobs import JobRun, QueuedJob
-from app.shared.enums import QueuedJobStatus
+from app.domains.runner_service.service import ASSET_RETIRED_FAILURE_MESSAGE, ExecutionBlockedError
+from app.infrastructure.db.models.assets import PageAsset, PageCheck
+from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
+from app.shared.enums import AssetLifecycleStatus, PublishedJobState, QueuedJobStatus
 
 _UNSET = object()
 
@@ -67,9 +69,24 @@ class RunCheckJobHandler:
             await self._mark_failed(job, message="missing execution_plan_id in run_check job payload")
             return
 
-        if execution_track != "realtime_probe" and not isinstance(page_check_id, str):
-            await self._mark_failed(job, message="missing page_check_id in run_check job payload")
-            return
+        parsed_page_check_id: UUID | None = None
+        if execution_track == "realtime_probe":
+            if page_check_id is not None:
+                if not isinstance(page_check_id, str):
+                    await self._mark_failed(job, message="invalid page_check_id in run_check job payload")
+                    return
+                parsed_page_check_id = _parse_uuid(page_check_id)
+                if parsed_page_check_id is None:
+                    await self._mark_failed(job, message="invalid page_check_id in run_check job payload")
+                    return
+        else:
+            if not isinstance(page_check_id, str):
+                await self._mark_failed(job, message="missing page_check_id in run_check job payload")
+                return
+            parsed_page_check_id = _parse_uuid(page_check_id)
+            if parsed_page_check_id is None:
+                await self._mark_failed(job, message="invalid page_check_id in run_check job payload")
+                return
 
         raw_execution_request_id = job.payload.get("execution_request_id")
         execution_request_id = (
@@ -92,6 +109,14 @@ class RunCheckJobHandler:
                     message="published_job_id does not match job_run linkage",
                     job_run=job_run,
                 )
+                return
+        if execution_track != "realtime_probe" and parsed_page_check_id is not None:
+            skip_reason = await self._resolve_retirement_skip_reason(
+                page_check_id=parsed_page_check_id,
+                published_job_id=published_job_id,
+            )
+            if skip_reason is not None:
+                await self._mark_skipped(job, message=skip_reason, job_run=job_run)
                 return
 
         job.status = QueuedJobStatus.RUNNING.value
@@ -117,9 +142,16 @@ class RunCheckJobHandler:
                     )
             else:
                 result = await self.runner_service.run_page_check(
-                    page_check_id=UUID(page_check_id),
+                    page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
                 )
+        except ExecutionBlockedError:
+            await self._mark_skipped(
+                job,
+                message=ASSET_RETIRED_FAILURE_MESSAGE,
+                job_run=job_run,
+            )
+            return
         except Exception as exc:
             await self._mark_failed(job, message=str(exc), job_run=job_run)
             return
@@ -168,6 +200,61 @@ class RunCheckJobHandler:
             job_run.finished_at = utcnow()
             job_run.failure_message = message
         await self._commit()
+
+    async def _mark_skipped(
+        self,
+        job: QueuedJob,
+        *,
+        message: str | None,
+        job_run: JobRun | None = None,
+    ) -> None:
+        job.status = QueuedJobStatus.SKIPPED.value
+        job.started_at = job.started_at or utcnow()
+        job.finished_at = utcnow()
+        job.failure_message = message
+        job.result_payload = self._build_result_payload(
+            job=job,
+            queue_status=job.status,
+            execution_status="skipped",
+            error_message=message,
+        )
+        if job_run is not None:
+            job_run.run_status = QueuedJobStatus.SKIPPED.value
+            job_run.started_at = job_run.started_at or utcnow()
+            job_run.finished_at = utcnow()
+            job_run.failure_message = message
+        await self._commit()
+
+    async def _resolve_retirement_skip_reason(
+        self,
+        *,
+        page_check_id: UUID,
+        published_job_id: UUID | None,
+    ) -> str | None:
+        page_check = await self._get(PageCheck, page_check_id)
+        if page_check is None:
+            return "asset_retired_missing"
+        check_retired_reason = _retirement_failure_message(page_check.lifecycle_status)
+        if check_retired_reason is not None:
+            return check_retired_reason
+
+        page_asset = await self._get(PageAsset, page_check.page_asset_id)
+        if page_asset is None:
+            return "asset_retired_missing"
+        asset_retired_reason = _retirement_failure_message(page_asset.lifecycle_status)
+        if asset_retired_reason is not None:
+            return asset_retired_reason
+
+        if published_job_id is None:
+            return None
+        published_job = await self._get(PublishedJob, published_job_id)
+        if published_job is None:
+            return None
+        if published_job.state != PublishedJobState.PAUSED:
+            return None
+        if _is_retired_pause_marker(published_job):
+            return ASSET_RETIRED_FAILURE_MESSAGE
+        return None
 
     def _build_result_payload(
         self,
@@ -238,3 +325,31 @@ def _parse_uuid(value: str | None) -> UUID | None:
         return UUID(value)
     except (TypeError, ValueError):
         return None
+
+
+def _retirement_failure_message(
+    lifecycle_status: AssetLifecycleStatus | str | None,
+) -> str | None:
+    if lifecycle_status is None:
+        return None
+    normalized = (
+        lifecycle_status.value
+        if isinstance(lifecycle_status, AssetLifecycleStatus)
+        else str(lifecycle_status).strip().lower()
+    )
+    if normalized == AssetLifecycleStatus.ACTIVE.value:
+        return None
+    return ASSET_RETIRED_FAILURE_MESSAGE
+
+
+def _is_retired_pause_marker(published_job: PublishedJob) -> bool:
+    normalized_reason = (published_job.pause_reason or "").strip().lower()
+    if "retired" not in normalized_reason:
+        return False
+    return any(
+        (
+            published_job.paused_by_snapshot_id is not None,
+            published_job.paused_by_asset_id is not None,
+            published_job.paused_by_page_check_id is not None,
+        )
+    )

@@ -1,8 +1,18 @@
 ## 2026-04-03
 
+- 合并采集同步一致性分支回 `main` 时收敛 Alembic 双 head：新增 merge revision `0010_merge_exec_run_recon` 统一 `execution_run created_at` 与 `asset reconciliation` 两条迁移分支，同时修正 worker 构建链路里的重复 `control_plane_service` 传参，恢复主分支 schema 升级与全量 backend 回归可执行性。
 - 新增 `docs/summary/2026-04-03-backend-runtime-check-and-realtime-probe-summary.md`，总结本轮后端检查执行与受控实时探测计划的目标、落地内容、边界、验证结果与后续建议，作为阶段性收口文档。
 - 修正仓库级 `AGENTS.md` 约束描述：更新后端真实领域目录为 `backend/src/app/domains/*`，补充已落地的 `auth_policy/crawl_policy` 调度对象，并将实施顺序说明改为“基础四阶段 + 后续以最新 spec/plan 为准”，避免继续引用过时规则。
 - 新增后端采集同步一致性与资产退役实施计划，按生命周期字段、reconciliation、调度暂停、执行阻断和回归验证拆分后端落地步骤。
+- 落地后端采集同步一致性与资产退役实现，补齐 reconciliation、生命周期状态、调度暂停与执行阻断闭环；同时修正 `0009_asset_reconciliation_retirement` 对恢复路径审计列的漏迁移，确保 `asset_reconciliation_audits` 与 SQLModel 元数据保持一致。
+- 修复退休阻断代码审查问题：`RunnerService.run_page_check` 新增执行入口 lifecycle 阻断（抛出 `ExecutionBlockedError`），关闭 `run_check` worker 在“预检后到实际执行前”窗口内的 TOCTOU 漏洞；`RunCheckJobHandler` 在退休阻断场景统一写入 `failure_message=asset_retired_missing`，并把“发布任务因退休暂停”的判定收紧为 `PAUSED + retired pause_reason + paused_by_snapshot_id/paused_by_asset_id/paused_by_page_check_id` 至少一项存在。
+- 收紧退休资产执行阻断：`ControlPlaneService.run_page_check` 与请求解析路径新增显式 lifecycle 冲突校验，退休 `page_check/page_asset` 统一返回 `409`；`RunCheckJobHandler` 在真正调用 runner 前会重新加载目标并做最终退休守卫，若目标已退休或关联发布任务因退休暂停则将队列项标记为 `skipped`，并写入 `failure_message=asset_retired_missing`。
+- 补齐 asset compile 生产执行链路：`AssetCompileJobHandler` 在 `compile_snapshot` 后会调用 `ControlPlaneService.apply_reconciliation_cascades` 执行 alias 失效与发布任务暂停，并把实际执行计数 `aliases_disabled/published_jobs_paused` 回写到 compile job `result_payload`；worker 组装同时注入 control plane 协调器，避免级联逻辑成为死代码。
+- 强化 reconciliation 级联一致性与对称性：`apply_reconciliation_cascades` 改为单事务执行 `disable/enable alias` 与 `pause/resume published jobs`，任一步骤失败会统一 rollback；生产链路现在同时消费 `alias_ids_to_enable` 与 `published_job_ids_to_resume`，并回写 `aliases_enabled/published_jobs_resumed` 实际执行计数。
+- control_plane 收口退役级联执行：新增 `PublishedJobService.pause_jobs_for_retired_page_check`，并由 `ControlPlaneService.apply_reconciliation_cascades` 统一执行 alias 失效与发布任务暂停；同时把请求解析路径收紧为 `active alias -> active asset -> active check`，对 `retired_missing` 目标返回显式 `409`（不再回退 realtime probe），并在 page-check 列表读模型补齐 `drift_status/lifecycle_status`。
+- 修复资产编译作业结果序列化边界：`_serialize_compile_result` 现在会递归转换 `retire_reasons` 中的嵌套 UUID，确保 queued job `result_payload` 在包含退役原因明细时仍保持 JSON-safe。
+- 修复 lifecycle/reconciliation 持久化契约细节：`asset_reconciliation_audits` 新增 `disabled_alias_ids` 审计字段，审计 JSON 列支持 UUID 安全序列化并可持久化非空标识列表；同时补齐 `asset_compile_job` 对 `alias_ids_to_disable/published_job_ids_to_pause` 的结果序列化，确保 queued job payload 保持 JSON-safe。
+- 新增资产生命周期与 reconciliation 持久化契约：为 `page_assets/page_checks/intent_aliases/published_jobs` 补齐退役与停用字段，新增 `asset_reconciliation_audits` 审计表，扩展 `CompileSnapshotResult` 输出退役计数与决策列表字段，并补充对应 schema/DTO 回归测试。
 - 新增后端采集同步一致性与资产退役设计文档，明确高质量 `full crawl` 作为页面资产真相源，引入 reconciliation、生命周期状态、alias 失效、调度暂停与执行阻断的统一收敛方案。
 - 新增后端检查执行与受控实时探测实施计划，按 TDD 拆分双轨受理、完整 runtime、统一结果查询、probe 反馈回写与从成功检查晋升为调度对象的后端落地步骤。
 - 新增后端检查执行与受控实时探测设计文档，明确企业级 To B 巡检平台继续采用“资产优先 + 页面级受控降级 + 元素级缺失直接失败”的后端演进原则，并收口 `skill/control_plane/runner_service/script_renderer` 的职责边界。

@@ -16,9 +16,16 @@ def utcnow() -> datetime:
 
 
 class AssetCompileJobHandler:
-    def __init__(self, *, session: Session | AsyncSession, asset_compiler_service) -> None:
+    def __init__(
+        self,
+        *,
+        session: Session | AsyncSession,
+        asset_compiler_service,
+        control_plane_service=None,
+    ) -> None:
         self.session = session
         self.asset_compiler_service = asset_compiler_service
+        self.control_plane_service = control_plane_service
 
     async def run(self, *, job_id: UUID) -> None:
         job = await self._get(QueuedJob, job_id)
@@ -36,6 +43,19 @@ class AssetCompileJobHandler:
 
         try:
             result = await self.asset_compiler_service.compile_snapshot(snapshot_id=UUID(snapshot_id))
+            cascade_result = None
+            if self.control_plane_service is not None:
+                cascade_result = await self.control_plane_service.apply_reconciliation_cascades(
+                    snapshot_id=result.snapshot_id,
+                    alias_ids_to_disable=result.alias_ids_to_disable,
+                    alias_ids_to_enable=result.alias_ids_to_enable,
+                    published_job_ids_to_pause=result.published_job_ids_to_pause,
+                    published_job_ids_to_resume=result.published_job_ids_to_resume,
+                    alias_disable_decision_count=result.alias_disable_decision_count,
+                    alias_enable_decision_count=result.alias_enable_decision_count,
+                    published_job_pause_decision_count=result.published_job_pause_decision_count,
+                    published_job_resume_decision_count=result.published_job_resume_decision_count,
+                )
         except Exception as exc:
             await self._mark_failed(job, message=str(exc))
             return
@@ -44,6 +64,11 @@ class AssetCompileJobHandler:
         job.finished_at = utcnow()
         job.failure_message = None
         job.result_payload = _serialize_compile_result(result)
+        if cascade_result is not None:
+            job.result_payload["aliases_disabled"] = cascade_result.aliases_disabled
+            job.result_payload["aliases_enabled"] = cascade_result.aliases_enabled
+            job.result_payload["published_jobs_paused"] = cascade_result.published_jobs_paused
+            job.result_payload["published_jobs_resumed"] = cascade_result.published_jobs_resumed
         await self._commit()
 
     async def _mark_failed(self, job: QueuedJob, *, message: str | None) -> None:
@@ -70,7 +95,34 @@ def _serialize_compile_result(result) -> dict[str, object]:
     payload["snapshot_id"] = str(payload["snapshot_id"])
     payload["asset_ids"] = [str(asset_id) for asset_id in payload["asset_ids"]]
     payload["check_ids"] = [str(check_id) for check_id in payload["check_ids"]]
+    payload["assets_retired"] = result.assets_retired
+    payload["checks_retired"] = result.checks_retired
+    payload["alias_disable_decision_count"] = result.alias_disable_decision_count
+    payload["alias_enable_decision_count"] = result.alias_enable_decision_count
+    payload["published_job_pause_decision_count"] = result.published_job_pause_decision_count
+    payload["published_job_resume_decision_count"] = result.published_job_resume_decision_count
+    payload["retire_reasons"] = result.retire_reasons
+    payload["alias_ids_to_disable"] = [str(alias_id) for alias_id in payload["alias_ids_to_disable"]]
+    payload["alias_ids_to_enable"] = [str(alias_id) for alias_id in payload["alias_ids_to_enable"]]
+    payload["published_job_ids_to_pause"] = [
+        str(job_id) for job_id in payload["published_job_ids_to_pause"]
+    ]
+    payload["published_job_ids_to_resume"] = [
+        str(job_id) for job_id in payload["published_job_ids_to_resume"]
+    ]
+    payload["retire_reasons"] = _json_safe(payload["retire_reasons"])
     drift_state = payload.get("drift_state")
     if isinstance(drift_state, AssetStatus):
         payload["drift_state"] = drift_state.value
     return payload
+
+
+def _json_safe(value):
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    return value
+

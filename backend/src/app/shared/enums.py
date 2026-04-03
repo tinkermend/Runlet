@@ -7,6 +7,13 @@ class AssetStatus(StrEnum):
     STALE = "stale"
 
 
+class AssetLifecycleStatus(StrEnum):
+    ACTIVE = "active"
+    RETIRED_MISSING = "retired_missing"
+    RETIRED_REPLACED = "retired_replaced"
+    RETIRED_MANUAL = "retired_manual"
+
+
 class AssetCompileStatus(StrEnum):
     PENDING = "pending"
     SUCCESS = "success"

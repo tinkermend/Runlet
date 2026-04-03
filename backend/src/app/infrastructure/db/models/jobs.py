@@ -88,6 +88,10 @@ class PublishedJob(BaseModel, table=True):
         default=PublishedJobState.ACTIVE,
         sa_column=sa.Column(published_job_state_enum(), nullable=False),
     )
+    pause_reason: str | None = Field(default=None, max_length=64)
+    paused_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id", index=True)
+    paused_by_asset_id: UUID | None = Field(default=None, foreign_key="page_assets.id", index=True)
+    paused_by_page_check_id: UUID | None = Field(default=None, foreign_key="page_checks.id", index=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),

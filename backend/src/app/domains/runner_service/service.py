@@ -27,7 +27,7 @@ from app.infrastructure.db.models.execution import (
     ExecutionRun,
 )
 from app.infrastructure.db.models.systems import AuthState, System
-from app.shared.enums import ExecutionResultStatus
+from app.shared.enums import AssetLifecycleStatus, ExecutionResultStatus
 
 _SCREENSHOT_ROOT = (
     Path(__file__).resolve().parents[4] / "generated" / "execution_artifacts" / "screenshots"
@@ -36,6 +36,15 @@ _SCREENSHOT_ROOT = (
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+ASSET_RETIRED_FAILURE_MESSAGE = "asset_retired_missing"
+
+
+class ExecutionBlockedError(ValueError):
+    def __init__(self, *, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class RunnerService:
@@ -59,6 +68,9 @@ class RunnerService:
         page_check = await self._get(PageCheck, page_check_id)
         if page_check is None:
             raise ValueError(f"page check {page_check_id} not found")
+        check_retired_reason = _retirement_failure_message(page_check.lifecycle_status)
+        if check_retired_reason is not None:
+            raise ExecutionBlockedError(reason=check_retired_reason)
         if page_check.module_plan_id is None:
             raise ValueError(f"page check {page_check_id} has no module plan")
 
@@ -69,6 +81,9 @@ class RunnerService:
         page_asset = await self._get(PageAsset, page_check.page_asset_id)
         if page_asset is None:
             raise ValueError(f"page asset {page_check.page_asset_id} not found")
+        asset_retired_reason = _retirement_failure_message(page_asset.lifecycle_status)
+        if asset_retired_reason is not None:
+            raise ExecutionBlockedError(reason=asset_retired_reason)
 
         page = await self._get(Page, page_asset.page_id)
         if page is None:
@@ -644,3 +659,17 @@ def _failure_category_for_module(module: str) -> FailureCategory:
     if module.startswith("assert."):
         return FailureCategory.ASSERTION_FAILED
     return FailureCategory.RUNTIME_ERROR
+
+def _retirement_failure_message(
+    lifecycle_status: AssetLifecycleStatus | str | None,
+) -> str | None:
+    if lifecycle_status is None:
+        return None
+    normalized = (
+        lifecycle_status.value
+        if isinstance(lifecycle_status, AssetLifecycleStatus)
+        else str(lifecycle_status).strip().lower()
+    )
+    if normalized == AssetLifecycleStatus.ACTIVE.value:
+        return None
+    return ASSET_RETIRED_FAILURE_MESSAGE

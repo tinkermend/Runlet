@@ -33,7 +33,7 @@ async def list_page_asset_checks(
     page_asset_id: UUID,
     service: ControlPlaneServiceDep,
 ) -> PageAssetChecksList:
-    return await service.list_page_asset_checks(page_asset_id)
+    return await service.list_page_asset_checks(page_asset_id=page_asset_id)
 
 
 @router.post(

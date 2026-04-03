@@ -37,6 +37,7 @@ from app.domains.control_plane.schemas import (
     CrawlTriggerRequest,
     PageAssetChecksList,
     PublishCheckRequest,
+    ReconciliationCascadeApplied,
     RunPageCheck,
     UpdateSystemAuthPolicy,
     UpdateSystemCrawlPolicy,
@@ -53,6 +54,7 @@ from app.domains.runner_service.scheduler import (
     PublishedJobTriggerAccepted,
 )
 from app.infrastructure.queue.dispatcher import QueueDispatcher
+from app.shared.enums import AssetLifecycleStatus
 
 
 DEFAULT_AUTH_POLICY = "server_injected"
@@ -99,15 +101,34 @@ class ControlPlaneService:
             page_hint=payload.page_hint,
             check_goal=payload.check_goal,
         )
+        system = resolution.system
+        page_asset = resolution.page_asset
+        page_check = resolution.page_check
+
+        if page_asset is not None and page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="asset is retired")
+        if page_check is not None and page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="page check is retired")
+        if page_check is None:
+            retired_target = await self.repository.resolve_retired_page_asset_or_check(
+                system_hint=payload.system_hint,
+                system_id=system.id if system else None,
+                page_hint=payload.page_hint,
+                check_goal=payload.check_goal,
+            )
+            if retired_target is not None:
+                detail = "page check is retired" if retired_target.page_check is not None else "asset is retired"
+                raise HTTPException(status_code=409, detail=detail)
         if resolution.miss_reason == "element_asset_missing":
             raise HTTPException(status_code=409, detail="element asset is missing")
-        execution_track = "precompiled" if resolution.page_check is not None else "realtime_probe"
+
+        execution_track = "precompiled" if page_check is not None else "realtime_probe"
         return await self._accept_check_request(
             payload=payload,
-            resolved_system_id=resolution.system.id if resolution.system else None,
-            resolved_page_asset_id=resolution.page_asset.id if resolution.page_asset else None,
-            resolved_page_check_id=resolution.page_check.id if resolution.page_check else None,
-            module_plan_id=resolution.page_check.module_plan_id if resolution.page_check else None,
+            resolved_system_id=system.id if system else None,
+            resolved_page_asset_id=page_asset.id if page_asset else None,
+            resolved_page_check_id=page_check.id if page_check else None,
+            module_plan_id=page_check.module_plan_id if page_check else None,
             execution_track=execution_track,
         )
 
@@ -196,7 +217,18 @@ class ControlPlaneService:
             page_check_id=page_check_id,
         )
         if target is None:
+            lookup = await self.repository.get_page_check_lookup(page_check_id=page_check_id)
+            if lookup is None:
+                raise HTTPException(status_code=404, detail="page check not found")
+            if lookup.page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+                raise HTTPException(status_code=409, detail="page check is retired")
+            if lookup.page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+                raise HTTPException(status_code=409, detail="asset is retired")
             raise HTTPException(status_code=404, detail="page check not found")
+        if target.page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="page check is retired")
+        if target.page_asset.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+            raise HTTPException(status_code=409, detail="asset is retired")
 
         return await self._accept_check_request(
             payload=CreateCheckRequest(
@@ -458,6 +490,60 @@ class ControlPlaneService:
         )
         return CompileAssetsAccepted(snapshot_id=snapshot.id, job_id=job_id)
 
+    async def apply_reconciliation_cascades(
+        self,
+        *,
+        snapshot_id: UUID,
+        alias_ids_to_disable: list[UUID],
+        alias_ids_to_enable: list[UUID],
+        published_job_ids_to_pause: list[UUID],
+        published_job_ids_to_resume: list[UUID],
+        alias_disable_decision_count: int = 0,
+        alias_enable_decision_count: int = 0,
+        published_job_pause_decision_count: int = 0,
+        published_job_resume_decision_count: int = 0,
+    ) -> ReconciliationCascadeApplied:
+        try:
+            aliases_disabled = await self.repository.disable_aliases_from_compiler_decisions(
+                alias_ids=alias_ids_to_disable,
+                snapshot_id=snapshot_id,
+                reason="retired_missing",
+            )
+            aliases_enabled = await self.repository.enable_aliases_from_compiler_decisions(
+                alias_ids=alias_ids_to_enable,
+            )
+
+            published_jobs_paused = 0
+            published_jobs_resumed = 0
+            if self.published_job_service is not None:
+                published_jobs_paused = await self.published_job_service.pause_published_jobs_by_ids(
+                    published_job_ids=published_job_ids_to_pause,
+                    snapshot_id=snapshot_id,
+                    reason="asset_retired_missing",
+                    commit=False,
+                )
+                published_jobs_resumed = await self.published_job_service.resume_published_jobs_by_ids(
+                    published_job_ids=published_job_ids_to_resume,
+                    commit=False,
+                )
+
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+
+        return ReconciliationCascadeApplied(
+            snapshot_id=snapshot_id,
+            alias_disable_decision_count=alias_disable_decision_count,
+            alias_enable_decision_count=alias_enable_decision_count,
+            published_job_pause_decision_count=published_job_pause_decision_count,
+            published_job_resume_decision_count=published_job_resume_decision_count,
+            aliases_disabled=aliases_disabled,
+            aliases_enabled=aliases_enabled,
+            published_jobs_paused=published_jobs_paused,
+            published_jobs_resumed=published_jobs_resumed,
+        )
+
     async def _accept_check_request(
         self,
         *,
@@ -600,3 +686,14 @@ class ControlPlaneService:
                 "runtime mirror failure while syncing published job registry: published_job_id=%s",
                 published_job_id,
             )
+
+
+def _dedupe_uuids(values: list[UUID]) -> list[UUID]:
+    deduped: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped

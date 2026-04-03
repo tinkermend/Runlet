@@ -28,6 +28,19 @@ class CompileSnapshotResult:
     assets_created: int
     checks_created: int
     drift_state: AssetStatus
+    assets_updated: int = 0
+    assets_retired: int = 0
+    checks_updated: int = 0
+    checks_retired: int = 0
+    alias_disable_decision_count: int = 0
+    alias_enable_decision_count: int = 0
+    published_job_pause_decision_count: int = 0
+    published_job_resume_decision_count: int = 0
     asset_ids: list[UUID] = field(default_factory=list)
     check_ids: list[UUID] = field(default_factory=list)
+    alias_ids_to_disable: list[UUID] = field(default_factory=list)
+    alias_ids_to_enable: list[UUID] = field(default_factory=list)
+    published_job_ids_to_pause: list[UUID] = field(default_factory=list)
+    published_job_ids_to_resume: list[UUID] = field(default_factory=list)
+    retire_reasons: list[dict[str, object]] = field(default_factory=list)
     message: str | None = None
