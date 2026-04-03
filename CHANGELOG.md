@@ -1,5 +1,7 @@
 ## 2026-04-03
 
+- 修补 Web 系统 onboarding 失败清理：当 `auth_refresh`、`asset_compile` 或后续发布链路失败时，`SystemAdminService` 现在会通过既有 `ControlPlaneService` 将 auth/crawl runtime policy 显式切回 disabled，确保不会留下仍在 APScheduler 中激活的半接入系统。
+- 为 onboarding publish-target 选择补齐回归测试：新增覆盖“优先选择最新 active 资产”和“同版本按稳定顺序选择”的仓储测试，锁定 `page_check` 发布目标的确定性解析契约。
 - 收紧 Web 系统 onboarding 成功门禁：`SystemAdminService.onboard_system()` 现在会在 `auth_refresh` 与 `asset_compile` 两段正式链路后显式检查队列作业状态，未完成成功时立即以明确错误终止，避免认证失败后继续 crawl，以及 re-onboarding 时在 compile 失败后误发布旧 `page_check`。
 - 新增 Web 系统接入后端治理服务：补齐 `system_admin_repository/service/bootstrap`，支持按清单 upsert 系统与加密凭据、落库 auth/crawl policy、同步串行执行 `auth_refresh -> crawl -> asset_compile` 正式链路，并自动选择编译后的目标 `page_check` 发布为 `published_job`、回传 APScheduler 注册结果。
 - 收紧 crawl job 成功结果契约：成功完成采集后会把 `snapshot_id` 明确写入 `queued_jobs.result_payload`，方便 onboarding 链路精确回溯对应 compile job，并补充 onboarding/crawl 回归测试覆盖成功发布与缺失 publish target 两条路径。

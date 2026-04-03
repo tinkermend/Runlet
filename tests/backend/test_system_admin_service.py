@@ -14,7 +14,11 @@ from app.domains.control_plane.job_types import (
     CRAWL_JOB_TYPE,
 )
 from app.domains.control_plane.repository import SqlControlPlaneRepository
-from app.domains.control_plane.scheduler_registry import SchedulerRegistry
+from app.domains.control_plane.scheduler_registry import (
+    SchedulerRegistry,
+    build_auth_policy_job_id,
+    build_crawl_policy_job_id,
+)
 from app.domains.control_plane.service import ControlPlaneService
 from app.domains.control_plane.system_admin_schemas import WebSystemManifest
 from app.domains.crawler_service.schemas import CrawlRunResult
@@ -29,7 +33,7 @@ from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 from app.jobs.asset_compile_job import AssetCompileJobHandler
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
 from app.jobs.crawl_job import CrawlJobHandler
-from app.shared.enums import AssetStatus
+from app.shared.enums import AssetLifecycleStatus, AssetStatus
 
 
 class StubAuthService:
@@ -322,6 +326,55 @@ def _seed_existing_publish_target(db_session) -> None:
     db_session.commit()
 
 
+def _seed_publish_target_candidate(
+    db_session,
+    *,
+    system_id,
+    route_path: str,
+    asset_key: str,
+    asset_version: str,
+    lifecycle_status: AssetLifecycleStatus = AssetLifecycleStatus.ACTIVE,
+):
+    page = Page(
+        system_id=system_id,
+        route_path=route_path,
+        page_title=f"{route_path} 页面",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    page_asset = PageAsset(
+        system_id=system_id,
+        page_id=page.id,
+        asset_key=asset_key,
+        asset_version=asset_version,
+        status=AssetStatus.SAFE,
+        lifecycle_status=lifecycle_status,
+    )
+    db_session.add(page_asset)
+    db_session.flush()
+
+    module_plan = ModulePlan(
+        page_asset_id=page_asset.id,
+        check_code="table_render",
+        plan_version="v1",
+        steps_json=[{"module": "assert.table_visible", "params": {"route_path": route_path}}],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    page_check = PageCheck(
+        page_asset_id=page_asset.id,
+        check_code="table_render",
+        goal="table_render",
+        module_plan_id=module_plan.id,
+        lifecycle_status=lifecycle_status,
+    )
+    db_session.add(page_check)
+    db_session.flush()
+    return page_asset, page_check
+
+
 def test_web_system_manifest_accepts_nested_yaml_sections() -> None:
     manifest = WebSystemManifest.model_validate(
         {
@@ -528,6 +581,7 @@ async def test_onboard_system_fails_when_publish_goal_is_missing(
 async def test_onboard_system_stops_when_auth_refresh_does_not_complete_successfully(
     system_admin_service_builder,
     db_session,
+    scheduler,
 ):
     class FailingAuthService:
         async def refresh_auth_state(self, *, system_id):
@@ -545,7 +599,19 @@ async def test_onboard_system_stops_when_auth_refresh_does_not_complete_successf
     ):
         await service.onboard_system(manifest=build_hotgo_manifest())
 
+    system = db_session.exec(select(System).where(System.code == "hotgo_test3")).one()
+    auth_policy = db_session.exec(
+        select(SystemAuthPolicy).where(SystemAuthPolicy.system_id == system.id)
+    ).one()
+    crawl_policy = db_session.exec(
+        select(SystemCrawlPolicy).where(SystemCrawlPolicy.system_id == system.id)
+    ).one()
     queued_jobs = db_session.exec(select(QueuedJob).order_by(QueuedJob.created_at, QueuedJob.id)).all()
+
+    assert auth_policy.enabled is False
+    assert crawl_policy.enabled is False
+    assert scheduler.get_job(build_auth_policy_job_id(system.id)) is None
+    assert scheduler.get_job(build_crawl_policy_job_id(system.id)) is None
     assert [job.job_type for job in queued_jobs] == ["auth_refresh"]
 
 
@@ -553,6 +619,7 @@ async def test_onboard_system_stops_when_auth_refresh_does_not_complete_successf
 async def test_onboard_system_stops_when_asset_compile_does_not_complete_successfully(
     system_admin_service_builder,
     db_session,
+    scheduler,
 ):
     class FailingAssetCompilerService:
         async def compile_snapshot(self, *, snapshot_id):
@@ -569,5 +636,112 @@ async def test_onboard_system_stops_when_asset_compile_does_not_complete_success
     ):
         await service.onboard_system(manifest=build_hotgo_manifest())
 
+    system = db_session.exec(select(System).where(System.code == "hotgo_test3")).one()
+    auth_policy = db_session.exec(
+        select(SystemAuthPolicy).where(SystemAuthPolicy.system_id == system.id)
+    ).one()
+    crawl_policy = db_session.exec(
+        select(SystemCrawlPolicy).where(SystemCrawlPolicy.system_id == system.id)
+    ).one()
     published_jobs = db_session.exec(select(PublishedJob)).all()
+
+    assert auth_policy.enabled is False
+    assert crawl_policy.enabled is False
+    assert scheduler.get_job(build_auth_policy_job_id(system.id)) is None
+    assert scheduler.get_job(build_crawl_policy_job_id(system.id)) is None
     assert published_jobs == []
+
+
+@pytest.mark.anyio
+async def test_get_publish_target_prefers_newest_active_asset(db_session):
+    from app.domains.control_plane.system_admin_repository import SqlSystemAdminRepository
+
+    system = System(
+        code="publish_target_test",
+        name="publish target",
+        base_url="https://publish-target.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    _retired_asset, _ = _seed_publish_target_candidate(
+        db_session,
+        system_id=system.id,
+        route_path="/retired",
+        asset_key="publish_target_test.retired",
+        asset_version="20260403000000",
+        lifecycle_status=AssetLifecycleStatus.RETIRED_MISSING,
+    )
+    old_asset, old_check = _seed_publish_target_candidate(
+        db_session,
+        system_id=system.id,
+        route_path="/old",
+        asset_key="publish_target_test.old",
+        asset_version="20260401000000",
+    )
+    new_asset, new_check = _seed_publish_target_candidate(
+        db_session,
+        system_id=system.id,
+        route_path="/new",
+        asset_key="publish_target_test.new",
+        asset_version="20260402000000",
+    )
+    db_session.commit()
+
+    repo = SqlSystemAdminRepository(db_session)
+    target = await repo.get_publish_target(
+        system_id=system.id,
+        check_goal="table_render",
+    )
+
+    assert target is not None
+    assert target.page_asset.id == new_asset.id
+    assert target.page_check.id == new_check.id
+    assert target.page_asset.id != old_asset.id
+    assert target.page_check.id != old_check.id
+
+
+@pytest.mark.anyio
+async def test_get_publish_target_uses_stable_ordering_for_asset_version_ties(db_session):
+    from app.domains.control_plane.system_admin_repository import SqlSystemAdminRepository
+
+    system = System(
+        code="publish_target_tie_test",
+        name="publish target tie",
+        base_url="https://publish-target-tie.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    first_asset, first_check = _seed_publish_target_candidate(
+        db_session,
+        system_id=system.id,
+        route_path="/a",
+        asset_key="publish_target_tie_test.a",
+        asset_version="20260402000000",
+    )
+    second_asset, second_check = _seed_publish_target_candidate(
+        db_session,
+        system_id=system.id,
+        route_path="/b",
+        asset_key="publish_target_tie_test.b",
+        asset_version="20260402000000",
+    )
+    db_session.commit()
+
+    expected_asset, expected_check = sorted(
+        [(first_asset, first_check), (second_asset, second_check)],
+        key=lambda pair: pair[0].id,
+    )[0]
+
+    repo = SqlSystemAdminRepository(db_session)
+    target = await repo.get_publish_target(
+        system_id=system.id,
+        check_goal="table_render",
+    )
+
+    assert target is not None
+    assert target.page_asset.id == expected_asset.id
+    assert target.page_check.id == expected_check.id

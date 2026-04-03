@@ -85,56 +85,64 @@ class SystemAdminService:
             ),
         )
 
-        auth_job = await self.control_plane_service.refresh_auth(system_id=system.id)
-        await self.job_executor.run_auth_refresh(auth_job.job_id)
-        await self._ensure_job_completed_successfully(
-            job_id=auth_job.job_id,
-            job_label="auth refresh job",
-        )
-
-        crawl_job = await self.control_plane_service.trigger_crawl(
-            system_id=system.id,
-            payload=CrawlTriggerRequest(
-                crawl_scope=manifest.crawl_policy.crawl_scope,
-                framework_hint=manifest.system.framework_type,
-            ),
-        )
-        await self.job_executor.run_crawl(crawl_job.job_id)
-
-        snapshot_id = await self.repository.get_successful_crawl_snapshot_id(
-            job_id=crawl_job.job_id
-        )
-        compile_job = await self.repository.get_compile_job_for_snapshot(
-            snapshot_id=snapshot_id
-        )
-        await self.job_executor.run_asset_compile(compile_job.id)
-        await self._ensure_job_completed_successfully(
-            job_id=compile_job.id,
-            job_label="asset compile job",
-        )
-
-        publish_target = await self.repository.get_publish_target(
-            system_id=system.id,
-            check_goal=manifest.publish.check_goal,
-        )
-        if publish_target is None:
-            raise ValueError(
-                f"page_check for goal {manifest.publish.check_goal} not found"
+        try:
+            auth_job = await self.control_plane_service.refresh_auth(system_id=system.id)
+            await self.job_executor.run_auth_refresh(auth_job.job_id)
+            await self._ensure_job_completed_successfully(
+                job_id=auth_job.job_id,
+                job_label="auth refresh job",
             )
 
-        render_result = await self.control_plane_service.render_page_check_script(
-            page_check_id=publish_target.page_check.id,
-            render_mode="published",
-        )
-        published_job = await self.control_plane_service.create_published_job(
-            payload=CreatePublishedJobRequest(
-                script_render_id=render_result.script_render_id,
+            crawl_job = await self.control_plane_service.trigger_crawl(
+                system_id=system.id,
+                payload=CrawlTriggerRequest(
+                    crawl_scope=manifest.crawl_policy.crawl_scope,
+                    framework_hint=manifest.system.framework_type,
+                ),
+            )
+            await self.job_executor.run_crawl(crawl_job.job_id)
+
+            snapshot_id = await self.repository.get_successful_crawl_snapshot_id(
+                job_id=crawl_job.job_id
+            )
+            compile_job = await self.repository.get_compile_job_for_snapshot(
+                snapshot_id=snapshot_id
+            )
+            await self.job_executor.run_asset_compile(compile_job.id)
+            await self._ensure_job_completed_successfully(
+                job_id=compile_job.id,
+                job_label="asset compile job",
+            )
+
+            publish_target = await self.repository.get_publish_target(
+                system_id=system.id,
+                check_goal=manifest.publish.check_goal,
+            )
+            if publish_target is None:
+                raise ValueError(
+                    f"page_check for goal {manifest.publish.check_goal} not found"
+                )
+
+            render_result = await self.control_plane_service.render_page_check_script(
                 page_check_id=publish_target.page_check.id,
-                schedule_expr=manifest.publish.schedule_expr,
-                trigger_source="system_admin",
-                enabled=manifest.publish.enabled,
+                render_mode="published",
             )
-        )
+            published_job = await self.control_plane_service.create_published_job(
+                payload=CreatePublishedJobRequest(
+                    script_render_id=render_result.script_render_id,
+                    page_check_id=publish_target.page_check.id,
+                    schedule_expr=manifest.publish.schedule_expr,
+                    trigger_source="system_admin",
+                    enabled=manifest.publish.enabled,
+                )
+            )
+        except Exception:
+            await self._disable_runtime_policies(
+                system_id=system.id,
+                manifest=manifest,
+            )
+            raise
+
         return OnboardSystemResult(
             system_id=system.id,
             system_code=system.code,
@@ -164,3 +172,27 @@ class SystemAdminService:
         if job.failure_message:
             detail = f"{detail}: {job.failure_message}"
         raise ValueError(f"{job_label} {job_id} did not complete successfully: {detail}")
+
+    async def _disable_runtime_policies(
+        self,
+        *,
+        system_id: UUID,
+        manifest: WebSystemManifest,
+    ) -> None:
+        await self.control_plane_service.upsert_system_auth_policy(
+            system_id=system_id,
+            payload=UpdateSystemAuthPolicy(
+                enabled=False,
+                schedule_expr=manifest.auth_policy.schedule_expr,
+                auth_mode=manifest.auth_policy.auth_mode,
+                captcha_provider=manifest.auth_policy.captcha_provider,
+            ),
+        )
+        await self.control_plane_service.upsert_system_crawl_policy(
+            system_id=system_id,
+            payload=UpdateSystemCrawlPolicy(
+                enabled=False,
+                schedule_expr=manifest.crawl_policy.schedule_expr,
+                crawl_scope=manifest.crawl_policy.crawl_scope,
+            ),
+        )
