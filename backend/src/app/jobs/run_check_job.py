@@ -32,7 +32,14 @@ class RunCheckJobHandler:
 
         page_check_id = job.payload.get("page_check_id")
         execution_track = str(job.payload.get("execution_track") or "").strip().lower()
-        if page_check_id is None and execution_track in {"realtime", "realtime_probe"}:
+        raw_execution_plan_id = job.payload.get("execution_plan_id")
+        execution_plan_id = raw_execution_plan_id if isinstance(raw_execution_plan_id, str) else None
+        parsed_execution_plan_id = _parse_uuid(execution_plan_id)
+        if execution_plan_id is not None and parsed_execution_plan_id is None:
+            await self._mark_failed(job, message="invalid execution_plan_id in run_check job payload")
+            return
+
+        if page_check_id is None and execution_track == "realtime":
             job.status = QueuedJobStatus.SKIPPED.value
             job.started_at = job.started_at or utcnow()
             job.finished_at = utcnow()
@@ -46,12 +53,14 @@ class RunCheckJobHandler:
             await self._commit()
             return
 
-        if not isinstance(page_check_id, str):
+        if execution_track == "realtime_probe" and parsed_execution_plan_id is None:
+            await self._mark_failed(job, message="missing execution_plan_id in run_check job payload")
+            return
+
+        if execution_track != "realtime_probe" and not isinstance(page_check_id, str):
             await self._mark_failed(job, message="missing page_check_id in run_check job payload")
             return
 
-        raw_execution_plan_id = job.payload.get("execution_plan_id")
-        execution_plan_id = raw_execution_plan_id if isinstance(raw_execution_plan_id, str) else None
         raw_execution_request_id = job.payload.get("execution_request_id")
         execution_request_id = (
             raw_execution_request_id if isinstance(raw_execution_request_id, str) else None
@@ -83,10 +92,15 @@ class RunCheckJobHandler:
         await self._commit()
 
         try:
-            result = await self.runner_service.run_page_check(
-                page_check_id=UUID(page_check_id),
-                execution_plan_id=UUID(execution_plan_id) if execution_plan_id else None,
-            )
+            if execution_track == "realtime_probe":
+                result = await self.runner_service.run_realtime_probe(
+                    execution_plan_id=parsed_execution_plan_id,
+                )
+            else:
+                result = await self.runner_service.run_page_check(
+                    page_check_id=UUID(page_check_id),
+                    execution_plan_id=parsed_execution_plan_id,
+                )
         except Exception as exc:
             await self._mark_failed(job, message=str(exc), job_run=job_run)
             return

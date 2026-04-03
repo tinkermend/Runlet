@@ -127,12 +127,40 @@ def queued_realtime_run_check_job(db_session):
 
 
 @pytest.fixture
-def queued_realtime_probe_run_check_job(db_session):
+def queued_realtime_probe_job(
+    db_session,
+    seeded_system,
+    seeded_page_asset,
+    seeded_auth_state,
+):
+    execution_request = ExecutionRequest(
+        request_source="worker_test",
+        system_hint=seeded_system.code,
+        page_hint=seeded_page_asset.asset_key,
+        check_goal="page_open",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(execution_request)
+    db_session.flush()
+
+    execution_plan = ExecutionPlan(
+        execution_request_id=execution_request.id,
+        resolved_system_id=seeded_system.id,
+        resolved_page_asset_id=seeded_page_asset.id,
+        resolved_page_check_id=None,
+        execution_track="realtime_probe",
+        auth_policy="server_injected",
+        module_plan_id=None,
+    )
+    db_session.add(execution_plan)
+    db_session.flush()
+
     job = QueuedJob(
         job_type=RUN_CHECK_JOB_TYPE,
         payload={
-            "execution_request_id": str(uuid4()),
-            "execution_plan_id": str(uuid4()),
+            "execution_request_id": str(execution_request.id),
+            "execution_plan_id": str(execution_plan.id),
             "execution_track": "realtime_probe",
             "page_check_id": None,
         },
@@ -305,19 +333,18 @@ async def test_run_check_job_skips_realtime_request_without_resolved_page_check(
 
 
 @pytest.mark.anyio
-async def test_run_check_job_skips_realtime_probe_request_without_resolved_page_check(
+async def test_run_check_job_executes_realtime_probe_when_track_is_realtime_probe(
     job_runner,
-    queued_realtime_probe_run_check_job,
+    queued_realtime_probe_job,
     db_session,
 ):
     await job_runner.run_once()
 
-    refreshed = db_session.get(QueuedJob, queued_realtime_probe_run_check_job.id)
+    refreshed = db_session.get(QueuedJob, queued_realtime_probe_job.id)
 
     assert refreshed is not None
-    assert refreshed.status == "skipped"
-    assert refreshed.failure_message == "realtime execution track is not supported by run_check worker"
-    assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_run_check_job.id)
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_job.id)
     assert refreshed.result_payload["execution_track"] == "realtime_probe"
 
 
