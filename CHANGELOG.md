@@ -1,5 +1,7 @@
 ## 2026-04-03
 
+- 新增 Web 系统接入后端治理服务：补齐 `system_admin_repository/service/bootstrap`，支持按清单 upsert 系统与加密凭据、落库 auth/crawl policy、同步串行执行 `auth_refresh -> crawl -> asset_compile` 正式链路，并自动选择编译后的目标 `page_check` 发布为 `published_job`、回传 APScheduler 注册结果。
+- 收紧 crawl job 成功结果契约：成功完成采集后会把 `snapshot_id` 明确写入 `queued_jobs.result_payload`，方便 onboarding 链路精确回溯对应 compile job，并补充 onboarding/crawl 回归测试覆盖成功发布与缺失 publish target 两条路径。
 - 修复 Web 系统清单必填文本校验的类型健壮性：`required-text` helper 在收到非字符串输入时改为抛出 `ValueError`，避免 `mode="before"` 阶段出现 `AttributeError`；并新增回归测试锁定为 `ValidationError` 失败语义。
 - 收紧 Web 系统清单 DTO 合约：`system/credential/auth_policy/crawl_policy/publish` 关键必填文本字段新增空白拒绝校验，并补充凭据解密兼容回归测试（`enc:` 与不含当前 secret 前缀的 `enc-b64:` 均可解密）。
 - 新增 Web 系统清单与本地凭据加密契约：补充 `WebSystemManifest` 嵌套 DTO、`credential_crypto_secret` 配置项，以及 `LocalCredentialCrypto.encrypt/decrypt`（兼容既有 `enc:` fixture 与旧 `enc-b64` 解密），并新增对应测试覆盖 manifest 解析与加解密回环。

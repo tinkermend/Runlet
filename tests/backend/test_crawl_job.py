@@ -51,7 +51,7 @@ def _create_crawl_policy(db_session, *, system_id, crawl_scope="full") -> System
 
 
 @pytest.mark.anyio
-async def test_crawl_job_persists_snapshot_and_enqueues_compile(
+async def test_crawl_job_persists_snapshot_id_and_enqueues_compile(
     db_session,
     seeded_system,
 ):
@@ -89,6 +89,10 @@ async def test_crawl_job_persists_snapshot_and_enqueues_compile(
     assert refreshed_job is not None
     assert refreshed_job.status == "completed"
     assert refreshed_job.finished_at is not None
+    assert refreshed_job.result_payload == {
+        "status": "success",
+        "snapshot_id": str(crawler_service.result.snapshot_id),
+    }
     assert len(compile_jobs) == 1
     assert compile_jobs[0].payload["snapshot_id"] == str(crawler_service.result.snapshot_id)
     assert compile_jobs[0].payload["compile_scope"] == "impacted_pages_only"

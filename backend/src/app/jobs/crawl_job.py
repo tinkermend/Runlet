@@ -77,6 +77,10 @@ class CrawlJobHandler:
         job.status = QueuedJobStatus.COMPLETED.value
         job.failure_message = None
         job.finished_at = utcnow()
+        job.result_payload = {
+            "status": "success",
+            "snapshot_id": str(result.snapshot_id),
+        }
         if policy is not None:
             policy.last_succeeded_at = utcnow()
             policy.last_failure_message = None
