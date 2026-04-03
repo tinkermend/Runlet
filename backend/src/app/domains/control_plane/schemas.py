@@ -108,6 +108,17 @@ class CheckRequestStatus(BaseModel):
     status: str = "accepted"
 
 
+class PublishCheckRequest(BaseModel):
+    schedule_expr: str
+    trigger_source: str = "platform"
+    enabled: bool = True
+
+    @field_validator("schedule_expr", "trigger_source", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+
 class PageAssetCheckItem(BaseModel):
     id: UUID
     page_asset_id: UUID

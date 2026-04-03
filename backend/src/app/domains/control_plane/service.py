@@ -36,6 +36,7 @@ from app.domains.control_plane.schemas import (
     SystemCrawlPolicyRead,
     CrawlTriggerRequest,
     PageAssetChecksList,
+    PublishCheckRequest,
     RunPageCheck,
     UpdateSystemAuthPolicy,
     UpdateSystemCrawlPolicy,
@@ -246,6 +247,45 @@ class ControlPlaneService:
             raise HTTPException(status_code=500, detail="published job service is not configured")
         try:
             created = await self.published_job_service.create_published_job(payload=payload)
+            await self._sync_published_job_registry_safely(
+                published_job_id=created.published_job_id,
+            )
+            return created
+        except InvalidPublishedJobScheduleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PublishedJobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async def publish_check_request(
+        self,
+        *,
+        request_id: UUID,
+        payload: PublishCheckRequest,
+    ) -> PublishedJobCreated:
+        if self.script_renderer is None:
+            raise HTTPException(status_code=500, detail="script renderer is not configured")
+        if self.published_job_service is None:
+            raise HTTPException(status_code=500, detail="published job service is not configured")
+
+        result = await self.repository.get_check_request_result_view(request_id=request_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="check request not found")
+        if result.plan_id is None or result.execution_summary is None:
+            raise HTTPException(status_code=409, detail="check request has no successful execution")
+        if result.execution_summary.status != "passed":
+            raise HTTPException(status_code=409, detail="check request has no successful execution")
+        if result.page_check_id is None:
+            raise HTTPException(status_code=409, detail="check request has no publishable page_check")
+
+        try:
+            created = await self.published_job_service.create_published_job_from_execution(
+                execution_plan_id=result.plan_id,
+                page_check_id=result.page_check_id,
+                schedule_expr=payload.schedule_expr,
+                trigger_source=payload.trigger_source,
+                enabled=payload.enabled,
+                script_renderer=self.script_renderer,
+            )
             await self._sync_published_job_registry_safely(
                 published_job_id=created.published_job_id,
             )

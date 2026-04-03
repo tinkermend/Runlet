@@ -9,8 +9,10 @@ from app.domains.control_plane.schemas import (
     CheckRequestAccepted,
     CheckRequestStatus,
     CreateCheckRequest,
+    PublishCheckRequest,
 )
 from app.domains.runner_service.result_views import CheckResultView
+from app.domains.runner_service.scheduler import PublishedJobCreated
 
 
 router = APIRouter(prefix="/check-requests", tags=["check-requests"])
@@ -38,3 +40,12 @@ async def get_check_request_result(
     service: ControlPlaneServiceDep,
 ) -> CheckResultView:
     return await service.get_check_request_result(request_id)
+
+
+@router.post("/{request_id}:publish", status_code=201, response_model=PublishedJobCreated)
+async def publish_check_request(
+    request_id: UUID,
+    payload: PublishCheckRequest,
+    service: ControlPlaneServiceDep,
+) -> PublishedJobCreated:
+    return await service.publish_check_request(request_id=request_id, payload=payload)

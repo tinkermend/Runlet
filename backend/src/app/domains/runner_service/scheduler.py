@@ -127,6 +127,32 @@ class PublishedJobService:
             asset_version=published_job.asset_version,
         )
 
+    async def create_published_job_from_execution(
+        self,
+        *,
+        execution_plan_id: UUID,
+        page_check_id: UUID,
+        schedule_expr: str,
+        script_renderer,
+        trigger_source: str = "platform",
+        enabled: bool = True,
+    ) -> PublishedJobCreated:
+        script_render = await self._get_or_render_published_script(
+            execution_plan_id=execution_plan_id,
+            page_check_id=page_check_id,
+            script_renderer=script_renderer,
+        )
+        return await self.create_published_job(
+            payload=CreatePublishedJobRequest(
+                script_render_id=script_render.id,
+                page_check_id=page_check_id,
+                schedule_type="cron",
+                schedule_expr=schedule_expr,
+                trigger_source=trigger_source,
+                enabled=enabled,
+            )
+        )
+
     async def trigger_published_job(
         self,
         *,
@@ -223,6 +249,41 @@ class PublishedJobService:
             return False
         return _minute_key(latest.scheduled_at) == _minute_key(scheduled_at)
 
+    async def _get_or_render_published_script(
+        self,
+        *,
+        execution_plan_id: UUID,
+        page_check_id: UUID,
+        script_renderer,
+    ) -> ScriptRender:
+        statement = (
+            select(ScriptRender)
+            .where(ScriptRender.execution_plan_id == execution_plan_id)
+            .where(ScriptRender.render_mode == "published")
+            .order_by(ScriptRender.created_at.desc(), ScriptRender.id.desc())
+        )
+        script_render = await self._exec_first(statement)
+        if script_render is not None and _matches_page_check(
+            script_render=script_render,
+            page_check_id=page_check_id,
+        ):
+            return script_render
+
+        render_result = await script_renderer.render_page_check(
+            page_check_id=page_check_id,
+            render_mode="published",
+        )
+        script_render = await self._get(ScriptRender, render_result.script_render_id)
+        if script_render is None:
+            raise PublishedJobNotFoundError(
+                f"script render {render_result.script_render_id} not found"
+            )
+        script_render.execution_plan_id = execution_plan_id
+        self.session.add(script_render)
+        await self._commit()
+        await self._refresh(script_render)
+        return script_render
+
     async def _get(self, model, identifier):
         if isinstance(self.session, AsyncSession):
             return await self.session.get(model, identifier)
@@ -258,6 +319,11 @@ def _optional_text(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _matches_page_check(*, script_render: ScriptRender, page_check_id: UUID) -> bool:
+    metadata = script_render.render_metadata or {}
+    return metadata.get("page_check_id") == str(page_check_id)
 
 
 def _build_job_key(page_check_id: UUID, script_render_id: UUID) -> str:
