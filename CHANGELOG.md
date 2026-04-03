@@ -1,3 +1,15 @@
+## [Unreleased] - 2026-04-04
+
+### Added
+- Frontend management console (React + Vite + TypeScript) under `front/`
+- Console session authentication (`/api/console/auth/`)
+- Dashboard summary API (`/api/console/portal/dashboard`)
+- Systems management API (`/api/console/portal/systems`)
+- Task management API (`/api/console/tasks/`)
+- Asset browser API (`/api/console/assets/`)
+- Run results API (`/api/console/results/`)
+- UI foundation docs (`docs/front/`)
+
 ## 2026-04-04
 
 - 新增 Web 前端管理平台一期实施计划，明确前端工程根目录为 `front/`，要求在页面实现前先使用 `ui-ux-pro-max-skill` 产出关键页面设计，并按“前端壳、简单 Web 登录、控制面聚合 API、任务向导、资产浏览、结果页”顺序拆解落地任务。

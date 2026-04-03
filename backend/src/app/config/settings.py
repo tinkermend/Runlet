@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     scheduler_reload_interval_seconds: float = Field(default=30.0, ge=0.0)
     worker_poll_interval_ms: int = Field(default=500, ge=1)
     credential_crypto_secret: str = Field(default="runlet-local-credential-secret")
+    console_username: str = Field(default="admin")
+    console_password: str = Field(default="admin")
 
     model_config = SettingsConfigDict(
         env_file=".env",
