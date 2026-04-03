@@ -111,6 +111,8 @@ class RunnerService:
                 "page_asset_id": str(page_asset.id),
                 "system_id": str(system.id),
                 "step_results": [step.model_dump(mode="json") for step in execution_result.step_results],
+                "page_context": {"final_url": None, "page_title": None},
+                "screenshots": [],
             },
         )
         self.session.add(artifact)

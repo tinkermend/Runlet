@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.domains.runner_service.failure_categories import FailureCategory
+
 
 class RunnerRunStatus(StrEnum):
     RUNNING = "running"
@@ -38,3 +40,6 @@ class RunPageCheckResult(BaseModel):
     auth_status: AuthInjectStatus
     artifact_ids: list[UUID]
     step_results: list[StepExecutionResult]
+    failure_category: FailureCategory | None = None
+    final_url: str | None = None
+    page_title: str | None = None

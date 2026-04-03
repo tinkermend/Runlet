@@ -9,6 +9,20 @@ from app.infrastructure.db.models.assets import ModulePlan, PageCheck
 from app.infrastructure.db.models.execution import ExecutionArtifact, ExecutionRun
 
 
+@pytest.mark.anyio
+async def test_run_page_check_result_includes_failure_category_and_page_context():
+    from app.domains.runner_service.schemas import RunPageCheckResult
+
+    assert "failure_category" in RunPageCheckResult.model_fields
+    assert "final_url" in RunPageCheckResult.model_fields
+    assert "page_title" in RunPageCheckResult.model_fields
+
+
+@pytest.mark.anyio
+async def test_execution_run_schema_exposes_failure_category_field():
+    assert hasattr(ExecutionRun, "failure_category")
+
+
 class FakeRuntime:
     def __init__(
         self,

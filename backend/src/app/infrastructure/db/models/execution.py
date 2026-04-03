@@ -7,6 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
+from app.domains.runner_service.failure_categories import FailureCategory
 from app.infrastructure.db.base import BaseModel
 from app.shared.enums import ExecutionResultStatus, RenderResultStatus
 
@@ -28,6 +29,15 @@ def render_result_status_enum() -> sa.Enum:
     return sa.Enum(
         RenderResultStatus,
         name="render_result_status",
+        native_enum=False,
+        values_callable=lambda values: [value.value for value in values],
+    )
+
+
+def failure_category_enum() -> sa.Enum:
+    return sa.Enum(
+        FailureCategory,
+        name="failure_category",
         native_enum=False,
         values_callable=lambda values: [value.value for value in values],
     )
@@ -69,7 +79,10 @@ class ExecutionRun(BaseModel, table=True):
     status: str = Field(max_length=32)
     duration_ms: int | None = Field(default=None)
     auth_status: str | None = Field(default=None, max_length=32)
-    failure_category: str | None = Field(default=None, max_length=64)
+    failure_category: FailureCategory | None = Field(
+        default=None,
+        sa_column=sa.Column(failure_category_enum(), nullable=True),
+    )
     asset_version: str | None = Field(default=None, max_length=64)
     snapshot_version: str | None = Field(default=None, max_length=64)
 
