@@ -129,7 +129,13 @@ def test_serialize_compile_result_json_safely_handles_reconciliation_uuid_lists(
         snapshot_id=uuid4(),
         status="success",
         assets_created=1,
+        assets_updated=2,
+        assets_retired=3,
         checks_created=1,
+        checks_updated=2,
+        checks_retired=4,
+        alias_disable_decision_count=5,
+        published_job_pause_decision_count=6,
         drift_state=AssetStatus.SAFE,
         asset_ids=[uuid4()],
         check_ids=[uuid4()],
@@ -147,6 +153,10 @@ def test_serialize_compile_result_json_safely_handles_reconciliation_uuid_lists(
 
     assert payload["alias_ids_to_disable"] == [str(alias_id)]
     assert payload["published_job_ids_to_pause"] == [str(published_job_id)]
+    assert payload["assets_retired"] == 3
+    assert payload["checks_retired"] == 4
+    assert payload["alias_disable_decision_count"] == 5
+    assert payload["published_job_pause_decision_count"] == 6
     assert payload["retire_reasons"] == [
         {
             "asset_id": str(reason_asset_id),
