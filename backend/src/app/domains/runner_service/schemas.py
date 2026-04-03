@@ -39,6 +39,7 @@ class RunPageCheckResult(BaseModel):
     status: RunnerRunStatus
     auth_status: AuthInjectStatus
     artifact_ids: list[UUID]
+    screenshot_artifact_ids: list[UUID]
     step_results: list[StepExecutionResult]
     failure_category: FailureCategory | None = None
     final_url: str | None = None

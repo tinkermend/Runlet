@@ -17,11 +17,14 @@ async def test_run_page_check_result_fields_match_failure_category_contract():
 
     fields = RunPageCheckResult.model_fields
     failure_field = fields["failure_category"]
+    screenshot_artifact_ids_field = fields["screenshot_artifact_ids"]
     final_url_field = fields["final_url"]
     page_title_field = fields["page_title"]
 
     assert failure_field.annotation == FailureCategory | None
     assert failure_field.default is None
+
+    assert screenshot_artifact_ids_field.annotation == list[UUID]
 
     assert final_url_field.annotation == str | None
     assert final_url_field.default is None
@@ -212,6 +215,21 @@ class FakeGlobalFallbackPlaywrightPage:
         return FakeVisibleLocator(count=0)
 
 
+class FakeRuntimeContextPage:
+    def __init__(self) -> None:
+        self.url = "https://erp.example.com/users?tab=list"
+        self.title_calls = 0
+        self.screenshot_calls: list[dict[str, object]] = []
+
+    async def screenshot(self, *, full_page: bool, type: str) -> bytes:
+        self.screenshot_calls.append({"full_page": full_page, "type": type})
+        return b"\x89PNG\r\nfake"
+
+    async def title(self) -> str:
+        self.title_calls += 1
+        return "用户管理"
+
+
 @pytest.fixture
 def seeded_ready_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -382,6 +400,7 @@ async def test_run_page_check_persists_screenshot_and_final_page_context(
     assert screenshot_artifacts[0].payload["content"]
     assert screenshot_artifacts[0].payload["final_url"] == result.final_url
     assert set(result.artifact_ids) == {artifact.id for artifact in artifacts}
+    assert set(result.screenshot_artifact_ids) == {artifact.id for artifact in screenshot_artifacts}
 
 
 @pytest.mark.anyio
@@ -513,3 +532,21 @@ async def test_playwright_runtime_falls_back_to_global_menuitem_when_no_scoped_c
         {"role": "menuitem", "name": "总览", "exact": True},
     ]
     assert runtime._page.global_menuitem.wait_for_calls == [{"state": "visible", "timeout": None}]
+
+
+@pytest.mark.anyio
+async def test_playwright_runtime_exposes_page_context_and_screenshot_methods():
+    from app.domains.runner_service.playwright_runtime import PlaywrightRunnerRuntime
+
+    runtime = PlaywrightRunnerRuntime()
+    runtime._page = FakeRuntimeContextPage()
+
+    screenshot = await runtime.capture_screenshot()
+    final_url = await runtime.get_final_url()
+    page_title = await runtime.get_page_title()
+
+    assert screenshot == b"\x89PNG\r\nfake"
+    assert runtime._page.screenshot_calls == [{"full_page": True, "type": "png"}]
+    assert final_url == "https://erp.example.com/users?tab=list"
+    assert page_title == "用户管理"
+    assert runtime._page.title_calls == 1

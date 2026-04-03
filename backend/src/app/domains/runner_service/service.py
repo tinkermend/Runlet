@@ -139,6 +139,7 @@ class RunnerService:
         self.session.add(artifact)
 
         persisted_artifacts = [artifact]
+        screenshot_artifact_ids: list[UUID] = []
         if screenshot_bytes is not None:
             screenshot_artifact = ExecutionArtifact(
                 execution_run_id=execution_run.id,
@@ -155,6 +156,7 @@ class RunnerService:
             )
             self.session.add(screenshot_artifact)
             persisted_artifacts.append(screenshot_artifact)
+            screenshot_artifact_ids.append(screenshot_artifact.id)
 
         await self._commit()
         await self._refresh(execution_run)
@@ -167,6 +169,7 @@ class RunnerService:
             status=execution_result.status,
             auth_status=execution_result.auth_status,
             artifact_ids=[persisted_artifact.id for persisted_artifact in persisted_artifacts],
+            screenshot_artifact_ids=screenshot_artifact_ids,
             step_results=execution_result.step_results,
             failure_category=failure_category,
             final_url=final_url,
