@@ -321,6 +321,8 @@ class RunnerService:
                 "final_url": final_url,
                 "page_title": page_title,
                 "page_probe": page_probe,
+                "needs_recrawl": execution_plan.resolved_page_asset_id is None,
+                "needs_recompile": execution_result.status == RunnerRunStatus.PASSED,
             },
         )
         self.session.add(artifact)
@@ -377,6 +379,8 @@ class RunnerService:
             failure_category=failure_category,
             final_url=final_url,
             page_title=page_title,
+            needs_recrawl=execution_plan.resolved_page_asset_id is None,
+            needs_recompile=execution_result.status == RunnerRunStatus.PASSED,
         )
 
     async def _create_realtime_probe_resolution_failure(

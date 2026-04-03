@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from sqlmodel import select
 
 from app.domains.runner_service.schemas import PageProbePlan
+from app.infrastructure.db.models.assets import IntentAlias
+from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 
 
@@ -150,3 +153,63 @@ async def test_realtime_probe_builds_explicit_page_level_probe_plan(
         "assert.page_open",
         "page.wait_ready",
     ]
+
+
+@pytest.mark.anyio
+async def test_successful_realtime_probe_writes_route_hint_alias(
+    control_plane_service,
+    realtime_probe_runner_service,
+    realtime_probe_execution_plan_id,
+    seeded_page_asset,
+    db_session,
+):
+    plan = db_session.get(ExecutionPlan, realtime_probe_execution_plan_id)
+    plan.resolved_page_asset_id = seeded_page_asset.id
+    db_session.add(plan)
+    db_session.commit()
+
+    result = await realtime_probe_runner_service.run_realtime_probe(
+        execution_plan_id=realtime_probe_execution_plan_id,
+    )
+    assert result.status == "passed"
+
+    await control_plane_service.persist_realtime_probe_feedback(
+        execution_plan_id=realtime_probe_execution_plan_id,
+    )
+
+    request = db_session.get(ExecutionRequest, plan.execution_request_id)
+    page = db_session.get(Page, seeded_page_asset.page_id)
+
+    alias = db_session.exec(
+        select(IntentAlias)
+        .where(IntentAlias.source == "realtime_probe")
+        .where(IntentAlias.page_alias == request.page_hint)
+        .where(IntentAlias.check_alias == request.check_goal)
+    ).one()
+
+    assert alias.system_alias == request.system_hint
+    assert alias.page_alias == request.page_hint
+    assert alias.route_hint == page.route_path
+    assert alias.asset_key == seeded_page_asset.asset_key
+    assert alias.source == "realtime_probe"
+
+
+@pytest.mark.anyio
+async def test_realtime_probe_marks_result_as_needs_recompile_when_probe_succeeds(
+    realtime_probe_runner_service,
+    realtime_probe_execution_plan_id,
+    seeded_page_asset,
+    db_session,
+):
+    plan = db_session.get(ExecutionPlan, realtime_probe_execution_plan_id)
+    plan.resolved_page_asset_id = seeded_page_asset.id
+    db_session.add(plan)
+    db_session.commit()
+
+    result = await realtime_probe_runner_service.run_realtime_probe(
+        execution_plan_id=realtime_probe_execution_plan_id,
+    )
+
+    assert result.status == "passed"
+    assert result.needs_recrawl is False
+    assert result.needs_recompile is True

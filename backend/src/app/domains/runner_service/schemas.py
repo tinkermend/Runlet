@@ -49,3 +49,5 @@ class RunPageCheckResult(BaseModel):
     failure_category: FailureCategory | None = None
     final_url: str | None = None
     page_title: str | None = None
+    needs_recrawl: bool = False
+    needs_recompile: bool = False

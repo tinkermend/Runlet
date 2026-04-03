@@ -122,6 +122,46 @@ class ControlPlaneService:
             raise HTTPException(status_code=404, detail="check request not found")
         return result
 
+    async def persist_realtime_probe_feedback(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> None:
+        plan = await self.repository.get_execution_plan(execution_plan_id=execution_plan_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail="execution plan not found")
+        if plan.execution_track != "realtime_probe":
+            raise HTTPException(status_code=409, detail="execution plan is not realtime_probe")
+        if plan.resolved_page_asset_id is None:
+            raise HTTPException(status_code=409, detail="page asset is not resolved in execution plan")
+
+        request = await self.repository.get_execution_request(
+            execution_request_id=plan.execution_request_id
+        )
+        if request is None:
+            raise HTTPException(status_code=404, detail="execution request not found")
+
+        page_asset = await self.repository.get_page_asset(
+            page_asset_id=plan.resolved_page_asset_id
+        )
+        if page_asset is None:
+            raise HTTPException(status_code=404, detail="page asset not found")
+
+        page = await self.repository.get_page(page_id=page_asset.page_id)
+        if page is None:
+            raise HTTPException(status_code=404, detail="page not found")
+
+        await self.repository.upsert_intent_alias(
+            system_alias=request.system_hint,
+            page_alias=request.page_hint,
+            check_alias=request.check_goal,
+            route_hint=page.route_path,
+            asset_key=page_asset.asset_key,
+            source="realtime_probe",
+            confidence=1.0,
+        )
+        await self.repository.commit()
+
     async def run_page_check(
         self,
         *,

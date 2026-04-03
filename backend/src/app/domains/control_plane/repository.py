@@ -136,6 +136,42 @@ class ControlPlaneRepository(Protocol):
         page_asset_id: UUID,
     ) -> PageAssetChecksList | None: ...
 
+    async def get_execution_plan(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionPlan | None: ...
+
+    async def get_execution_request(
+        self,
+        *,
+        execution_request_id: UUID,
+    ) -> ExecutionRequest | None: ...
+
+    async def get_page_asset(
+        self,
+        *,
+        page_asset_id: UUID,
+    ) -> PageAsset | None: ...
+
+    async def get_page(
+        self,
+        *,
+        page_id: UUID,
+    ) -> Page | None: ...
+
+    async def upsert_intent_alias(
+        self,
+        *,
+        system_alias: str,
+        page_alias: str | None,
+        check_alias: str,
+        route_hint: str | None,
+        asset_key: str,
+        source: str,
+        confidence: float = 1.0,
+    ) -> IntentAlias: ...
+
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
@@ -426,6 +462,76 @@ class SqlControlPlaneRepository:
             miss_reason=None,
         )
 
+    async def get_execution_plan(
+        self,
+        *,
+        execution_plan_id: UUID,
+    ) -> ExecutionPlan | None:
+        return await self._get(ExecutionPlan, execution_plan_id)
+
+    async def get_execution_request(
+        self,
+        *,
+        execution_request_id: UUID,
+    ) -> ExecutionRequest | None:
+        return await self._get(ExecutionRequest, execution_request_id)
+
+    async def get_page_asset(
+        self,
+        *,
+        page_asset_id: UUID,
+    ) -> PageAsset | None:
+        return await self._get(PageAsset, page_asset_id)
+
+    async def get_page(
+        self,
+        *,
+        page_id: UUID,
+    ) -> Page | None:
+        return await self._get(Page, page_id)
+
+    async def upsert_intent_alias(
+        self,
+        *,
+        system_alias: str,
+        page_alias: str | None,
+        check_alias: str,
+        route_hint: str | None,
+        asset_key: str,
+        source: str,
+        confidence: float = 1.0,
+    ) -> IntentAlias:
+        statement = (
+            select(IntentAlias)
+            .where(IntentAlias.system_alias == system_alias)
+            .where(IntentAlias.page_alias == page_alias)
+            .where(IntentAlias.check_alias == check_alias)
+            .where(IntentAlias.asset_key == asset_key)
+        )
+        alias = await self._exec_first(statement)
+        if alias is None:
+            alias = IntentAlias(
+                system_alias=system_alias,
+                page_alias=page_alias,
+                check_alias=check_alias,
+                route_hint=route_hint,
+                asset_key=asset_key,
+                confidence=confidence,
+                source=source,
+            )
+            self.session.add(alias)
+            await self._flush()
+            await self._refresh(alias)
+            return alias
+
+        alias.route_hint = route_hint
+        alias.confidence = confidence
+        alias.source = source
+        self.session.add(alias)
+        await self._flush()
+        await self._refresh(alias)
+        return alias
+
     async def create_execution_request(
         self,
         *,
@@ -534,6 +640,29 @@ class SqlControlPlaneRepository:
                     page_title=page_title,
                 )
 
+        needs_recrawl = False
+        needs_recompile = False
+        extracted_recrawl: bool | None = None
+        extracted_recompile: bool | None = None
+        if artifacts:
+            extracted_recrawl, extracted_recompile = _extract_probe_hints(artifacts)
+            if extracted_recrawl is not None:
+                needs_recrawl = extracted_recrawl
+            if extracted_recompile is not None:
+                needs_recompile = extracted_recompile
+
+        if (
+            extracted_recrawl is None
+            and extracted_recompile is None
+            and plan is not None
+            and execution_summary is not None
+            and execution_summary.status == "passed"
+            and plan.execution_track == "realtime_probe"
+            and plan.resolved_page_asset_id is None
+        ):
+            needs_recrawl = True
+            needs_recompile = True
+
         return CheckResultView(
             request_id=request.id,
             plan_id=plan.id if plan else None,
@@ -551,8 +680,8 @@ class SqlControlPlaneRepository:
                 )
                 for artifact in artifacts
             ],
-            needs_recrawl=False,
-            needs_recompile=False,
+            needs_recrawl=needs_recrawl,
+            needs_recompile=needs_recompile,
         )
 
     async def get_page_check_run_target(
@@ -662,3 +791,31 @@ def _get_payload_text(payload: dict[str, object] | None, key: str) -> str | None
 def _normalize_enum_value(value: object) -> str:
     normalized = getattr(value, "value", value)
     return str(normalized)
+
+
+def _extract_probe_hints(
+    artifacts: list[ExecutionArtifact],
+) -> tuple[bool | None, bool | None]:
+    needs_recrawl: bool | None = None
+    needs_recompile: bool | None = None
+    for artifact in artifacts:
+        if not artifact.payload:
+            continue
+        recrawl = _get_payload_bool(artifact.payload, "needs_recrawl")
+        recompile = _get_payload_bool(artifact.payload, "needs_recompile")
+        if recrawl is not None:
+            needs_recrawl = recrawl
+        if recompile is not None:
+            needs_recompile = recompile
+        if needs_recrawl is not None or needs_recompile is not None:
+            break
+    return needs_recrawl, needs_recompile
+
+
+def _get_payload_bool(payload: dict[str, object] | None, key: str) -> bool | None:
+    if not payload:
+        return None
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return None
