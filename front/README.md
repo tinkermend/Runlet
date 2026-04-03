@@ -1,48 +1,39 @@
-# Runlet Console
+# Runlet Console Frontend
 
-前端管理控制台，基于 React + Vite + TypeScript 构建。
+React + Vite + TypeScript management console for the Runlet platform.
 
-## 本地开发
+## Local Development
 
 ```bash
-cd front
+# Install dependencies
 npm install
+
+# Start dev server (proxies /api to localhost:8000)
 npm run dev
-```
 
-访问 http://localhost:5173
-
-## 测试
-
-```bash
+# Run tests
 npm test -- --run
-```
 
-## 构建
-
-```bash
+# Production build
 npm run build
 ```
 
-## 技术栈
+## Pages
 
-- React 18 + TypeScript
-- Vite 5
-- React Router v6
+- `/login` — Console login
+- `/dashboard` — Summary cards + recent exceptions
+- `/tasks` — Task list with status and last run info
+- `/tasks/new` — 3-step task creation wizard
+- `/tasks/:id` — Task detail with recent runs
+- `/assets` — Asset browser grouped by system → page
+- `/assets/:id` — Asset detail with raw facts (collapsible)
+- `/systems` — System list with onboarding status
+- `/systems/new` — System onboarding form
+- `/results` — Paginated run results
+
+## Tech Stack
+
+- React 18 + React Router v6
 - TanStack Query v5
-- Lucide React (图标)
-- Vitest + Testing Library (测试)
-
-## 目录结构
-
-```
-src/
-  app/
-    providers/      # React context providers
-    routes/         # 路由守卫组件
-    app-shell.tsx   # 主布局（侧边栏 + 内容区）
-    router.tsx      # 路由配置
-  test/
-    setup.ts        # 测试环境初始化
-  main.tsx          # 应用入口
-```
+- Lucide React icons
+- Vitest + Testing Library
