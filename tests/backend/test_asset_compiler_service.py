@@ -343,8 +343,10 @@ def test_compile_snapshot_result_exposes_reconciliation_counts():
     assert "checks_retired" in CompileSnapshotResult.__dataclass_fields__
     assert "alias_disable_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_pause_decision_count" in CompileSnapshotResult.__dataclass_fields__
+    assert "published_job_resume_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "alias_ids_to_disable" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_ids_to_pause" in CompileSnapshotResult.__dataclass_fields__
+    assert "published_job_ids_to_resume" in CompileSnapshotResult.__dataclass_fields__
     assert "retire_reasons" in CompileSnapshotResult.__dataclass_fields__
 
 
@@ -764,18 +766,44 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
     db_session.add(module_plan)
     db_session.flush()
 
-    db_session.add(
-        PageCheck(
-            page_asset_id=retired_asset.id,
-            check_code="page_open",
-            goal="page_open",
-            lifecycle_status=AssetLifecycleStatus.RETIRED_MISSING,
-            retired_reason="missing_page",
-            retired_by_snapshot_id=retired_snapshot.id,
-            assertion_schema={"assertion": "page_ready"},
-            module_plan_id=module_plan.id,
-        )
+    retired_page_open_check = PageCheck(
+        page_asset_id=retired_asset.id,
+        check_code="page_open",
+        goal="page_open",
+        lifecycle_status=AssetLifecycleStatus.RETIRED_MISSING,
+        retired_reason="missing_page",
+        retired_by_snapshot_id=retired_snapshot.id,
+        assertion_schema={"assertion": "page_ready"},
+        module_plan_id=module_plan.id,
     )
+    db_session.add(retired_page_open_check)
+    db_session.flush()
+    retired_alias = IntentAlias(
+        system_alias=seeded_system.code,
+        page_alias=retired_page.page_title,
+        check_alias=retired_page_open_check.check_code,
+        route_hint=retired_page.route_path,
+        asset_key=retired_asset.asset_key,
+        confidence=1.0,
+        source="asset_compiler",
+        is_active=False,
+        disabled_reason="retired_missing",
+        disabled_by_snapshot_id=retired_snapshot.id,
+    )
+    db_session.add(retired_alias)
+    paused_job = PublishedJob(
+        job_key="erp_users_page_open",
+        page_check_id=retired_page_open_check.id,
+        asset_version=retired_asset.asset_version,
+        runtime_policy="published",
+        schedule_expr="*/5 * * * *",
+        state=PublishedJobState.PAUSED,
+        pause_reason="asset_retired_missing",
+        paused_by_snapshot_id=retired_snapshot.id,
+        paused_by_asset_id=retired_asset.id,
+        paused_by_page_check_id=retired_page_open_check.id,
+    )
+    db_session.add(paused_job)
     db_session.commit()
 
     current_snapshot = _create_snapshot(db_session, seeded_system, quality_score=0.95, degraded=False)
@@ -792,6 +820,7 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
 
     result = await asset_compiler_service.compile_snapshot(snapshot_id=current_snapshot.id)
     db_session.refresh(retired_asset)
+    db_session.refresh(retired_alias)
     restored_page_open_check = db_session.exec(
         select(PageCheck)
         .where(PageCheck.page_asset_id == retired_asset.id)
@@ -807,3 +836,9 @@ async def test_compile_snapshot_reactivates_retired_asset_when_high_quality_full
     assert restored_page_open_check.retired_reason is None
     assert restored_page_open_check.retired_at is None
     assert restored_page_open_check.retired_by_snapshot_id is None
+    assert retired_alias.is_active is True
+    assert retired_alias.disabled_reason is None
+    assert retired_alias.disabled_at is None
+    assert retired_alias.disabled_by_snapshot_id is None
+    assert result.published_job_resume_decision_count == 1
+    assert result.published_job_ids_to_resume == [paused_job.id]

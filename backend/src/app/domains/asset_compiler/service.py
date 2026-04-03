@@ -80,6 +80,7 @@ class AssetCompilerService:
         page_asset_ids: list[UUID] = []
         page_check_ids: list[UUID] = []
         drift_states: list[AssetStatus] = []
+        reactivated_check_ids: list[UUID] = []
 
         high_quality_full_snapshot = _is_high_quality_full_snapshot(snapshot)
         active_assets_before = await self._load_active_page_assets(system_id=system.id)
@@ -230,11 +231,13 @@ class AssetCompilerService:
                     steps_json=module_plan.steps_json,
                     assertion_schema=check_definition.assertion_schema,
                 )
-                if high_quality_full_snapshot and page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE:
+                check_was_retired = page_check.lifecycle_status != AssetLifecycleStatus.ACTIVE
+                if high_quality_full_snapshot and check_was_retired:
                     page_check.lifecycle_status = AssetLifecycleStatus.ACTIVE
                     page_check.retired_reason = None
                     page_check.retired_at = None
                     page_check.retired_by_snapshot_id = None
+                    reactivated_check_ids.append(page_check.id)
 
                 page_check_ids.append(page_check.id)
                 if created_check:
@@ -247,6 +250,7 @@ class AssetCompilerService:
                     page=page,
                     asset_key=page_asset.asset_key,
                     check_code=check_definition.check_code,
+                    reactivate_existing_alias=high_quality_full_snapshot,
                 )
 
             page_asset_ids.append(page_asset.id)
@@ -369,6 +373,14 @@ class AssetCompilerService:
             page_check_ids=retired_check_ids,
         )
         published_job_ids_to_pause = [row.id for row in published_jobs_to_pause]
+        retired_check_id_set = set(retired_check_ids)
+        resume_check_ids = [
+            check_id for check_id in _dedupe_uuids(reactivated_check_ids) if check_id not in retired_check_id_set
+        ]
+        published_jobs_to_resume = await self._query_published_jobs_to_resume(
+            page_check_ids=resume_check_ids,
+        )
+        published_job_ids_to_resume = [row.id for row in published_jobs_to_resume]
 
         published_job_ids_by_check_id: dict[UUID, list[UUID]] = defaultdict(list)
         for row in published_jobs_to_pause:
@@ -424,8 +436,10 @@ class AssetCompilerService:
             check_ids=page_check_ids,
             alias_disable_decision_count=len(alias_ids_to_disable),
             published_job_pause_decision_count=len(published_job_ids_to_pause),
+            published_job_resume_decision_count=len(published_job_ids_to_resume),
             alias_ids_to_disable=alias_ids_to_disable,
             published_job_ids_to_pause=published_job_ids_to_pause,
+            published_job_ids_to_resume=published_job_ids_to_resume,
             retire_reasons=retire_reason_payloads,
         )
 
@@ -530,6 +544,16 @@ class AssetCompilerService:
             .order_by(PublishedJob.id)
         )
 
+    async def _query_published_jobs_to_resume(self, *, page_check_ids: list[UUID]) -> list[PublishedJob]:
+        if not page_check_ids:
+            return []
+        return await self._exec_all(
+            select(PublishedJob)
+            .where(PublishedJob.page_check_id.in_(page_check_ids))
+            .where(PublishedJob.state == PublishedJobState.PAUSED)
+            .order_by(PublishedJob.id)
+        )
+
     async def _ensure_intent_aliases(
         self,
         *,
@@ -537,6 +561,7 @@ class AssetCompilerService:
         page: Page,
         asset_key: str,
         check_code: str,
+        reactivate_existing_alias: bool = False,
     ) -> None:
         candidates = [
             (system.code, page.page_title or page.route_path, page.route_path),
@@ -554,6 +579,11 @@ class AssetCompilerService:
                 existing.route_hint = route_hint
                 existing.confidence = 1.0
                 existing.source = "asset_compiler"
+                if reactivate_existing_alias:
+                    existing.is_active = True
+                    existing.disabled_reason = None
+                    existing.disabled_at = None
+                    existing.disabled_by_snapshot_id = None
                 continue
 
             self.session.add(
