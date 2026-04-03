@@ -315,9 +315,11 @@ def control_plane_service(db_session: Session, scheduler_registry):
 @pytest.fixture
 def client(control_plane_service, db_session):
     from app.api.deps import get_control_plane_service
+    from app.infrastructure.db.console_session import get_console_db
 
     app = create_app()
     app.dependency_overrides[get_control_plane_service] = lambda: control_plane_service
+    app.dependency_overrides[get_console_db] = lambda: db_session
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
