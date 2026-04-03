@@ -48,6 +48,23 @@ def test_get_check_request_returns_status(client, accepted_request, db_session):
     assert response.json()["execution_track"] == "precompiled"
 
 
+def test_get_check_request_result_returns_empty_summary_when_not_executed(
+    client,
+    accepted_request,
+):
+    response = client.get(f"/api/v1/check-requests/{accepted_request.request_id}/result")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_id"] == str(accepted_request.request_id)
+    assert body["plan_id"] == str(accepted_request.plan_id)
+    assert body["execution_track"] == "precompiled"
+    assert body["execution_summary"] is None
+    assert body["artifacts"] == []
+    assert body["needs_recrawl"] is False
+    assert body["needs_recompile"] is False
+
+
 def test_get_check_request_returns_404_for_missing_request(client):
     response = client.get("/api/v1/check-requests/00000000-0000-0000-0000-000000000001")
 

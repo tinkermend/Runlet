@@ -40,6 +40,7 @@ from app.domains.control_plane.schemas import (
     UpdateSystemAuthPolicy,
     UpdateSystemCrawlPolicy,
 )
+from app.domains.runner_service.result_views import CheckResultView
 from app.domains.runner_service.script_renderer import RenderScriptResult
 from app.domains.runner_service.scheduler import (
     CreatePublishedJobRequest,
@@ -114,6 +115,12 @@ class ControlPlaneService:
         if status is None:
             raise HTTPException(status_code=404, detail="check request not found")
         return status
+
+    async def get_check_request_result(self, request_id: UUID) -> CheckResultView:
+        result = await self.repository.get_check_request_result_view(request_id=request_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="check request not found")
+        return result
 
     async def run_page_check(
         self,

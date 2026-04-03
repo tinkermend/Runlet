@@ -5,7 +5,7 @@ from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, func, select
+from sqlmodel import Session, desc, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.domains.control_plane.runtime_policies import (
@@ -21,7 +21,17 @@ from app.domains.control_plane.schemas import (
 )
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
-from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
+from app.domains.runner_service.result_views import (
+    ArtifactItem,
+    CheckResultView,
+    ExecutionSummary,
+)
+from app.infrastructure.db.models.execution import (
+    ExecutionArtifact,
+    ExecutionPlan,
+    ExecutionRequest,
+    ExecutionRun,
+)
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.infrastructure.db.models.systems import System
@@ -107,6 +117,12 @@ class ControlPlaneRepository(Protocol):
         *,
         request_id: UUID,
     ) -> CheckRequestStatus | None: ...
+
+    async def get_check_request_result_view(
+        self,
+        *,
+        request_id: UUID,
+    ) -> CheckResultView | None: ...
 
     async def get_page_check_run_target(
         self,
@@ -479,6 +495,66 @@ class SqlControlPlaneRepository:
             status=queued_job.status if queued_job else "accepted",
         )
 
+    async def get_check_request_result_view(
+        self,
+        *,
+        request_id: UUID,
+    ) -> CheckResultView | None:
+        request = await self._get(ExecutionRequest, request_id)
+        if request is None:
+            return None
+
+        plan = await self._exec_first(
+            select(ExecutionPlan).where(ExecutionPlan.execution_request_id == request_id)
+        )
+        artifacts: list[ExecutionArtifact] = []
+        execution_summary: ExecutionSummary | None = None
+        if plan is not None:
+            execution_run = await self._exec_first(
+                select(ExecutionRun)
+                .where(ExecutionRun.execution_plan_id == plan.id)
+                .order_by(desc(ExecutionRun.id))
+            )
+            if execution_run is not None:
+                artifacts = await self._exec_all(
+                    select(ExecutionArtifact)
+                    .where(ExecutionArtifact.execution_run_id == execution_run.id)
+                    .order_by(ExecutionArtifact.created_at)
+                )
+                final_url, page_title = _extract_page_context(artifacts)
+                execution_summary = ExecutionSummary(
+                    execution_run_id=execution_run.id,
+                    status=execution_run.status,
+                    auth_status=execution_run.auth_status,
+                    duration_ms=execution_run.duration_ms,
+                    failure_category=execution_run.failure_category,
+                    asset_version=execution_run.asset_version,
+                    snapshot_version=execution_run.snapshot_version,
+                    final_url=final_url,
+                    page_title=page_title,
+                )
+
+        return CheckResultView(
+            request_id=request.id,
+            plan_id=plan.id if plan else None,
+            page_check_id=plan.resolved_page_check_id if plan else None,
+            execution_track=_normalize_public_execution_track(plan.execution_track) if plan else None,
+            execution_summary=execution_summary,
+            artifacts=[
+                ArtifactItem(
+                    id=artifact.id,
+                    artifact_kind=artifact.artifact_kind,
+                    result_status=_normalize_enum_value(artifact.result_status),
+                    artifact_uri=artifact.artifact_uri,
+                    payload=artifact.payload,
+                    created_at=artifact.created_at,
+                )
+                for artifact in artifacts
+            ],
+            needs_recrawl=False,
+            needs_recompile=False,
+        )
+
     async def get_page_check_run_target(
         self,
         *,
@@ -553,3 +629,36 @@ def _normalize_public_execution_track(track: str | None) -> str | None:
     if track == "realtime":
         return "realtime_probe"
     return track
+
+
+def _extract_page_context(
+    artifacts: list[ExecutionArtifact],
+) -> tuple[str | None, str | None]:
+    for artifact in artifacts:
+        if artifact.artifact_kind == "module_execution":
+            final_url = _get_payload_text(artifact.payload, "final_url")
+            page_title = _get_payload_text(artifact.payload, "page_title")
+            if final_url is not None or page_title is not None:
+                return final_url, page_title
+
+    for artifact in artifacts:
+        final_url = _get_payload_text(artifact.payload, "final_url")
+        page_title = _get_payload_text(artifact.payload, "page_title")
+        if final_url is not None or page_title is not None:
+            return final_url, page_title
+
+    return None, None
+
+
+def _get_payload_text(payload: dict[str, object] | None, key: str) -> str | None:
+    if not payload:
+        return None
+    value = payload.get(key)
+    if isinstance(value, str):
+        return value or None
+    return None
+
+
+def _normalize_enum_value(value: object) -> str:
+    normalized = getattr(value, "value", value)
+    return str(normalized)

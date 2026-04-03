@@ -10,6 +10,7 @@ from app.domains.control_plane.schemas import (
     CheckRequestStatus,
     CreateCheckRequest,
 )
+from app.domains.runner_service.result_views import CheckResultView
 
 
 router = APIRouter(prefix="/check-requests", tags=["check-requests"])
@@ -29,3 +30,11 @@ async def get_check_request(
     service: ControlPlaneServiceDep,
 ) -> CheckRequestStatus:
     return await service.get_check_request_status(request_id)
+
+
+@router.get("/{request_id}/result", response_model=CheckResultView)
+async def get_check_request_result(
+    request_id: UUID,
+    service: ControlPlaneServiceDep,
+) -> CheckResultView:
+    return await service.get_check_request_result(request_id)
