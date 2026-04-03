@@ -1,12 +1,9 @@
 import { Navigate, Outlet } from "react-router-dom";
-
-// Simple auth check - will be replaced by auth provider in Task 3
-function isAuthenticated(): boolean {
-  return document.cookie.includes("console_session=");
-}
+import { useAuth } from "../providers/auth-provider";
 
 export function ProtectedRoute() {
-  if (!isAuthenticated()) {
+  const { isAuthenticated } = useAuth();
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
   return <Outlet />;

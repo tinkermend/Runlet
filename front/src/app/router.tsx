@@ -1,11 +1,9 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "./app-shell";
 import { ProtectedRoute } from "./routes/protected-route";
+import { LoginPage } from "../features/auth/pages/login-page";
 
 // Placeholder pages - will be replaced in later tasks
-function LoginPage() {
-  return <h1>登录 Runlet 平台</h1>;
-}
 function DashboardPage() {
   return <h1>Dashboard</h1>;
 }

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, Navigate } from "react-router-dom";
+import { AuthProvider } from "./providers/auth-provider";
 import { ProtectedRoute } from "./routes/protected-route";
 
 // Minimal login page stub matching the real one
@@ -10,12 +11,14 @@ function LoginPage() {
 it("redirects anonymous users to /login", async () => {
   render(
     <MemoryRouter initialEntries={["/dashboard"]}>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route element={<ProtectedRoute />}>
-          <Route path="/dashboard" element={<Navigate to="/dashboard" replace />} />
-        </Route>
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route element={<ProtectedRoute />}>
+            <Route path="/dashboard" element={<Navigate to="/dashboard" replace />} />
+          </Route>
+        </Routes>
+      </AuthProvider>
     </MemoryRouter>,
   );
   expect(
