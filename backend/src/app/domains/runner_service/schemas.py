@@ -34,7 +34,7 @@ class ModuleExecutionResult(BaseModel):
 
 
 class RunPageCheckResult(BaseModel):
-    page_check_id: UUID
+    page_check_id: UUID | None = None
     execution_run_id: UUID
     status: RunnerRunStatus
     auth_status: AuthInjectStatus

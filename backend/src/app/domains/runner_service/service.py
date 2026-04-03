@@ -204,7 +204,7 @@ class RunnerService:
         execution_plan = await self._get(ExecutionPlan, execution_plan_id)
         if execution_plan is None:
             raise ValueError(f"execution plan {execution_plan_id} not found")
-        if execution_plan.execution_track not in {"realtime", "realtime_probe"}:
+        if execution_plan.execution_track != "realtime_probe":
             raise ValueError(f"execution plan {execution_plan_id} is not realtime_probe")
 
         execution_request = await self._get(ExecutionRequest, execution_plan.execution_request_id)
@@ -365,7 +365,7 @@ class RunnerService:
             await self._refresh(persisted_artifact)
 
         return RunPageCheckResult(
-            page_check_id=self._result_page_check_id(execution_plan=execution_plan),
+            page_check_id=execution_plan.resolved_page_check_id,
             execution_run_id=execution_run.id,
             status=execution_result.status,
             auth_status=execution_result.auth_status,
@@ -433,7 +433,7 @@ class RunnerService:
         await self._refresh(artifact)
 
         return RunPageCheckResult(
-            page_check_id=self._result_page_check_id(execution_plan=execution_plan),
+            page_check_id=execution_plan.resolved_page_check_id,
             execution_run_id=execution_run.id,
             status=RunnerRunStatus.FAILED,
             auth_status=AuthInjectStatus.BLOCKED,
@@ -468,12 +468,6 @@ class RunnerService:
                 "params": {"route_path": route_path},
             },
         ]
-
-    @staticmethod
-    def _result_page_check_id(*, execution_plan: ExecutionPlan) -> UUID:
-        if execution_plan.resolved_page_check_id is not None:
-            return execution_plan.resolved_page_check_id
-        return execution_plan.id
 
     async def _resolve_execution_plan(
         self,

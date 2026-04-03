@@ -346,6 +346,7 @@ async def test_run_check_job_executes_realtime_probe_when_track_is_realtime_prob
     assert refreshed.status == "completed"
     assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_job.id)
     assert refreshed.result_payload["execution_track"] == "realtime_probe"
+    assert refreshed.result_payload["page_check_id"] is None
 
 
 @pytest.mark.anyio

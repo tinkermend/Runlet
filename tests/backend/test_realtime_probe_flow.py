@@ -71,6 +71,34 @@ def realtime_probe_execution_plan_id(db_session, seeded_system):
 
 
 @pytest.fixture
+def legacy_realtime_execution_plan_id(db_session, seeded_system):
+    request = ExecutionRequest(
+        request_source="worker_test",
+        system_hint=seeded_system.code,
+        page_hint="用户管理",
+        check_goal="page_open",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(request)
+    db_session.flush()
+
+    plan = ExecutionPlan(
+        execution_request_id=request.id,
+        resolved_system_id=seeded_system.id,
+        resolved_page_asset_id=None,
+        resolved_page_check_id=None,
+        execution_track="realtime",
+        auth_policy="server_injected",
+        module_plan_id=None,
+    )
+    db_session.add(plan)
+    db_session.commit()
+    db_session.refresh(plan)
+    return plan.id
+
+
+@pytest.fixture
 def realtime_probe_runner_service(db_session, seeded_auth_state):
     from app.domains.runner_service.service import RunnerService
 
@@ -90,6 +118,18 @@ async def test_realtime_probe_returns_failure_category_when_page_cannot_be_resol
     execution_run = db_session.get(ExecutionRun, result.execution_run_id)
 
     assert result.status == "failed"
+    assert result.page_check_id is None
     assert result.failure_category == "page_or_menu_not_resolved"
     assert execution_run is not None
     assert execution_run.failure_category == "page_or_menu_not_resolved"
+
+
+@pytest.mark.anyio
+async def test_realtime_probe_rejects_legacy_realtime_execution_track(
+    realtime_probe_runner_service,
+    legacy_realtime_execution_plan_id,
+):
+    with pytest.raises(ValueError, match="is not realtime_probe"):
+        await realtime_probe_runner_service.run_realtime_probe(
+            execution_plan_id=legacy_realtime_execution_plan_id,
+        )
