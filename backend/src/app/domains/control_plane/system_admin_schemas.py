@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field
 from pydantic import field_validator
 
 
-def _validate_required_text(value: str) -> str:
+def _validate_required_text(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("value must be a string")
     normalized = value.strip()
     if not normalized:
         raise ValueError("value must not be empty")

@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 修复 Web 系统清单必填文本校验的类型健壮性：`required-text` helper 在收到非字符串输入时改为抛出 `ValueError`，避免 `mode="before"` 阶段出现 `AttributeError`；并新增回归测试锁定为 `ValidationError` 失败语义。
 - 收紧 Web 系统清单 DTO 合约：`system/credential/auth_policy/crawl_policy/publish` 关键必填文本字段新增空白拒绝校验，并补充凭据解密兼容回归测试（`enc:` 与不含当前 secret 前缀的 `enc-b64:` 均可解密）。
 - 新增 Web 系统清单与本地凭据加密契约：补充 `WebSystemManifest` 嵌套 DTO、`credential_crypto_secret` 配置项，以及 `LocalCredentialCrypto.encrypt/decrypt`（兼容既有 `enc:` fixture 与旧 `enc-b64` 解密），并新增对应测试覆盖 manifest 解析与加解密回环。
 - 新增 Web 测试系统接入与删除实施计划，拆分 YAML 清单建模、`.env` 密钥加密、后端系统治理服务、同步正式链路编排、彻底删除与 CLI 命令接线五个任务，为后续 `openweb web-system add/remove` 落地提供可执行步骤。

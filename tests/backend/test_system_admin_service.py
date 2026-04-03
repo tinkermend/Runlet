@@ -121,3 +121,40 @@ def test_local_credential_crypto_decrypt_supports_legacy_b64_without_secret_pref
     crypto = LocalCredentialCrypto(secret="test-secret")
 
     assert crypto.decrypt("enc-b64:bGVnYWN5LWFkbWlu") == "legacy-admin"
+
+
+def test_web_system_manifest_rejects_non_string_required_text_with_validation_error() -> None:
+    payload = {
+        "system": {
+            "code": 123,
+            "name": "hotgo",
+            "base_url": "https://hotgo.facms.cn",
+            "framework_type": "react",
+        },
+        "credential": {
+            "login_url": "https://hotgo.facms.cn/admin#/login?redirect=/dashboard",
+            "username": "admin",
+            "password": "123456",
+            "auth_type": "image_captcha",
+            "selectors": {"username": "input[name=username]"},
+        },
+        "auth_policy": {
+            "enabled": True,
+            "schedule_expr": "*/30 * * * *",
+            "auth_mode": "image_captcha",
+            "captcha_provider": "ddddocr",
+        },
+        "crawl_policy": {
+            "enabled": True,
+            "schedule_expr": "0 */2 * * *",
+            "crawl_scope": "full",
+        },
+        "publish": {
+            "check_goal": "table_render",
+            "schedule_expr": "*/30 * * * *",
+            "enabled": True,
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        WebSystemManifest.model_validate(payload)
