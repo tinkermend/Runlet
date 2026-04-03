@@ -158,11 +158,11 @@ class AssetReconciliationAudit(BaseModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
-    retired_asset_ids: list[str] = Field(
+    retired_asset_ids: list[UUID] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
-    retired_check_ids: list[str] = Field(
+    retired_check_ids: list[UUID] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
@@ -170,7 +170,7 @@ class AssetReconciliationAudit(BaseModel, table=True):
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
-    paused_published_job_ids: list[str] = Field(
+    paused_published_job_ids: list[UUID] = Field(
         default_factory=list,
         sa_column=sa.Column(json_type, nullable=False),
     )
