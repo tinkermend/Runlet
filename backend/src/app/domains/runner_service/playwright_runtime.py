@@ -103,6 +103,89 @@ class PlaywrightRunnerRuntime:
             raise RuntimeError("open_create_modal did not change dialog state")
         return True
 
+    async def enter_state(self, *, state_signature: str) -> bool:
+        normalized = str(state_signature or "").strip().lower()
+        if not normalized:
+            return True
+        if "modal=" not in normalized:
+            return True
+        page = self._require_page()
+        dialogs = page.get_by_role("dialog")
+        if await dialogs.count() > 0 and await dialogs.first.is_visible():
+            return True
+        try:
+            return await self.open_create_modal()
+        except Exception:
+            return False
+
+    async def resolve_locator_bundle(
+        self,
+        *,
+        locator_bundle: dict[str, object],
+        context_constraints: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        page = self._require_page()
+        candidates = locator_bundle.get("candidates") if isinstance(locator_bundle, dict) else None
+        if not isinstance(candidates, list) or not candidates:
+            return _build_locator_failure(failure_category="locator_all_failed")
+
+        context_mismatch = False
+        ambiguous_match = False
+        any_context_matched = False
+        base_constraints = context_constraints if isinstance(context_constraints, dict) else {}
+
+        for index, candidate in enumerate(candidates, start=1):
+            if not isinstance(candidate, dict):
+                continue
+            selector = str(candidate.get("selector") or "").strip()
+            if not selector:
+                continue
+            strategy_type = str(candidate.get("strategy_type") or "").strip() or None
+            rank = _coerce_positive_int(candidate.get("fallback_rank")) or index
+            merged_constraints = dict(base_constraints)
+            candidate_constraints = candidate.get("context_constraints")
+            if isinstance(candidate_constraints, dict):
+                merged_constraints.update(candidate_constraints)
+            if not await self._matches_context_constraints(page=page, constraints=merged_constraints):
+                context_mismatch = True
+                continue
+            any_context_matched = True
+
+            resolved = page.locator(selector)
+            count = await resolved.count()
+            if count == 1:
+                target = resolved.first
+                await target.wait_for(state="visible")
+                return {
+                    "matched": True,
+                    "matched_rank": rank,
+                    "strategy_type": strategy_type,
+                    "failure_category": None,
+                    "context_mismatch": context_mismatch,
+                    "ambiguous_match": ambiguous_match,
+                }
+            if count > 1:
+                ambiguous_match = True
+                continue
+
+        if not any_context_matched and context_mismatch:
+            return _build_locator_failure(
+                failure_category="context_mismatch",
+                context_mismatch=True,
+                ambiguous_match=ambiguous_match,
+            )
+        if ambiguous_match:
+            return _build_locator_failure(
+                failure_category="ambiguous_match",
+                context_mismatch=context_mismatch,
+                ambiguous_match=True,
+            )
+        return _build_locator_failure(
+            failure_category="locator_all_failed",
+            context_mismatch=context_mismatch,
+            ambiguous_match=False,
+        )
+
     async def probe_page(self) -> dict[str, object]:
         page = self._require_page()
         return {
@@ -162,6 +245,53 @@ class PlaywrightRunnerRuntime:
         global_menuitem = page.get_by_role("menuitem", name=label, exact=True).first
         await global_menuitem.wait_for(state="visible")
 
+    async def _matches_context_constraints(self, *, page, constraints: dict[str, object]) -> bool:
+        if not constraints:
+            return True
+
+        dialog_count = await page.get_by_role("dialog").count()
+        entry_type = str(constraints.get("entry_type") or "").strip().lower()
+        if entry_type in {"open_modal", "modal_open"} and dialog_count == 0:
+            return False
+
+        modal_title = str(constraints.get("modal_title") or "").strip()
+        if modal_title:
+            if await page.get_by_role("dialog", name=modal_title, exact=True).count() == 0:
+                return False
+
+        requires_dialog = constraints.get("requires_dialog")
+        if isinstance(requires_dialog, bool):
+            if requires_dialog and dialog_count == 0:
+                return False
+            if not requires_dialog and dialog_count > 0:
+                return False
+
+        return True
+
 
 def _route_pattern(route_path: str) -> str:
     return f".*{re.escape(route_path)}"
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
+
+def _build_locator_failure(
+    *,
+    failure_category: str,
+    context_mismatch: bool = False,
+    ambiguous_match: bool = False,
+) -> dict[str, object]:
+    return {
+        "matched": False,
+        "matched_rank": None,
+        "strategy_type": None,
+        "failure_category": failure_category,
+        "context_mismatch": context_mismatch,
+        "ambiguous_match": ambiguous_match,
+    }

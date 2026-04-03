@@ -137,6 +137,7 @@ class RunnerService:
         execution_run.duration_ms = max(0, int((utcnow() - started_at).total_seconds() * 1000))
         failure_category = self._resolve_failure_category(execution_result=execution_result)
         execution_run.failure_category = failure_category.value if failure_category is not None else None
+        locator_telemetry = self._build_locator_telemetry(step_results=execution_result.step_results)
 
         artifact = ExecutionArtifact(
             execution_run_id=execution_run.id,
@@ -154,6 +155,7 @@ class RunnerService:
                 "final_url": final_url,
                 "page_title": page_title,
                 "page_probe": page_probe,
+                "locator_telemetry": locator_telemetry,
             },
         )
         self.session.add(artifact)
@@ -312,6 +314,7 @@ class RunnerService:
         execution_run.duration_ms = max(0, int((utcnow() - started_at).total_seconds() * 1000))
         failure_category = self._resolve_failure_category(execution_result=execution_result)
         execution_run.failure_category = failure_category.value if failure_category is not None else None
+        locator_telemetry = self._build_locator_telemetry(step_results=execution_result.step_results)
 
         artifact = ExecutionArtifact(
             execution_run_id=execution_run.id,
@@ -336,6 +339,7 @@ class RunnerService:
                 "final_url": final_url,
                 "page_title": page_title,
                 "page_probe": page_probe,
+                "locator_telemetry": locator_telemetry,
                 "needs_recrawl": execution_plan.resolved_page_asset_id is None,
                 "needs_recompile": execution_result.status == RunnerRunStatus.PASSED,
             },
@@ -446,6 +450,7 @@ class RunnerService:
                 "final_url": None,
                 "page_title": None,
                 "page_probe": None,
+                "locator_telemetry": self._build_locator_telemetry(step_results=step_results),
             },
         )
         self.session.add(artifact)
@@ -644,6 +649,37 @@ class RunnerService:
             await result
 
     @staticmethod
+    def _build_locator_telemetry(*, step_results: list[StepExecutionResult]) -> dict[str, object]:
+        telemetry = {
+            "locator_primary_hit": False,
+            "locator_fallback_used": False,
+            "matched_rank": None,
+            "context_mismatch": False,
+            "ambiguous_match": False,
+        }
+        for step in step_results:
+            if step.module != "locator.assert":
+                continue
+            output = step.output if isinstance(step.output, dict) else {}
+            matched_rank = _coerce_positive_int(output.get("matched_rank"))
+            if matched_rank is not None:
+                telemetry["matched_rank"] = matched_rank
+                if matched_rank == 1:
+                    telemetry["locator_primary_hit"] = True
+                if matched_rank > 1:
+                    telemetry["locator_fallback_used"] = True
+            failure_category = str(output.get("failure_category") or "").strip().lower()
+            if failure_category == "context_mismatch":
+                telemetry["context_mismatch"] = True
+            if failure_category == "ambiguous_match":
+                telemetry["ambiguous_match"] = True
+            if _coerce_bool(output.get("context_mismatch")):
+                telemetry["context_mismatch"] = True
+            if _coerce_bool(output.get("ambiguous_match")):
+                telemetry["ambiguous_match"] = True
+        return telemetry
+
+    @staticmethod
     def _persist_screenshot_artifact(*, execution_run_id: UUID, screenshot_bytes: bytes) -> Path:
         _SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
         screenshot_path = _SCREENSHOT_ROOT / f"{execution_run_id}.png"
@@ -656,6 +692,8 @@ def _failure_category_for_module(module: str) -> FailureCategory:
         return FailureCategory.NAVIGATION_FAILED
     if module == "page.wait_ready":
         return FailureCategory.PAGE_NOT_READY
+    if module == "locator.assert":
+        return FailureCategory.ASSERTION_FAILED
     if module.startswith("assert."):
         return FailureCategory.ASSERTION_FAILED
     return FailureCategory.RUNTIME_ERROR
@@ -673,3 +711,17 @@ def _retirement_failure_message(
     if normalized == AssetLifecycleStatus.ACTIVE.value:
         return None
     return ASSET_RETIRED_FAILURE_MESSAGE
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
+
+def _coerce_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return False

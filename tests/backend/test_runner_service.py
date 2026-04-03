@@ -51,11 +51,13 @@ class FakeRuntime:
         inject_outcome: bool = True,
         fail_action: str | None = None,
         raise_on_inject: bool = False,
+        locator_outcomes: list[dict[str, object]] | None = None,
     ) -> None:
         self.calls: list[dict[str, object]] = []
         self.inject_outcome = inject_outcome
         self.fail_action = fail_action
         self.raise_on_inject = raise_on_inject
+        self.locator_outcomes = list(locator_outcomes or [])
         self.final_url = "https://erp.example.com/users"
         self.page_title = "用户管理"
         self.screenshot_bytes = b"fake-screenshot-png"
@@ -105,6 +107,36 @@ class FakeRuntime:
         if self.fail_action == "open_create_modal":
             return False
         return True
+
+    async def enter_state(self, *, state_signature: str) -> bool:
+        self.calls.append({"action": "enter_state", "state_signature": state_signature})
+        if self.fail_action == "enter_state":
+            return False
+        return True
+
+    async def resolve_locator_bundle(
+        self,
+        *,
+        locator_bundle: dict[str, object],
+        context_constraints: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "action": "resolve_locator_bundle",
+                "locator_bundle": locator_bundle,
+                "context_constraints": context_constraints,
+            }
+        )
+        if self.locator_outcomes:
+            return dict(self.locator_outcomes.pop(0))
+        return {
+            "matched": True,
+            "matched_rank": 1,
+            "strategy_type": "semantic",
+            "failure_category": None,
+            "context_mismatch": False,
+            "ambiguous_match": False,
+        }
 
     async def capture_screenshot(self) -> bytes:
         self.calls.append({"action": "capture_screenshot"})
@@ -369,6 +401,54 @@ def seeded_open_create_modal_check(db_session, seeded_page_check, seeded_auth_st
 
 
 @pytest.fixture
+def seeded_locator_bundle_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="open_create_modal_state",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {"module": "state.enter", "params": {"state_signature": "users:modal=create"}},
+            {
+                "module": "locator.assert",
+                "params": {
+                    "assertion": "modal_visible",
+                    "expected_element_type": "dialog",
+                    "locator_bundle": {
+                        "candidates": [
+                            {
+                                "strategy_type": "semantic",
+                                "selector": "role=dialog[name='新增用户']",
+                                "context_constraints": {"entry_type": "open_modal"},
+                                "fallback_rank": 1,
+                            },
+                            {
+                                "strategy_type": "css",
+                                "selector": ".ant-modal:has-text('新增用户')",
+                                "context_constraints": {"entry_type": "open_modal"},
+                                "fallback_rank": 2,
+                            },
+                        ]
+                    },
+                },
+            },
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "open_create_modal_state"
+    seeded_page_check.goal = "open_create_modal"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
 def runner_service(db_session):
     from app.domains.runner_service.service import RunnerService
 
@@ -494,6 +574,135 @@ async def test_run_page_check_supports_open_create_modal(
 ):
     result = await runner_service.run_page_check(page_check_id=seeded_open_create_modal_check.id)
     assert result.status == "passed"
+
+
+@pytest.mark.anyio
+async def test_run_page_check_records_primary_locator_hit_telemetry(
+    db_session,
+    seeded_locator_bundle_check,
+):
+    from app.domains.runner_service.service import RunnerService
+
+    service = RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(
+            locator_outcomes=[
+                {
+                    "matched": True,
+                    "matched_rank": 1,
+                    "strategy_type": "semantic",
+                    "failure_category": None,
+                    "context_mismatch": False,
+                    "ambiguous_match": False,
+                }
+            ]
+        ),
+    )
+
+    result = await service.run_page_check(page_check_id=seeded_locator_bundle_check.id)
+
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
+    locator_step = result.step_results[-1]
+
+    assert result.status == "passed"
+    assert locator_step.module == "locator.assert"
+    assert locator_step.output is not None
+    assert locator_step.output["matched_rank"] == 1
+    assert locator_step.output["strategy_type"] == "semantic"
+    assert module_artifact.payload["locator_telemetry"]["locator_primary_hit"] is True
+    assert module_artifact.payload["locator_telemetry"]["locator_fallback_used"] is False
+    assert module_artifact.payload["locator_telemetry"]["matched_rank"] == 1
+    assert module_artifact.payload["locator_telemetry"]["context_mismatch"] is False
+    assert module_artifact.payload["locator_telemetry"]["ambiguous_match"] is False
+
+
+@pytest.mark.anyio
+async def test_run_page_check_records_fallback_locator_hit_telemetry(
+    db_session,
+    seeded_locator_bundle_check,
+):
+    from app.domains.runner_service.service import RunnerService
+
+    service = RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(
+            locator_outcomes=[
+                {
+                    "matched": True,
+                    "matched_rank": 2,
+                    "strategy_type": "css",
+                    "failure_category": None,
+                    "context_mismatch": False,
+                    "ambiguous_match": False,
+                }
+            ]
+        ),
+    )
+
+    result = await service.run_page_check(page_check_id=seeded_locator_bundle_check.id)
+
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
+    locator_step = result.step_results[-1]
+
+    assert result.status == "passed"
+    assert locator_step.module == "locator.assert"
+    assert locator_step.output is not None
+    assert locator_step.output["matched_rank"] == 2
+    assert locator_step.output["strategy_type"] == "css"
+    assert module_artifact.payload["locator_telemetry"]["locator_primary_hit"] is False
+    assert module_artifact.payload["locator_telemetry"]["locator_fallback_used"] is True
+    assert module_artifact.payload["locator_telemetry"]["matched_rank"] == 2
+    assert module_artifact.payload["locator_telemetry"]["context_mismatch"] is False
+    assert module_artifact.payload["locator_telemetry"]["ambiguous_match"] is False
+
+
+@pytest.mark.anyio
+async def test_run_page_check_records_context_mismatch_telemetry(
+    db_session,
+    seeded_locator_bundle_check,
+):
+    from app.domains.runner_service.service import RunnerService
+
+    service = RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(
+            locator_outcomes=[
+                {
+                    "matched": False,
+                    "matched_rank": None,
+                    "strategy_type": None,
+                    "failure_category": "context_mismatch",
+                    "context_mismatch": True,
+                    "ambiguous_match": False,
+                }
+            ]
+        ),
+    )
+
+    result = await service.run_page_check(page_check_id=seeded_locator_bundle_check.id)
+
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
+    failed_locator_step = module_artifact.payload["step_results"][-1]
+
+    assert result.status == "failed"
+    assert result.failure_category == FailureCategory.ASSERTION_FAILED
+    assert failed_locator_step["module"] == "locator.assert"
+    assert failed_locator_step["output"]["failure_category"] == "context_mismatch"
+    assert failed_locator_step["output"]["context_mismatch"] is True
+    assert module_artifact.payload["locator_telemetry"]["locator_primary_hit"] is False
+    assert module_artifact.payload["locator_telemetry"]["locator_fallback_used"] is False
+    assert module_artifact.payload["locator_telemetry"]["matched_rank"] is None
+    assert module_artifact.payload["locator_telemetry"]["context_mismatch"] is True
+    assert module_artifact.payload["locator_telemetry"]["ambiguous_match"] is False
 
 
 @pytest.mark.anyio
