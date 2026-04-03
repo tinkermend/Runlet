@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -51,3 +52,46 @@ class PaginatedResults(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TaskItem(BaseModel):
+    id: str
+    name: str
+    system_name: str
+    status: str  # active / disabled
+    last_run_at: Optional[datetime] = None
+    last_run_status: Optional[str] = None
+    schedule_preset: str  # hourly / daily / manual
+
+
+class TaskCreateRequest(BaseModel):
+    name: str
+    system_id: UUID
+    check_types: list[str]  # e.g. ["menu_completeness", "element_existence"]
+    schedule_preset: str = "manual"  # hourly / daily / manual
+    timeout_seconds: int = 30
+
+
+class TaskCreated(BaseModel):
+    id: str
+    name: str
+
+
+class TaskDetail(BaseModel):
+    id: str
+    name: str
+    system_name: str
+    status: str
+    schedule_preset: str
+    check_types: list[str]
+    recent_runs: list[RunResultItem]  # last 10 runs
+
+
+class WizardOptions(BaseModel):
+    systems: list[SystemItem]
+    check_types: list[str]
+
+
+class TriggerResponse(BaseModel):
+    ok: bool
+    run_id: Optional[str] = None
