@@ -513,7 +513,7 @@ class SqlControlPlaneRepository:
             execution_run = await self._exec_first(
                 select(ExecutionRun)
                 .where(ExecutionRun.execution_plan_id == plan.id)
-                .order_by(desc(ExecutionRun.id))
+                .order_by(ExecutionRun.created_at.desc(), ExecutionRun.id.desc())
             )
             if execution_run is not None:
                 artifacts = await self._exec_all(
