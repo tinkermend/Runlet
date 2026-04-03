@@ -1,5 +1,6 @@
 import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { Zap, AlertCircle } from "lucide-react";
 import { useAuth } from "../../../app/providers/auth-provider";
 
 export function LoginPage() {
@@ -35,119 +36,108 @@ export function LoginPage() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#020617",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <div
-        style={{
-          background: "#0F172A",
-          border: "1px solid #334155",
-          borderRadius: 8,
-          padding: 32,
-          width: 360,
-        }}
-      >
-        <h1
-          style={{
-            color: "#F8FAFC",
-            fontSize: 20,
-            fontWeight: 700,
-            marginBottom: 24,
-            textAlign: "center",
-          }}
-        >
-          登录 Runlet 平台
-        </h1>
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: 16 }}>
-            <label
-              htmlFor="username"
-              style={{ display: "block", color: "#94A3B8", fontSize: 14, marginBottom: 6 }}
-            >
-              用户名
-            </label>
-            <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                background: "#1E293B",
-                border: "1px solid #334155",
-                borderRadius: 6,
-                color: "#F8FAFC",
-                fontSize: 14,
-                boxSizing: "border-box",
-              }}
-            />
+    <div style={{
+      minHeight: "100dvh",
+      background: "var(--bg)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "24px",
+    }}>
+      {/* Background glow */}
+      <div style={{
+        position: "fixed",
+        top: "30%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        width: 600,
+        height: 400,
+        background: "radial-gradient(ellipse, rgba(34,197,94,.06) 0%, transparent 70%)",
+        pointerEvents: "none",
+      }} />
+
+      <div style={{
+        width: "100%",
+        maxWidth: 380,
+        position: "relative",
+      }}>
+        {/* Logo */}
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <div style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 48,
+            height: 48,
+            background: "var(--accent)",
+            borderRadius: 12,
+            marginBottom: 16,
+            boxShadow: "0 0 24px var(--accent-glow)",
+          }}>
+            <Zap size={22} color="#020617" strokeWidth={2.5} />
           </div>
-          <div style={{ marginBottom: 16 }}>
-            <label
-              htmlFor="password"
-              style={{ display: "block", color: "#94A3B8", fontSize: 14, marginBottom: 6 }}
-            >
-              密码
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                background: "#1E293B",
-                border: "1px solid #334155",
-                borderRadius: 6,
-                color: "#F8FAFC",
-                fontSize: 14,
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-          {error && (
-            <div
-              role="alert"
-              style={{
-                color: "#EF4444",
-                fontSize: 14,
-                marginBottom: 16,
-                padding: "8px 12px",
-                background: "rgba(239,68,68,0.1)",
-                borderRadius: 4,
-              }}
-            >
-              {error}
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--fg)", letterSpacing: "-0.3px" }}>
+            登录 Runlet 平台
+          </h1>
+          <p style={{ fontSize: 13, color: "var(--fg-dim)", marginTop: 6 }}>
+            自动化检查执行平台
+          </p>
+        </div>
+
+        {/* Card */}
+        <div style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          padding: "28px 28px 24px",
+          boxShadow: "var(--shadow-lg)",
+        }}>
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label htmlFor="username" className="form-label">用户名</label>
+              <input
+                id="username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                autoComplete="username"
+                className="form-input"
+                placeholder="输入用户名"
+              />
             </div>
-          )}
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              width: "100%",
-              padding: "10px 0",
-              background: loading ? "#1A1E2F" : "#22C55E",
-              color: loading ? "#64748B" : "#020617",
-              border: "none",
-              borderRadius: 6,
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: loading ? "not-allowed" : "pointer",
-            }}
-          >
-            {loading ? "登录中..." : "登录"}
-          </button>
-        </form>
+
+            <div className="form-group">
+              <label htmlFor="password" className="form-label">密码</label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+                className="form-input"
+                placeholder="输入密码"
+              />
+            </div>
+
+            {error && (
+              <div className="form-alert" role="alert" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <AlertCircle size={14} />
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary btn-full btn-lg"
+              style={{ marginTop: 4 }}
+            >
+              {loading ? "登录中..." : "登录"}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import "./index.css";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { QueryProvider } from "./app/providers/query-provider";

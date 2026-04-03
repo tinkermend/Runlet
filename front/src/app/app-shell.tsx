@@ -5,60 +5,44 @@ import {
   Database,
   Server,
   Activity,
+  Zap,
 } from "lucide-react";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/tasks", label: "检查任务", icon: ClipboardCheck },
-  { to: "/assets", label: "采集资产", icon: Database },
-  { to: "/systems", label: "系统接入", icon: Server },
-  { to: "/results", label: "运行结果", icon: Activity },
+  { to: "/tasks",     label: "检查任务",   icon: ClipboardCheck },
+  { to: "/assets",    label: "采集资产",   icon: Database },
+  { to: "/systems",   label: "系统接入",   icon: Server },
+  { to: "/results",   label: "运行结果",   icon: Activity },
 ];
 
 export function AppShell() {
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "#020617" }}>
-      <nav
-        style={{
-          width: 240,
-          background: "#0F172A",
-          borderRight: "1px solid #334155",
-          padding: "16px 0",
-        }}
-      >
-        <div
-          style={{
-            padding: "0 16px 24px",
-            color: "#F8FAFC",
-            fontWeight: 700,
-            fontSize: 18,
-          }}
-        >
-          Runlet
+    <div className="app-layout">
+      <nav className="sidebar">
+        <div className="sidebar-logo">
+          <div className="sidebar-logo-mark">
+            <Zap size={14} color="#020617" strokeWidth={2.5} />
+          </div>
+          <span className="sidebar-logo-text">Runlet</span>
+          <span className="sidebar-logo-badge">Console</span>
         </div>
+
+        <div className="nav-section-label">导航</div>
+
         {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
-            style={({ isActive }) => ({
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: "10px 16px",
-              color: isActive ? "#22C55E" : "#94A3B8",
-              textDecoration: "none",
-              borderLeft: isActive
-                ? "3px solid #22C55E"
-                : "3px solid transparent",
-              background: isActive ? "#1A1E2F" : "transparent",
-            })}
+            className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
           >
-            <Icon size={18} />
-            <span>{label}</span>
+            <Icon size={16} className="nav-icon" />
+            {label}
           </NavLink>
         ))}
       </nav>
-      <main style={{ flex: 1, padding: 24, color: "#F8FAFC" }}>
+
+      <main className="main-content">
         <Outlet />
       </main>
     </div>
