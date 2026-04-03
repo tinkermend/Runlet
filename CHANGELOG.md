@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 收紧 Web 系统 onboarding 成功门禁：`SystemAdminService.onboard_system()` 现在会在 `auth_refresh` 与 `asset_compile` 两段正式链路后显式检查队列作业状态，未完成成功时立即以明确错误终止，避免认证失败后继续 crawl，以及 re-onboarding 时在 compile 失败后误发布旧 `page_check`。
 - 新增 Web 系统接入后端治理服务：补齐 `system_admin_repository/service/bootstrap`，支持按清单 upsert 系统与加密凭据、落库 auth/crawl policy、同步串行执行 `auth_refresh -> crawl -> asset_compile` 正式链路，并自动选择编译后的目标 `page_check` 发布为 `published_job`、回传 APScheduler 注册结果。
 - 收紧 crawl job 成功结果契约：成功完成采集后会把 `snapshot_id` 明确写入 `queued_jobs.result_payload`，方便 onboarding 链路精确回溯对应 compile job，并补充 onboarding/crawl 回归测试覆盖成功发布与缺失 publish target 两条路径。
 - 修复 Web 系统清单必填文本校验的类型健壮性：`required-text` helper 在收到非字符串输入时改为抛出 `ValueError`，避免 `mode="before"` 阶段出现 `AttributeError`；并新增回归测试锁定为 `ValidationError` 失败语义。

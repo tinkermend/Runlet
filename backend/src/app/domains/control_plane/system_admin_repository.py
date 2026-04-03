@@ -112,6 +112,9 @@ class SqlSystemAdminRepository:
         except ValueError as exc:
             raise ValueError(f"crawl job {job_id} contains invalid snapshot_id") from exc
 
+    async def get_job(self, *, job_id: UUID) -> QueuedJob | None:
+        return await self._get(QueuedJob, job_id)
+
     async def get_compile_job_for_snapshot(self, *, snapshot_id: UUID) -> QueuedJob:
         jobs = await self._exec_all(
             select(QueuedJob)

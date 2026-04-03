@@ -14,6 +14,7 @@ from app.domains.control_plane.schemas import (
 from app.domains.control_plane.system_admin_repository import SqlSystemAdminRepository
 from app.domains.control_plane.system_admin_schemas import WebSystemManifest
 from app.domains.runner_service.scheduler import CreatePublishedJobRequest
+from app.shared.enums import QueuedJobStatus
 
 
 class FormalJobExecutor(Protocol):
@@ -86,6 +87,10 @@ class SystemAdminService:
 
         auth_job = await self.control_plane_service.refresh_auth(system_id=system.id)
         await self.job_executor.run_auth_refresh(auth_job.job_id)
+        await self._ensure_job_completed_successfully(
+            job_id=auth_job.job_id,
+            job_label="auth refresh job",
+        )
 
         crawl_job = await self.control_plane_service.trigger_crawl(
             system_id=system.id,
@@ -103,6 +108,10 @@ class SystemAdminService:
             snapshot_id=snapshot_id
         )
         await self.job_executor.run_asset_compile(compile_job.id)
+        await self._ensure_job_completed_successfully(
+            job_id=compile_job.id,
+            job_label="asset compile job",
+        )
 
         publish_target = await self.repository.get_publish_target(
             system_id=system.id,
@@ -138,3 +147,20 @@ class SystemAdminService:
         if self.scheduler_registry is None:
             return []
         return sorted(job.id for job in self.scheduler_registry.scheduler.get_jobs())
+
+    async def _ensure_job_completed_successfully(
+        self,
+        *,
+        job_id: UUID,
+        job_label: str,
+    ) -> None:
+        job = await self.repository.get_job(job_id=job_id)
+        if job is None:
+            raise ValueError(f"{job_label} {job_id} not found")
+        if job.status == QueuedJobStatus.COMPLETED.value:
+            return
+
+        detail = job.status
+        if job.failure_message:
+            detail = f"{detail}: {job.failure_message}"
+        raise ValueError(f"{job_label} {job_id} did not complete successfully: {detail}")

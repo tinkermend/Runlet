@@ -20,6 +20,7 @@ from app.domains.control_plane.system_admin_schemas import WebSystemManifest
 from app.domains.crawler_service.schemas import CrawlRunResult
 from app.domains.runner_service.scheduler import PublishedJobService
 from app.domains.runner_service.script_renderer import ScriptRenderer
+from app.infrastructure.db.models.assets import ModulePlan, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
@@ -28,6 +29,7 @@ from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 from app.jobs.asset_compile_job import AssetCompileJobHandler
 from app.jobs.auth_refresh_job import AuthRefreshJobHandler
 from app.jobs.crawl_job import CrawlJobHandler
+from app.shared.enums import AssetStatus
 
 
 class StubAuthService:
@@ -136,7 +138,15 @@ class StubCrawlerService:
 
 
 class InProcessJobExecutor:
-    def __init__(self, *, db_session, auth_service, crawler_service, control_plane_service) -> None:
+    def __init__(
+        self,
+        *,
+        db_session,
+        auth_service,
+        crawler_service,
+        control_plane_service,
+        asset_compiler_service=None,
+    ) -> None:
         handlers = {
             AUTH_REFRESH_JOB_TYPE: AuthRefreshJobHandler(
                 session=db_session,
@@ -148,7 +158,7 @@ class InProcessJobExecutor:
             ),
             ASSET_COMPILE_JOB_TYPE: AssetCompileJobHandler(
                 session=db_session,
-                asset_compiler_service=AssetCompilerService(session=db_session),
+                asset_compiler_service=asset_compiler_service or AssetCompilerService(session=db_session),
                 control_plane_service=control_plane_service,
             ),
         }
@@ -215,36 +225,101 @@ def build_manifest_without_matching_check() -> WebSystemManifest:
 
 
 @pytest.fixture
-def system_admin_service(db_session, scheduler):
+def system_admin_service_builder(db_session, scheduler):
     from app.domains.control_plane.system_admin_repository import SqlSystemAdminRepository
     from app.domains.control_plane.system_admin_service import SystemAdminService
 
-    scheduler_registry = SchedulerRegistry(
-        session=db_session,
-        scheduler=scheduler,
-    )
-    dispatcher = SqlQueueDispatcher(db_session)
-    control_plane_service = ControlPlaneService(
-        repository=SqlControlPlaneRepository(db_session),
-        dispatcher=dispatcher,
-        script_renderer=ScriptRenderer(session=db_session),
-        published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
-        scheduler_registry=scheduler_registry,
-    )
-    auth_service = StubAuthService(db_session)
-    crawler_service = StubCrawlerService(db_session)
-    return SystemAdminService(
-        repository=SqlSystemAdminRepository(db_session),
-        control_plane_service=control_plane_service,
-        crypto=LocalCredentialCrypto(secret="test-secret"),
-        job_executor=InProcessJobExecutor(
-            db_session=db_session,
-            auth_service=auth_service,
-            crawler_service=crawler_service,
+    def build(
+        *,
+        auth_service=None,
+        crawler_service=None,
+        asset_compiler_service=None,
+    ):
+        scheduler_registry = SchedulerRegistry(
+            session=db_session,
+            scheduler=scheduler,
+        )
+        dispatcher = SqlQueueDispatcher(db_session)
+        control_plane_service = ControlPlaneService(
+            repository=SqlControlPlaneRepository(db_session),
+            dispatcher=dispatcher,
+            script_renderer=ScriptRenderer(session=db_session),
+            published_job_service=PublishedJobService(session=db_session, dispatcher=dispatcher),
+            scheduler_registry=scheduler_registry,
+        )
+        resolved_auth_service = auth_service or StubAuthService(db_session)
+        resolved_crawler_service = crawler_service or StubCrawlerService(db_session)
+        return SystemAdminService(
+            repository=SqlSystemAdminRepository(db_session),
             control_plane_service=control_plane_service,
-        ),
-        scheduler_registry=scheduler_registry,
+            crypto=LocalCredentialCrypto(secret="test-secret"),
+            job_executor=InProcessJobExecutor(
+                db_session=db_session,
+                auth_service=resolved_auth_service,
+                crawler_service=resolved_crawler_service,
+                control_plane_service=control_plane_service,
+                asset_compiler_service=asset_compiler_service,
+            ),
+            scheduler_registry=scheduler_registry,
+        )
+
+    return build
+
+
+@pytest.fixture
+def system_admin_service(system_admin_service_builder):
+    return system_admin_service_builder()
+
+
+def _seed_existing_publish_target(db_session) -> None:
+    system = System(
+        code="hotgo_test3",
+        name="old hotgo",
+        base_url="https://old-hotgo.example.com",
+        framework_type="react",
     )
+    db_session.add(system)
+    db_session.flush()
+
+    page = Page(
+        system_id=system.id,
+        route_path="/legacy/users",
+        page_title="旧用户列表",
+        page_summary="旧资产",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    page_asset = PageAsset(
+        system_id=system.id,
+        page_id=page.id,
+        asset_key="hotgo_test3.legacy.users",
+        asset_version="20260401000000",
+        status=AssetStatus.SAFE,
+    )
+    db_session.add(page_asset)
+    db_session.flush()
+
+    module_plan = ModulePlan(
+        page_asset_id=page_asset.id,
+        check_code="table_render",
+        plan_version="v1",
+        steps_json=[
+            {"module": "page.wait_ready", "params": {"route_path": page.route_path}},
+            {"module": "assert.table_visible", "params": {"route_path": page.route_path}},
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    page_check = PageCheck(
+        page_asset_id=page_asset.id,
+        check_code="table_render",
+        goal="table_render",
+        module_plan_id=module_plan.id,
+    )
+    db_session.add(page_check)
+    db_session.commit()
 
 
 def test_web_system_manifest_accepts_nested_yaml_sections() -> None:
@@ -447,3 +522,52 @@ async def test_onboard_system_fails_when_publish_goal_is_missing(
         await system_admin_service.onboard_system(
             manifest=build_manifest_without_matching_check()
         )
+
+
+@pytest.mark.anyio
+async def test_onboard_system_stops_when_auth_refresh_does_not_complete_successfully(
+    system_admin_service_builder,
+    db_session,
+):
+    class FailingAuthService:
+        async def refresh_auth_state(self, *, system_id):
+            return AuthRefreshResult(
+                system_id=system_id,
+                status="failed",
+                message="login failed",
+            )
+
+    service = system_admin_service_builder(auth_service=FailingAuthService())
+
+    with pytest.raises(
+        ValueError,
+        match="auth refresh job .* did not complete successfully: failed: login failed",
+    ):
+        await service.onboard_system(manifest=build_hotgo_manifest())
+
+    queued_jobs = db_session.exec(select(QueuedJob).order_by(QueuedJob.created_at, QueuedJob.id)).all()
+    assert [job.job_type for job in queued_jobs] == ["auth_refresh"]
+
+
+@pytest.mark.anyio
+async def test_onboard_system_stops_when_asset_compile_does_not_complete_successfully(
+    system_admin_service_builder,
+    db_session,
+):
+    class FailingAssetCompilerService:
+        async def compile_snapshot(self, *, snapshot_id):
+            raise ValueError("compile failed")
+
+    _seed_existing_publish_target(db_session)
+    service = system_admin_service_builder(
+        asset_compiler_service=FailingAssetCompilerService()
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="asset compile job .* did not complete successfully: failed: compile failed",
+    ):
+        await service.onboard_system(manifest=build_hotgo_manifest())
+
+    published_jobs = db_session.exec(select(PublishedJob)).all()
+    assert published_jobs == []
