@@ -49,7 +49,7 @@
 
 ## 工程目录约束
 
-- `backend/domains/*` 承载核心业务逻辑
+- `backend/src/app/domains/*` 承载核心业务逻辑
 - `cli` 只做命令入口，不复制领域逻辑
 - `mcp_server` 只做轻量查询或受控转调，不直接实现正式执行逻辑
 - `skills` 只做编排，不直接访问数据库或认证信息
@@ -88,10 +88,12 @@
 
 ## 调度约束
 
-系统支持两种调度模式：
+系统当前支持以下调度对象：
 
 - 平台内资产调度
-- 已发布脚本调度
+- 已发布检查调度
+- 系统级 `auth_policy` 调度
+- 系统级 `crawl_policy` 调度
 
 但默认主模式始终是：
 
@@ -106,11 +108,12 @@
 - 文档内容语言必须是中文
 - 任何重要架构变更必须先更新 `docs/superpowers/specs/`
 - 任何实施拆解必须更新 `docs/superpowers/plans/`
-- 开发顺序默认遵循四份计划：
+- 基础开发顺序默认遵循以下主线：
   - foundation
   - auth + crawl
   - asset compiler + drift
   - runner + script render + scheduling
+- 上述主线完成后，后续演进继续以最新的 `docs/superpowers/specs/` 与 `docs/superpowers/plans/` 为准，不再假定只有固定四份计划
 
 ## 测试与变更约束
 
