@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from app.domains.runner_service.failure_categories import FailureCategory
 from app.domains.runner_service.schemas import (
     AuthInjectStatus,
     ModuleExecutionResult,
@@ -20,6 +21,16 @@ class RunnerRuntime(Protocol):
     async def assert_table_visible(self, *, route_path: str | None = None) -> bool: ...
 
     async def assert_page_open(self, *, route_path: str) -> bool: ...
+
+    async def open_create_modal(self) -> bool: ...
+
+    async def capture_screenshot(self) -> bytes: ...
+
+    async def get_final_url(self) -> str | None: ...
+
+    async def get_page_title(self) -> str | None: ...
+
+    async def probe_page(self) -> dict[str, object] | None: ...
 
 
 class ModuleExecutor:
@@ -46,11 +57,14 @@ class ModuleExecutor:
                         if auth_status != AuthInjectStatus.BLOCKED
                         else RunnerRunStatus.FAILED
                     )
+                    output: dict[str, object] = {"auth_status": auth_status.value}
+                    if auth_status == AuthInjectStatus.BLOCKED:
+                        output["failure_category"] = FailureCategory.AUTH_BLOCKED.value
                     step_results.append(
                         StepExecutionResult(
                             module=module,
                             status=step_status,
-                            output={"auth_status": auth_status.value},
+                            output=output,
                         )
                     )
                     if auth_status == AuthInjectStatus.BLOCKED:
@@ -116,14 +130,27 @@ class ModuleExecutor:
                             output={"route_path": route_path},
                         )
                     )
+                elif module == "action.open_create_modal":
+                    await self._expect_truthy(
+                        module=module,
+                        outcome=await self.runtime.open_create_modal(),
+                    )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                        )
+                    )
                 else:
                     raise ValueError(f"unsupported module: {module}")
             except Exception as exc:
+                failure_category = _failure_category_for_module(module)
                 step_results.append(
                     StepExecutionResult(
                         module=module,
                         status=RunnerRunStatus.FAILED,
                         detail=str(exc),
+                        output={"failure_category": failure_category.value},
                     )
                 )
                 return ModuleExecutionResult(
@@ -172,3 +199,13 @@ def _optional_text(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _failure_category_for_module(module: str) -> FailureCategory:
+    if module == "nav.menu_chain":
+        return FailureCategory.NAVIGATION_FAILED
+    if module == "page.wait_ready":
+        return FailureCategory.PAGE_NOT_READY
+    if module.startswith("assert."):
+        return FailureCategory.ASSERTION_FAILED
+    return FailureCategory.RUNTIME_ERROR

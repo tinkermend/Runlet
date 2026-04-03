@@ -48,6 +48,13 @@ class FakeRuntime:
         self.calls: list[dict[str, object]] = []
         self.inject_outcome = inject_outcome
         self.fail_action = fail_action
+        self.final_url = "https://erp.example.com/users"
+        self.page_title = "用户管理"
+        self.screenshot_bytes = b"fake-screenshot-png"
+        self.probe_payload: dict[str, object] = {
+            "url": self.final_url,
+            "title": self.page_title,
+        }
 
     async def inject_auth_state(self, *, storage_state: dict[str, object]) -> bool:
         self.calls.append({"action": "inject_auth_state", "storage_state": storage_state})
@@ -82,6 +89,28 @@ class FakeRuntime:
         if self.fail_action == "assert_page_open":
             return False
         return True
+
+    async def open_create_modal(self) -> bool:
+        self.calls.append({"action": "open_create_modal"})
+        if self.fail_action == "open_create_modal":
+            return False
+        return True
+
+    async def capture_screenshot(self) -> bytes:
+        self.calls.append({"action": "capture_screenshot"})
+        return self.screenshot_bytes
+
+    async def get_final_url(self) -> str | None:
+        self.calls.append({"action": "get_final_url"})
+        return self.final_url
+
+    async def get_page_title(self) -> str | None:
+        self.calls.append({"action": "get_page_title"})
+        return self.page_title
+
+    async def probe_page(self) -> dict[str, object]:
+        self.calls.append({"action": "probe_page"})
+        return self.probe_payload
 
 
 class LifecycleRuntime(FakeRuntime):
@@ -235,6 +264,31 @@ def seeded_page_open_check(db_session, seeded_page_check, seeded_auth_state) -> 
 
 
 @pytest.fixture
+def seeded_open_create_modal_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="open_create_modal",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {"module": "action.open_create_modal", "params": {}},
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "open_create_modal"
+    seeded_page_check.goal = "open_create_modal"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
 def runner_service(db_session):
     from app.domains.runner_service.service import RunnerService
 
@@ -310,6 +364,36 @@ async def test_run_page_check_supports_assert_page_ready_alias(runner_service, s
 
 
 @pytest.mark.anyio
+async def test_run_page_check_persists_screenshot_and_final_page_context(
+    runner_service,
+    seeded_ready_check,
+    db_session,
+):
+    result = await runner_service.run_page_check(page_check_id=seeded_ready_check.id)
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    screenshot_artifacts = [artifact for artifact in artifacts if artifact.artifact_kind == "screenshot"]
+
+    assert result.final_url
+    assert result.page_title is not None
+    assert screenshot_artifacts
+    assert screenshot_artifacts[0].payload["mime_type"] == "image/png"
+    assert screenshot_artifacts[0].payload["content"]
+    assert screenshot_artifacts[0].payload["final_url"] == result.final_url
+    assert set(result.artifact_ids) == {artifact.id for artifact in artifacts}
+
+
+@pytest.mark.anyio
+async def test_run_page_check_supports_open_create_modal(
+    runner_service,
+    seeded_open_create_modal_check,
+):
+    result = await runner_service.run_page_check(page_check_id=seeded_open_create_modal_check.id)
+    assert result.status == "passed"
+
+
+@pytest.mark.anyio
 async def test_run_page_check_configures_and_closes_runtime(db_session, seeded_ready_check, seeded_system):
     from app.domains.runner_service.service import RunnerService
 
@@ -345,13 +429,20 @@ async def test_run_page_check_persists_failed_execution_artifact(
     result = await failing_runner_service.run_page_check(page_check_id=seeded_ready_check.id)
 
     execution_run = db_session.get(ExecutionRun, result.execution_run_id)
-    artifacts = db_session.exec(select(ExecutionArtifact)).all()
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
 
     assert result.status == "failed"
+    assert result.failure_category == FailureCategory.ASSERTION_FAILED
     assert execution_run is not None
     assert execution_run.status == "failed"
-    assert artifacts[-1].result_status.value == "failed"
-    assert artifacts[-1].payload["step_results"][-1]["status"] == "failed"
+    assert execution_run.failure_category == FailureCategory.ASSERTION_FAILED.value
+    assert execution_run.duration_ms is not None
+    assert execution_run.duration_ms >= 0
+    assert module_artifact.result_status.value == "failed"
+    assert module_artifact.payload["step_results"][-1]["status"] == "failed"
 
 
 @pytest.mark.anyio
@@ -363,14 +454,19 @@ async def test_run_page_check_fails_when_server_injected_auth_is_blocked(
     result = await blocked_auth_runner_service.run_page_check(page_check_id=seeded_ready_check.id)
 
     execution_run = db_session.get(ExecutionRun, result.execution_run_id)
-    artifact = db_session.exec(select(ExecutionArtifact)).all()[-1]
+    artifacts = db_session.exec(
+        select(ExecutionArtifact).where(ExecutionArtifact.execution_run_id == result.execution_run_id)
+    ).all()
+    module_artifact = next(artifact for artifact in artifacts if artifact.artifact_kind == "module_execution")
 
     assert result.status == "failed"
     assert result.auth_status == "blocked"
+    assert result.failure_category == FailureCategory.AUTH_BLOCKED
     assert execution_run is not None
     assert execution_run.status == "failed"
-    assert artifact.result_status.value == "failed"
-    assert artifact.payload["step_results"][0]["status"] == "failed"
+    assert execution_run.failure_category == FailureCategory.AUTH_BLOCKED.value
+    assert module_artifact.result_status.value == "failed"
+    assert module_artifact.payload["step_results"][0]["status"] == "failed"
 
 
 @pytest.mark.anyio

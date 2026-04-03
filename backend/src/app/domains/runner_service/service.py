@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import base64
 import inspect
 from datetime import UTC, datetime
 from uuid import UUID
 
+from app.domains.runner_service.failure_categories import FailureCategory
 from sqlmodel import Session, desc, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.domains.runner_service.module_executor import ModuleExecutor, RunnerRuntime
-from app.domains.runner_service.schemas import RunPageCheckResult, RunnerRunStatus
+from app.domains.runner_service.schemas import (
+    AuthInjectStatus,
+    ModuleExecutionResult,
+    RunPageCheckResult,
+    RunnerRunStatus,
+    StepExecutionResult,
+)
 from app.infrastructure.db.models.assets import ModulePlan, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import (
@@ -85,18 +93,30 @@ class RunnerService:
         self.session.add(execution_run)
         await self._flush()
 
+        started_at = utcnow()
+        final_url: str | None = None
+        page_title: str | None = None
+        page_probe: dict[str, object] | None = None
+        screenshot_bytes: bytes | None = None
+
         await self._configure_runtime(base_url=system.base_url)
         try:
             execution_result = await self.module_executor.execute(
                 steps_json=module_plan.steps_json,
                 storage_state=auth_state.storage_state,
             )
+            final_url = await self._read_runtime_text("get_final_url")
+            page_title = await self._read_runtime_text("get_page_title")
+            page_probe = await self._read_runtime_probe("probe_page")
+            screenshot_bytes = await self._read_runtime_screenshot("capture_screenshot")
         finally:
             await self._close_runtime()
 
         execution_run.status = execution_result.status.value
         execution_run.auth_status = execution_result.auth_status.value
-        execution_run.duration_ms = 0
+        execution_run.duration_ms = max(0, int((utcnow() - started_at).total_seconds() * 1000))
+        failure_category = self._resolve_failure_category(execution_result=execution_result)
+        execution_run.failure_category = failure_category.value if failure_category is not None else None
 
         artifact = ExecutionArtifact(
             execution_run_id=execution_run.id,
@@ -111,21 +131,46 @@ class RunnerService:
                 "page_asset_id": str(page_asset.id),
                 "system_id": str(system.id),
                 "step_results": [step.model_dump(mode="json") for step in execution_result.step_results],
+                "final_url": final_url,
+                "page_title": page_title,
+                "page_probe": page_probe,
             },
         )
         self.session.add(artifact)
 
+        persisted_artifacts = [artifact]
+        if screenshot_bytes is not None:
+            screenshot_artifact = ExecutionArtifact(
+                execution_run_id=execution_run.id,
+                artifact_kind="screenshot",
+                result_status=ExecutionResultStatus.SUCCESS,
+                payload={
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "content": base64.b64encode(screenshot_bytes).decode("ascii"),
+                    "final_url": final_url,
+                    "page_title": page_title,
+                    "page_probe": page_probe,
+                },
+            )
+            self.session.add(screenshot_artifact)
+            persisted_artifacts.append(screenshot_artifact)
+
         await self._commit()
         await self._refresh(execution_run)
-        await self._refresh(artifact)
+        for persisted_artifact in persisted_artifacts:
+            await self._refresh(persisted_artifact)
 
         return RunPageCheckResult(
             page_check_id=page_check.id,
             execution_run_id=execution_run.id,
             status=execution_result.status,
             auth_status=execution_result.auth_status,
-            artifact_ids=[artifact.id],
+            artifact_ids=[persisted_artifact.id for persisted_artifact in persisted_artifacts],
             step_results=execution_result.step_results,
+            failure_category=failure_category,
+            final_url=final_url,
+            page_title=page_title,
         )
 
     async def _resolve_execution_plan(
@@ -206,6 +251,62 @@ class RunnerService:
             return
         self.session.refresh(model)
 
+    def _resolve_failure_category(
+        self,
+        *,
+        execution_result: ModuleExecutionResult,
+    ) -> FailureCategory | None:
+        if execution_result.status == RunnerRunStatus.PASSED:
+            return None
+        if execution_result.auth_status == AuthInjectStatus.BLOCKED:
+            return FailureCategory.AUTH_BLOCKED
+        failed_step = self._first_failed_step(execution_result.step_results)
+        if failed_step is None:
+            return FailureCategory.RUNTIME_ERROR
+        if isinstance(failed_step.output, dict):
+            raw_category = failed_step.output.get("failure_category")
+            if isinstance(raw_category, str) and raw_category in FailureCategory._value2member_map_:
+                return FailureCategory(raw_category)
+        return _failure_category_for_module(failed_step.module)
+
+    async def _read_runtime_text(self, method_name: str) -> str | None:
+        outcome = await self._invoke_runtime_method(method_name)
+        if not isinstance(outcome, str):
+            return None
+        normalized = outcome.strip()
+        return normalized or None
+
+    async def _read_runtime_probe(self, method_name: str) -> dict[str, object] | None:
+        outcome = await self._invoke_runtime_method(method_name)
+        if isinstance(outcome, dict):
+            return outcome
+        return None
+
+    async def _read_runtime_screenshot(self, method_name: str) -> bytes | None:
+        outcome = await self._invoke_runtime_method(method_name)
+        if isinstance(outcome, (bytes, bytearray, memoryview)):
+            return bytes(outcome)
+        return None
+
+    async def _invoke_runtime_method(self, method_name: str):
+        method = getattr(self.runtime, method_name, None)
+        if not callable(method):
+            return None
+        try:
+            result = method()
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        except Exception:
+            return None
+
+    @staticmethod
+    def _first_failed_step(step_results: list[StepExecutionResult]) -> StepExecutionResult | None:
+        for step in step_results:
+            if step.status == RunnerRunStatus.FAILED:
+                return step
+        return None
+
     async def _configure_runtime(self, *, base_url: str) -> None:
         setter = getattr(self.runtime, "set_base_url", None)
         if not callable(setter):
@@ -221,3 +322,13 @@ class RunnerService:
         result = closer()
         if inspect.isawaitable(result):
             await result
+
+
+def _failure_category_for_module(module: str) -> FailureCategory:
+    if module == "nav.menu_chain":
+        return FailureCategory.NAVIGATION_FAILED
+    if module == "page.wait_ready":
+        return FailureCategory.PAGE_NOT_READY
+    if module.startswith("assert."):
+        return FailureCategory.ASSERTION_FAILED
+    return FailureCategory.RUNTIME_ERROR
