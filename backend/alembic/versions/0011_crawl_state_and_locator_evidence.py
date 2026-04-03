@@ -27,7 +27,6 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("discovery_sources", sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column("entry_candidates", sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column("context_constraints", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("locator_candidates", sa.JSON(), nullable=True))
 
     with op.batch_alter_table("page_elements") as batch_op:
         batch_op.add_column(sa.Column("state_signature", sa.String(length=255), nullable=True))
@@ -42,7 +41,6 @@ def downgrade() -> None:
         batch_op.drop_column("state_signature")
 
     with op.batch_alter_table("menu_nodes") as batch_op:
-        batch_op.drop_column("locator_candidates")
         batch_op.drop_column("context_constraints")
         batch_op.drop_column("entry_candidates")
         batch_op.drop_column("discovery_sources")

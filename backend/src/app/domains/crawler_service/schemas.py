@@ -26,7 +26,6 @@ class MenuCandidate(BaseModel):
     discovery_sources: list[str] = Field(default_factory=list)
     entry_candidates: list[dict[str, object]] = Field(default_factory=list)
     context_constraints: dict[str, object] | None = None
-    locator_candidates: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ElementCandidate(BaseModel):

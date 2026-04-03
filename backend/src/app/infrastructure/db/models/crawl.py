@@ -107,10 +107,6 @@ class MenuNode(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
     )
-    locator_candidates: list[dict[str, object]] | None = Field(
-        default=None,
-        sa_column=sa.Column(json_type, nullable=True),
-    )
 
 
 class PageElement(BaseModel, table=True):
