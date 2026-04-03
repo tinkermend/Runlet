@@ -74,7 +74,18 @@ def _serialize_compile_result(result) -> dict[str, object]:
     payload["published_job_ids_to_pause"] = [
         str(job_id) for job_id in payload["published_job_ids_to_pause"]
     ]
+    payload["retire_reasons"] = _json_safe(payload["retire_reasons"])
     drift_state = payload.get("drift_state")
     if isinstance(drift_state, AssetStatus):
         payload["drift_state"] = drift_state.value
     return payload
+
+
+def _json_safe(value):
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    return value

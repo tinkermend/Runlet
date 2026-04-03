@@ -1,5 +1,6 @@
 ## 2026-04-03
 
+- 修复资产编译作业结果序列化边界：`_serialize_compile_result` 现在会递归转换 `retire_reasons` 中的嵌套 UUID，确保 queued job `result_payload` 在包含退役原因明细时仍保持 JSON-safe。
 - 修复 lifecycle/reconciliation 持久化契约细节：`asset_reconciliation_audits` 新增 `disabled_alias_ids` 审计字段，审计 JSON 列支持 UUID 安全序列化并可持久化非空标识列表；同时补齐 `asset_compile_job` 对 `alias_ids_to_disable/published_job_ids_to_pause` 的结果序列化，确保 queued job payload 保持 JSON-safe。
 - 新增资产生命周期与 reconciliation 持久化契约：为 `page_assets/page_checks/intent_aliases/published_jobs` 补齐退役与停用字段，新增 `asset_reconciliation_audits` 审计表，扩展 `CompileSnapshotResult` 输出退役计数与决策列表字段，并补充对应 schema/DTO 回归测试。
 - 新增后端采集同步一致性与资产退役设计文档，明确高质量 `full crawl` 作为页面资产真相源，引入 reconciliation、生命周期状态、alias 失效、调度暂停与执行阻断的统一收敛方案。

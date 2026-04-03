@@ -123,6 +123,8 @@ async def test_asset_compile_job_completes_and_persists_assets(
 def test_serialize_compile_result_json_safely_handles_reconciliation_uuid_lists():
     alias_id = uuid4()
     published_job_id = uuid4()
+    reason_asset_id = uuid4()
+    reason_check_id = uuid4()
     result = CompileSnapshotResult(
         snapshot_id=uuid4(),
         status="success",
@@ -133,10 +135,22 @@ def test_serialize_compile_result_json_safely_handles_reconciliation_uuid_lists(
         check_ids=[uuid4()],
         alias_ids_to_disable=[alias_id],
         published_job_ids_to_pause=[published_job_id],
+        retire_reasons=[
+            {
+                "asset_id": reason_asset_id,
+                "meta": {"check_id": reason_check_id},
+            }
+        ],
     )
 
     payload = _serialize_compile_result(result)
 
     assert payload["alias_ids_to_disable"] == [str(alias_id)]
     assert payload["published_job_ids_to_pause"] == [str(published_job_id)]
+    assert payload["retire_reasons"] == [
+        {
+            "asset_id": str(reason_asset_id),
+            "meta": {"check_id": str(reason_check_id)},
+        }
+    ]
     json.dumps(payload)
