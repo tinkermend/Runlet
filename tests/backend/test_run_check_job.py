@@ -127,6 +127,23 @@ def queued_realtime_run_check_job(db_session):
 
 
 @pytest.fixture
+def queued_realtime_run_check_job_with_invalid_execution_plan(db_session):
+    job = QueuedJob(
+        job_type=RUN_CHECK_JOB_TYPE,
+        payload={
+            "execution_request_id": str(uuid4()),
+            "execution_plan_id": "invalid-execution-plan-id",
+            "execution_track": "realtime",
+            "page_check_id": None,
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    return job
+
+
+@pytest.fixture
 def queued_realtime_probe_job(
     db_session,
     seeded_system,
@@ -163,6 +180,51 @@ def queued_realtime_probe_job(
             "execution_plan_id": str(execution_plan.id),
             "execution_track": "realtime_probe",
             "page_check_id": None,
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    return job
+
+
+@pytest.fixture
+def queued_realtime_probe_job_with_stale_page_check_id(
+    db_session,
+    seeded_system,
+    seeded_page_asset,
+    seeded_auth_state,
+):
+    execution_request = ExecutionRequest(
+        request_source="worker_test",
+        system_hint=seeded_system.code,
+        page_hint=seeded_page_asset.asset_key,
+        check_goal="page_open",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(execution_request)
+    db_session.flush()
+
+    execution_plan = ExecutionPlan(
+        execution_request_id=execution_request.id,
+        resolved_system_id=seeded_system.id,
+        resolved_page_asset_id=seeded_page_asset.id,
+        resolved_page_check_id=None,
+        execution_track="realtime_probe",
+        auth_policy="server_injected",
+        module_plan_id=None,
+    )
+    db_session.add(execution_plan)
+    db_session.flush()
+
+    job = QueuedJob(
+        job_type=RUN_CHECK_JOB_TYPE,
+        payload={
+            "execution_request_id": str(execution_request.id),
+            "execution_plan_id": str(execution_plan.id),
+            "execution_track": "realtime_probe",
+            "page_check_id": str(uuid4()),
         },
     )
     db_session.add(job)
@@ -333,6 +395,25 @@ async def test_run_check_job_skips_realtime_request_without_resolved_page_check(
 
 
 @pytest.mark.anyio
+async def test_run_check_job_skips_realtime_request_with_invalid_execution_plan_id(
+    job_runner,
+    queued_realtime_run_check_job_with_invalid_execution_plan,
+    db_session,
+):
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_realtime_run_check_job_with_invalid_execution_plan.id)
+
+    assert refreshed is not None
+    assert refreshed.status == "skipped"
+    assert refreshed.failure_message == "realtime execution track is not supported by run_check worker"
+    assert refreshed.result_payload["queued_job_id"] == str(
+        queued_realtime_run_check_job_with_invalid_execution_plan.id
+    )
+    assert refreshed.result_payload["execution_track"] == "realtime"
+
+
+@pytest.mark.anyio
 async def test_run_check_job_executes_realtime_probe_when_track_is_realtime_probe(
     job_runner,
     queued_realtime_probe_job,
@@ -345,6 +426,23 @@ async def test_run_check_job_executes_realtime_probe_when_track_is_realtime_prob
     assert refreshed is not None
     assert refreshed.status == "completed"
     assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_job.id)
+    assert refreshed.result_payload["execution_track"] == "realtime_probe"
+    assert refreshed.result_payload["page_check_id"] is None
+
+
+@pytest.mark.anyio
+async def test_run_check_job_uses_runner_result_page_check_id_for_realtime_probe(
+    job_runner,
+    queued_realtime_probe_job_with_stale_page_check_id,
+    db_session,
+):
+    await job_runner.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_realtime_probe_job_with_stale_page_check_id.id)
+
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["queued_job_id"] == str(queued_realtime_probe_job_with_stale_page_check_id.id)
     assert refreshed.result_payload["execution_track"] == "realtime_probe"
     assert refreshed.result_payload["page_check_id"] is None
 

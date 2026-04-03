@@ -9,6 +9,8 @@ from sqlmodel import Session
 from app.infrastructure.db.models.jobs import JobRun, QueuedJob
 from app.shared.enums import QueuedJobStatus
 
+_UNSET = object()
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -32,12 +34,6 @@ class RunCheckJobHandler:
 
         page_check_id = job.payload.get("page_check_id")
         execution_track = str(job.payload.get("execution_track") or "").strip().lower()
-        raw_execution_plan_id = job.payload.get("execution_plan_id")
-        execution_plan_id = raw_execution_plan_id if isinstance(raw_execution_plan_id, str) else None
-        parsed_execution_plan_id = _parse_uuid(execution_plan_id)
-        if execution_plan_id is not None and parsed_execution_plan_id is None:
-            await self._mark_failed(job, message="invalid execution_plan_id in run_check job payload")
-            return
 
         if page_check_id is None and execution_track == "realtime":
             job.status = QueuedJobStatus.SKIPPED.value
@@ -51,6 +47,13 @@ class RunCheckJobHandler:
                 error_message=job.failure_message,
             )
             await self._commit()
+            return
+
+        raw_execution_plan_id = job.payload.get("execution_plan_id")
+        execution_plan_id = raw_execution_plan_id if isinstance(raw_execution_plan_id, str) else None
+        parsed_execution_plan_id = _parse_uuid(execution_plan_id)
+        if execution_plan_id is not None and parsed_execution_plan_id is None:
+            await self._mark_failed(job, message="invalid execution_plan_id in run_check job payload")
             return
 
         if execution_track == "realtime_probe" and parsed_execution_plan_id is None:
@@ -117,6 +120,7 @@ class RunCheckJobHandler:
             execution_run_id=str(result.execution_run_id),
             auth_status=result.auth_status.value,
             artifact_ids=[str(artifact_id) for artifact_id in result.artifact_ids],
+            page_check_id=str(result.page_check_id) if result.page_check_id is not None else None,
         )
         if job_run is not None:
             job_run.execution_run_id = result.execution_run_id
@@ -161,13 +165,19 @@ class RunCheckJobHandler:
         auth_status: str | None = None,
         artifact_ids: list[str] | None = None,
         error_message: str | None = None,
+        page_check_id: str | None | object = _UNSET,
     ) -> dict[str, object]:
         payload = job.payload
+        resolved_page_check_id = (
+            _optional_string(payload.get("page_check_id"))
+            if page_check_id is _UNSET
+            else _optional_string(page_check_id)
+        )
         return {
             "queued_job_id": str(job.id),
             "queue_status": queue_status,
             "status": execution_status,
-            "page_check_id": _optional_string(payload.get("page_check_id")),
+            "page_check_id": resolved_page_check_id,
             "execution_track": _optional_string(payload.get("execution_track")),
             "execution_request_id": execution_request_id
             or _optional_string(payload.get("execution_request_id")),
