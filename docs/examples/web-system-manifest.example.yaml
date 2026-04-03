@@ -1,0 +1,54 @@
+# Web 测试系统接入 YAML 示例
+# 用法：
+#   openweb web-system add --file docs/examples/web-system-manifest.example.yaml
+#   openweb web-system remove --file docs/examples/web-system-manifest.example.yaml
+
+system:
+  # 系统唯一编码。remove --file 时也会从这里解析删除目标。
+  code: hotgo_test3
+  # 系统展示名称。
+  name: HotGo 测试系统3
+  # 系统根地址。
+  base_url: https://hotgo.facms.cn
+  # 当前框架类型提示，供 crawl/runtime 使用。
+  framework_type: react
+
+credential:
+  # 登录页地址。
+  login_url: https://hotgo.facms.cn/admin#/login?redirect=/dashboard
+  # 可写明文，入库前会使用 backend/.env 中的 credential_crypto_secret 加密。
+  username: admin
+  password: "123456"
+  # 当前认证类型。
+  auth_type: image_captcha
+  # 登录相关选择器，建议使用稳定选择器，不依赖动态 ID。
+  selectors:
+    username: input[name=username]
+    password: input[name=password]
+    submit: button[type=submit]
+
+auth_policy:
+  # 是否启用认证刷新调度。
+  enabled: true
+  # 认证刷新 cron 表达式。
+  schedule_expr: "*/30 * * * *"
+  # 认证模式，应与登录方式一致。
+  auth_mode: image_captcha
+  # 验证码提供方。
+  captcha_provider: ddddocr
+
+crawl_policy:
+  # 是否启用采集调度。
+  enabled: true
+  # 采集 cron 表达式。
+  schedule_expr: "0 */2 * * *"
+  # 采集范围。
+  crawl_scope: full
+
+publish:
+  # 接入完成后要发布的 page_check 目标。
+  check_goal: table_render
+  # 发布任务 cron 表达式。
+  schedule_expr: "*/30 * * * *"
+  # 是否立即启用发布任务。
+  enabled: true

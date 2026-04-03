@@ -1,5 +1,8 @@
 ## 2026-04-03
 
+- 新增 `openweb web-system add/remove` CLI：`add` 现在支持从 YAML 清单加载 Web 测试系统配置并同步调用后端 `SystemAdminService` 完成正式接入；`remove` 同时支持 `--file` 与 `--system-code` 解析删除目标，并输出接入/清理结果摘要。CLI 运行时同时显式依赖 monorepo `backend` 包，避免纯 `uv run --project cli openweb ...` 场景下因缺少后端依赖而在命令执行时崩溃。
+- 新增 Web 系统接入 YAML 示例文档：补充 `docs/examples/web-system-manifest.example.yaml`，并在 `backend/README.md` 增加入口说明，便于后续合并到 `main` 后直接按示例编写 `add/remove` 清单。
+- 新增 CLI 侧 backend bootstrap/manifest loader：`cli` 现在会在 monorepo 内定位 `backend/src`、复用后端 `WebSystemManifest` 做 YAML 校验，并通过 `anyio.run(...)` 调用后端治理服务，保持 CLI 只做入口、不复制领域逻辑。
 - 消除 Web 系统 onboarding 的 policy setup 残留窗口：`SystemAdminService.onboard_system()` 现在先以 disabled 状态落库 auth/crawl policy，待正式链路与发布成功后再切换到清单要求的 enabled 状态；若中途任一步骤失败，仍会统一回写为 disabled，避免出现“auth policy 已调度、crawl policy 尚未完成”的半接入状态。
 - 修补 Web 系统 onboarding 失败清理：当 `auth_refresh`、`asset_compile` 或后续发布链路失败时，`SystemAdminService` 现在会通过既有 `ControlPlaneService` 将 auth/crawl runtime policy 显式切回 disabled，确保不会留下仍在 APScheduler 中激活的半接入系统。
 - 为 onboarding publish-target 选择补齐回归测试：新增覆盖“优先选择最新 active 资产”和“同版本按稳定顺序选择”的仓储测试，锁定 `page_check` 发布目标的确定性解析契约。

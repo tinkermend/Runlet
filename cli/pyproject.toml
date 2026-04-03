@@ -8,7 +8,15 @@ version = "0.1.0"
 description = "CLI entrypoints for the AI Playwright execution platform."
 requires-python = ">=3.12"
 dependencies = [
+  "ai-playwright-platform-backend",
+  "anyio>=4.0",
+  "pyyaml>=6.0",
   "typer>=0.12",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
 ]
 
 [project.scripts]
@@ -16,3 +24,6 @@ openweb = "openweb_cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv.sources]
+ai-playwright-platform-backend = { path = "../backend" }
