@@ -25,6 +25,7 @@
 
 ### Added
 - 新增 Runlet 联调验收与 HotGo 采集校验设计文档：`docs/superpowers/specs/2026-04-04-runlet-runtime-inspection-and-hotgo-crawl-validation-design.md`，明确本次工作采用验收型联调检查，覆盖本地服务启动健康、平台 API 实调、平台前端一次性 Playwright 巡检，以及基于既有 `hotgo` 记录触发 `crawl -> asset compile` 后对菜单、页面、关键元素、检查资产四层结果的真实性校验。
+- 新增 Runlet 联调验收与 HotGo 采集校验实施计划：`docs/superpowers/plans/2026-04-04-runlet-runtime-inspection-and-hotgo-crawl-validation-plan.md`，将执行拆为环境预检、服务启动、平台 API 巡检、平台前端 Playwright 巡检、`hotgo` 的 `crawl -> asset compile` 跟踪，以及真实页面对照与最终报告六个任务，默认不改产品代码，只生成一次性证据与结论报告。
 - Frontend management console (React + Vite + TypeScript) under `front/`
 - Console session authentication (`/api/console/auth/`)
 - Dashboard summary API (`/api/console/portal/dashboard`)
