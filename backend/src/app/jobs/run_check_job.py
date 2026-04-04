@@ -304,6 +304,8 @@ class RunCheckJobHandler:
                     page_check_id=page_check_id,
                     execution_plan_id=execution_plan_id,
                 )
+            except ExecutionBlockedError:
+                raise
             except Exception as exc:
                 finished_at = utcnow()
                 await self._rollback()
