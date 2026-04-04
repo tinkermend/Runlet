@@ -37,7 +37,7 @@ def create_app() -> FastAPI:
         json_output=settings.json_logs,
     )
 
-    app = FastAPI(title="AI Playwright Platform")
+    app = FastAPI(title=settings.app_name)
 
     # ── 全局异常处理器 ─────────────────────────────────────────────────
     @app.exception_handler(Exception)

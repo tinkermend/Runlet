@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, func, select
 
+from app.api.deps_auth import require_console_user
 from app.domains.control_plane.console_schemas import (
     DashboardSummary,
     SystemCreateRequest,
@@ -15,6 +16,7 @@ from app.domains.control_plane.console_schemas import (
 from app.infrastructure.db.console_session import get_console_db
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRun
+from app.infrastructure.db.models.identity import User
 from app.infrastructure.db.models.systems import System
 
 router = APIRouter(prefix="/portal", tags=["console-portal"])
@@ -32,7 +34,10 @@ def _system_status(system: System) -> str:
 
 
 @router.get("/dashboard", response_model=DashboardSummary)
-def get_dashboard(session: ConsoleDep) -> DashboardSummary:
+def get_dashboard(
+    session: ConsoleDep,
+    _: User = Depends(require_console_user),
+) -> DashboardSummary:
     now = _utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday = now - timedelta(hours=24)
@@ -94,7 +99,10 @@ def get_dashboard(session: ConsoleDep) -> DashboardSummary:
 
 
 @router.get("/systems", response_model=list[SystemItem])
-def list_systems(session: ConsoleDep) -> list[SystemItem]:
+def list_systems(
+    session: ConsoleDep,
+    _: User = Depends(require_console_user),
+) -> list[SystemItem]:
     systems = session.exec(select(System)).all()
     result = []
     for sys in systems:
@@ -123,7 +131,11 @@ def _slugify(name: str) -> str:
 
 
 @router.post("/systems", status_code=201, response_model=SystemCreated)
-def onboard_system(body: SystemCreateRequest, session: ConsoleDep) -> SystemCreated:
+def onboard_system(
+    body: SystemCreateRequest,
+    session: ConsoleDep,
+    _: User = Depends(require_console_user),
+) -> SystemCreated:
     base_code = _slugify(body.name)
     code = base_code
     suffix = 1

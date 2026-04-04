@@ -13,6 +13,11 @@
 - **模板注册与编译映射（Task 4）**：新增 `template_registry`（V1: `has_data/no_data/field_equals_exists/status_exists/count_gte`），`check_templates` 改为注册中心驱动追加模板化检查，`module_plan_builder` 新增模板链路编译（`action.apply_filter/action.submit_query/assert.*`）并保留旧 `table_render/open_create_modal` 路径兼容。
 - **Runner 数据断言模块（Task 5）**：新增 `data_assertion_modules` 占位解析与计数断言工具，`module_executor` 与 `playwright_runtime` 支持 `action.apply_filter/action.submit_query/assert.data_count/assert.row_exists_by_field`，并补齐 `field_equals_exists/no_data/count_gte/status_exists` 的 runner 回归测试。
 - **参数透传与只读守卫（Task 6）**：`control_plane.submit_check_request` 增加只读模板守卫（拒绝非 V1 readonly 模板），`run_check_job` 在执行 `precompiled` 检查时会读取 `execution_request.template_params` 并透传到 `RunnerService.run_page_check(runtime_inputs=...)`，补齐 `readonly/template_params/element_asset_missing` 回归测试。
+- Console 会话认证改为 `users/user_sessions` 驱动，并为 `/api/console/*` 接口统一补齐登录校验（未登录返回 401）。
+- 前端认证态改为 `/api/console/auth/me` 启动态，`ProtectedRoute` 增加 bootstrap loading 保护，登录后会主动重拉 `/me` 保证前后端会话一致。
+- 前端 HTTP 客户端新增 `ApiError(status)` 与统一 401 处理挂点，支持 204/无 JSON 响应安全返回。
+- 补充 `backend/.env.example` 与 `backend/README.md` 的 session/PAT 配置说明，明确 Web session 与 Skills PAT 分层认证模型。
+- **Alembic head 收敛**：新增 merge revision `0013_merge_0012_heads`，合并 `0012_exec_req_tpl_params` 与 `0012_identity_pat_auth` 双分支，恢复 `alembic upgrade head` 的单 head 升级路径。
 
 ### Added
 - Frontend management console (React + Vite + TypeScript) under `front/`
@@ -32,6 +37,9 @@
 - 更新 AI Chat 模板化数据断言设计文档：补齐 V1 与 `detail` 载体边界、候选排序冷启动回退规则、覆盖率临时统计窗口，并明确 V1 不包含详情 carrier。
 - 新增 AI Chat 模板化数据断言 V1 实施计划：`docs/superpowers/plans/2026-04-04-chat-template-data-assertion-v1-plan.md`，按 TDD 拆分请求契约、模板参数持久化、候选推荐、模板编译、runner 断言模块、只读守卫与回归验证任务。
 - 新增 `execution_requests` 模板元数据持久化（Task 2）：新增 `template_code/template_version/carrier_hint/template_params` 字段与 Alembic 迁移 `0012_execution_request_template_params`，`control_plane` 入库路径已透传该字段集并补齐 schema/service 回归测试。
+- 新增平台身份认证基础设施：`users/user_sessions/user_pats/auth_audit_logs` 模型与迁移、PAT 生成/哈希/校验能力、`/api/v1/platform-auth/pats` 创建/列表/吊销接口。
+- 新增统一 `channel-action-system` 授权层，默认收敛到后端判权，并显式阻断 `skills` 渠道触发手动 crawl（返回 403）。
+- 新增前端 `PAT 管理` 页面与路由入口（`/auth/pats`），支持 3/7 天 PAT 创建、一次性明文展示、吊销操作。
 
 ## 2026-04-04
 

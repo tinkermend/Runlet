@@ -2,6 +2,7 @@ import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Zap, AlertCircle } from "lucide-react";
 import { useAuth } from "../../../app/providers/auth-provider";
+import { ApiError } from "../../../lib/http/client";
 
 export function LoginPage() {
   const [username, setUsername] = useState("");
@@ -26,9 +27,13 @@ export function LoginPage() {
         setError("用户名或密码错误");
         return;
       }
-      login(username);
+      await login();
       navigate("/dashboard", { replace: true });
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setError("用户名或密码错误");
+        return;
+      }
       setError("网络错误，请重试");
     } finally {
       setLoading(false);

@@ -4,7 +4,24 @@ from app.infrastructure.db.models.execution import ExecutionPlan
 from app.infrastructure.db.models.jobs import QueuedJob
 
 
+def _issue_skills_pat(client) -> str:
+    login = client.post(
+        "/api/console/auth/login",
+        json={"username": "admin", "password": "admin"},
+    )
+    assert login.status_code == 200
+    cookies = {"console_session": login.cookies["console_session"]}
+    create_pat = client.post(
+        "/api/v1/platform-auth/pats",
+        json={"name": "check-requests", "expires_in_days": 3},
+        cookies=cookies,
+    )
+    assert create_pat.status_code == 201
+    return create_pat.json()["token"]
+
+
 def test_post_check_requests_returns_accepted(client, seeded_asset):
+    token = _issue_skills_pat(client)
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -15,6 +32,7 @@ def test_post_check_requests_returns_accepted(client, seeded_asset):
             "time_budget_ms": 20000,
             "request_source": "skill",
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 202
@@ -53,6 +71,7 @@ def test_post_check_requests_rejects_template_payload_without_required_metadata(
 
 
 def test_post_check_requests_rejects_non_positive_time_budget(client, db_session):
+    token = _issue_skills_pat(client)
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -60,9 +79,23 @@ def test_post_check_requests_rejects_non_positive_time_budget(client, db_session
             "check_goal": "table_render",
             "time_budget_ms": 0,
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 422
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+def test_post_check_requests_requires_auth(client, db_session):
+    response = client.post(
+        "/api/v1/check-requests",
+        json={
+            "system_hint": "ERP",
+            "check_goal": "table_render",
+            "time_budget_ms": 20000,
+        },
+    )
+    assert response.status_code == 401
     assert db_session.exec(select(QueuedJob)).all() == []
 
 def test_get_check_request_returns_status(client, accepted_request, db_session):
@@ -107,6 +140,7 @@ def test_post_check_requests_uses_realtime_probe_when_page_or_menu_unresolved(
     seeded_system,
     db_session,
 ):
+    token = _issue_skills_pat(client)
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -114,6 +148,7 @@ def test_post_check_requests_uses_realtime_probe_when_page_or_menu_unresolved(
             "page_hint": "不存在的页面",
             "check_goal": "page_open",
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 202
@@ -127,6 +162,7 @@ def test_post_check_requests_returns_409_when_element_asset_missing(
     client,
     seeded_asset_without_matching_check,
 ):
+    token = _issue_skills_pat(client)
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -134,6 +170,7 @@ def test_post_check_requests_returns_409_when_element_asset_missing(
             "page_hint": "库存列表",
             "check_goal": "table_render",
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 409

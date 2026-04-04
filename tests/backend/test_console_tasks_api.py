@@ -4,8 +4,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def _login(client: TestClient) -> None:
+    resp = client.post("/api/console/auth/login", json={"username": "admin", "password": "admin"})
+    assert resp.status_code == 200
+
+
+def test_tasks_requires_auth(client: TestClient):
+    resp = client.get("/api/console/tasks/")
+    assert resp.status_code == 401
+
+
 def test_tasks_list(client: TestClient):
     """Task list returns array."""
+    _login(client)
     resp = client.get("/api/console/tasks/")
     assert resp.status_code == 200
     data = resp.json()
@@ -14,6 +25,7 @@ def test_tasks_list(client: TestClient):
 
 def test_task_create(client: TestClient):
     """Create a new task."""
+    _login(client)
     sys_resp = client.post("/api/console/portal/systems", json={
         "name": "Task Test System",
         "base_url": "https://example.com",
@@ -36,6 +48,7 @@ def test_task_create(client: TestClient):
 
 def test_task_detail(client: TestClient):
     """Get task detail."""
+    _login(client)
     sys_resp = client.post("/api/console/portal/systems", json={
         "name": "Detail Test System",
         "base_url": "https://example.com",
@@ -61,6 +74,7 @@ def test_task_detail(client: TestClient):
 
 def test_task_trigger(client: TestClient):
     """Trigger a task run."""
+    _login(client)
     sys_resp = client.post("/api/console/portal/systems", json={
         "name": "Trigger Test System",
         "base_url": "https://example.com",
@@ -84,6 +98,7 @@ def test_task_trigger(client: TestClient):
 
 def test_task_wizard_options(client: TestClient):
     """Wizard options returns systems and check types."""
+    _login(client)
     resp = client.get("/api/console/tasks/wizard-options")
     assert resp.status_code == 200
     data = resp.json()

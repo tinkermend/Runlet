@@ -8,7 +8,15 @@ from sqlalchemy import engine_from_config, pool
 from app.config.settings import settings
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.alembic_config import resolve_alembic_database_url
-from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
+from app.infrastructure.db.models import (  # noqa: F401
+    assets,
+    crawl,
+    execution,
+    identity,
+    jobs,
+    runtime_policies,
+    systems,
+)
 
 config = context.config
 

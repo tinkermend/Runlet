@@ -10,8 +10,12 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from sqlmodel import Session, create_engine, inspect
 
+from pydantic import ValidationError
+
+from app.config.settings import Settings, settings
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
+from app.infrastructure.db.models import identity  # noqa: F401
 
 
 @pytest.fixture
@@ -45,6 +49,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
     assert table_names == {
         "alembic_version",
         "asset_snapshots",
+        "auth_audit_logs",
         "auth_states",
         "crawl_snapshots",
         "execution_artifacts",
@@ -67,7 +72,50 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "system_crawl_policies",
         "system_credentials",
         "systems",
+        "user_pats",
+        "user_sessions",
+        "users",
     }
+
+
+def test_settings_expose_session_and_pat_controls():
+    assert hasattr(settings, "session_secret")
+    assert hasattr(settings, "session_ttl_hours")
+    assert hasattr(settings, "pat_max_ttl_days")
+    assert hasattr(settings, "pat_allowed_ttl_days")
+    assert hasattr(settings, "password_pepper")
+    assert settings.pat_allowed_ttl_days
+    assert all(value > 0 for value in settings.pat_allowed_ttl_days)
+    assert all(value <= settings.pat_max_ttl_days for value in settings.pat_allowed_ttl_days)
+
+
+def test_settings_parse_pat_allowed_ttl_days_from_env(monkeypatch):
+    monkeypatch.setenv("PAT_ALLOWED_TTL_DAYS", "3,7")
+    parsed = Settings().pat_allowed_ttl_days
+    assert parsed == [3, 7]
+
+
+def test_settings_parse_pat_allowed_ttl_days_from_env_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("PAT_ALLOWED_TTL_DAYS=3,7\n")
+    parsed = Settings(_env_file=env_file).pat_allowed_ttl_days
+    assert parsed == [3, 7]
+
+
+def test_settings_reject_invalid_pat_allowed_ttl_days():
+    with pytest.raises(ValidationError):
+        Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[])
+    with pytest.raises(ValidationError):
+        Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[0, 3])
+    with pytest.raises(ValidationError):
+        Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[3, 8])
+
+
+def test_alembic_env_imports_identity_model():
+    project_root = Path(__file__).resolve().parents[2]
+    env_path = project_root / "backend" / "alembic" / "env.py"
+    content = env_path.read_text()
+    assert "identity" in content
 
 
 def test_initial_schema_exposes_core_columns(db_engine):
@@ -243,6 +291,43 @@ def test_extended_schema_columns_present(inspector):
         "failure_reason",
         "warning_messages",
     } <= crawl_snapshot_columns
+
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    assert {"username", "password_hash", "status", "created_at", "updated_at"} <= user_columns
+
+    user_session_columns = {column["name"] for column in inspector.get_columns("user_sessions")}
+    assert {"user_id", "session_token_hash", "issued_at", "expires_at", "revoked_at"} <= user_session_columns
+
+    user_pat_columns = {column["name"] for column in inspector.get_columns("user_pats")}
+    assert {
+        "user_id",
+        "name",
+        "token_prefix",
+        "token_hash",
+        "allowed_channels",
+        "allowed_actions",
+        "allowed_system_ids",
+        "issued_at",
+        "expires_at",
+        "last_used_at",
+        "revoked_at",
+    } <= user_pat_columns
+
+    audit_log_columns = {column["name"] for column in inspector.get_columns("auth_audit_logs")}
+    assert {
+        "user_id",
+        "subject_type",
+        "subject_id",
+        "channel",
+        "system_id",
+        "action",
+        "decision",
+        "reason",
+        "request_id",
+        "ip",
+        "user_agent",
+        "created_at",
+    } <= audit_log_columns
 
     menu_node_columns = {column["name"] for column in inspector.get_columns("menu_nodes")}
     assert {"system_id", "snapshot_id", "label", "playwright_locator"} <= menu_node_columns

@@ -6,10 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, func, select
 
+from app.api.deps_auth import require_console_user
 from app.domains.control_plane.console_schemas import PaginatedResults, RunResultItem
 from app.infrastructure.db.console_session import get_console_db
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRun
+from app.infrastructure.db.models.identity import User
 from app.infrastructure.db.models.systems import System
 
 router = APIRouter(prefix="/results", tags=["console-results"])
@@ -20,6 +22,7 @@ ConsoleDep = Annotated[Session, Depends(get_console_db)]
 @router.get("/", response_model=PaginatedResults)
 def list_results(
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
     system_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
