@@ -29,6 +29,17 @@ class ModulePlanDraft:
 
 
 @dataclass(frozen=True)
+class TemplateDefinition:
+    template_code: str
+    template_version: str
+    supported_carriers: tuple[str, ...]
+    required_slots: tuple[str, ...]
+    assertion_contract: dict[str, object]
+    compile_strategy: dict[str, object]
+    readonly: bool = True
+
+
+@dataclass(frozen=True)
 class CompileSnapshotResult:
     snapshot_id: UUID
     status: str

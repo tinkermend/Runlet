@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.domains.asset_compiler.schemas import ModulePlanDraft
+from app.domains.asset_compiler.template_registry import get_template
 
 
 def build_module_plan(
@@ -23,6 +24,20 @@ def build_module_plan(
     if normalized_state_signature and normalized_state_signature != default_state_signature:
         steps_json.append(
             {"module": "state.enter", "params": {"state_signature": normalized_state_signature}}
+        )
+
+    template = get_template(template_code=check_code, version="v1")
+    if template is not None:
+        steps_json.extend(
+            _build_template_chain_steps(
+                check_code=check_code,
+                page_context=page_context,
+            )
+        )
+        return ModulePlanDraft(
+            check_code=check_code,
+            plan_version="v1",
+            steps_json=steps_json,
         )
 
     if _uses_legacy_open_create_action(
@@ -98,3 +113,48 @@ def _uses_legacy_open_create_action(
     if not state_signature:
         return True
     return state_signature == default_state_signature
+
+
+def _build_template_chain_steps(
+    *,
+    check_code: str,
+    page_context: dict[str, object],
+) -> list[dict[str, object]]:
+    template = get_template(template_code=check_code, version="v1")
+    if template is None:
+        return []
+
+    carrier = _resolve_carrier_hint(page_context=page_context)
+    compile_strategy = template.compile_strategy
+    action_chain = compile_strategy.get("action_chain", ())
+    action_params_map = compile_strategy.get("action_params", {})
+    if not isinstance(action_params_map, dict):
+        action_params_map = {}
+
+    steps: list[dict[str, object]] = []
+    for module in action_chain:
+        params: dict[str, object] = {"carrier": carrier}
+        module_params = action_params_map.get(module)
+        if isinstance(module_params, dict):
+            params.update(module_params)
+        steps.append({"module": module, "params": params})
+
+    assert_module = str(compile_strategy.get("assert_module", "") or "")
+    if not assert_module:
+        return steps
+
+    assert_params: dict[str, object] = {"carrier": carrier}
+    raw_assert_params = compile_strategy.get("assert_params", {})
+    if isinstance(raw_assert_params, dict):
+        assert_params.update(raw_assert_params)
+    steps.append({"module": assert_module, "params": assert_params})
+    return steps
+
+
+def _resolve_carrier_hint(*, page_context: dict[str, object]) -> str:
+    carrier_hint = str(page_context.get("carrier_hint", "") or "").strip().lower()
+    if carrier_hint in {"table", "list"}:
+        return carrier_hint
+    if bool(page_context.get("has_table")):
+        return "table"
+    return "list"

@@ -64,6 +64,7 @@ class RunnerService:
         *,
         page_check_id: UUID,
         execution_plan_id: UUID | None = None,
+        runtime_inputs: dict[str, object] | None = None,
     ) -> RunPageCheckResult:
         page_check = await self._get(PageCheck, page_check_id)
         if page_check is None:
@@ -124,6 +125,7 @@ class RunnerService:
             execution_result = await self.module_executor.execute(
                 steps_json=module_plan.steps_json,
                 storage_state=auth_state.storage_state,
+                runtime_inputs=runtime_inputs,
             )
             final_url = await self._read_runtime_text("get_final_url")
             page_title = await self._read_runtime_text("get_page_title")

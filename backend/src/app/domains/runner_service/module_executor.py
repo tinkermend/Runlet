@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.domains.runner_service.data_assertion_modules import (
+    coerce_optional_int,
+    resolve_template_placeholders,
+    validate_data_count_assertion,
+)
 from app.domains.runner_service.failure_categories import FailureCategory
 from app.domains.runner_service.schemas import (
     AuthInjectStatus,
@@ -24,6 +29,28 @@ class RunnerRuntime(Protocol):
     async def assert_page_open(self, *, route_path: str) -> bool: ...
 
     async def open_create_modal(self) -> bool: ...
+
+    async def apply_filter(
+        self,
+        *,
+        field: str,
+        operator: str,
+        value: object,
+        carrier: str,
+    ) -> bool: ...
+
+    async def submit_query(self, *, carrier: str) -> bool: ...
+
+    async def read_data_count(self, *, carrier: str) -> int: ...
+
+    async def row_exists_by_field(
+        self,
+        *,
+        carrier: str,
+        field: str,
+        operator: str,
+        value: object,
+    ) -> bool: ...
 
     async def enter_state(self, *, state_signature: str) -> bool: ...
 
@@ -52,6 +79,7 @@ class ModuleExecutor:
         *,
         steps_json: list[dict[str, object]],
         storage_state: dict[str, object],
+        runtime_inputs: dict[str, object] | None = None,
     ) -> ModuleExecutionResult:
         auth_status = AuthInjectStatus.BLOCKED
         step_results: list[StepExecutionResult] = []
@@ -59,6 +87,7 @@ class ModuleExecutor:
         for raw_step in steps_json:
             module = str(raw_step.get("module") or "")
             params = _coerce_params(raw_step.get("params"))
+            params = resolve_template_placeholders(params=params, runtime_inputs=runtime_inputs)
             try:
                 if module == "auth.inject_state":
                     auth_status = await self._inject_auth_state(storage_state=storage_state)
@@ -149,6 +178,104 @@ class ModuleExecutor:
                         StepExecutionResult(
                             module=module,
                             status=RunnerRunStatus.PASSED,
+                        )
+                    )
+                elif module == "action.apply_filter":
+                    field = _optional_text(params.get("field"))
+                    value = params.get("value")
+                    if field is None or value is None:
+                        raise ValueError("action.apply_filter requires non-empty field and value")
+                    operator = _optional_text(params.get("operator")) or "equals"
+                    carrier = _optional_text(params.get("carrier")) or "table"
+                    await self._expect_truthy(
+                        module=module,
+                        outcome=await self.runtime.apply_filter(
+                            field=field,
+                            operator=operator,
+                            value=value,
+                            carrier=carrier,
+                        ),
+                    )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                            output={
+                                "field": field,
+                                "operator": operator,
+                                "value": value,
+                                "carrier": carrier,
+                            },
+                        )
+                    )
+                elif module == "action.submit_query":
+                    carrier = _optional_text(params.get("carrier")) or "table"
+                    await self._expect_truthy(
+                        module=module,
+                        outcome=await self.runtime.submit_query(carrier=carrier),
+                    )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                            output={"carrier": carrier},
+                        )
+                    )
+                elif module == "assert.data_count":
+                    carrier = _optional_text(params.get("carrier")) or "table"
+                    count = await self.runtime.read_data_count(carrier=carrier)
+                    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                        raise ValueError("assert.data_count requires runtime to return non-negative int")
+                    expected_min = coerce_optional_int(params.get("expected_min"))
+                    expected_max = coerce_optional_int(params.get("expected_max"))
+                    if expected_min is None and expected_max is None:
+                        expected_min = 1
+                    validate_data_count_assertion(
+                        count=count,
+                        expected_min=expected_min,
+                        expected_max=expected_max,
+                    )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                            output={
+                                "carrier": carrier,
+                                "actual_count": count,
+                                "expected_min": expected_min,
+                                "expected_max": expected_max,
+                            },
+                        )
+                    )
+                elif module == "assert.row_exists_by_field":
+                    field = _optional_text(params.get("field"))
+                    value = params.get("value")
+                    if field is None or value is None:
+                        raise ValueError(
+                            "assert.row_exists_by_field requires non-empty field and value"
+                        )
+                    operator = _optional_text(params.get("operator")) or "equals"
+                    carrier = _optional_text(params.get("carrier")) or "table"
+                    matched = await self.runtime.row_exists_by_field(
+                        carrier=carrier,
+                        field=field,
+                        operator=operator,
+                        value=value,
+                    )
+                    if not matched:
+                        raise ValueError(
+                            f"row_exists_by_field_assertion_failed: field={field} operator={operator} value={value}"
+                        )
+                    step_results.append(
+                        StepExecutionResult(
+                            module=module,
+                            status=RunnerRunStatus.PASSED,
+                            output={
+                                "carrier": carrier,
+                                "field": field,
+                                "operator": operator,
+                                "value": value,
+                            },
                         )
                     )
                 elif module == "state.enter":

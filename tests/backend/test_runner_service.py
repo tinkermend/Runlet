@@ -53,6 +53,10 @@ class FakeRuntime:
         raise_on_inject: bool = False,
         locator_outcomes: list[dict[str, object]] | None = None,
         enter_state_error: str | None = None,
+        data_count: int = 1,
+        data_count_sequence: list[int] | None = None,
+        row_exists: bool = True,
+        row_exists_sequence: list[bool] | None = None,
     ) -> None:
         self.calls: list[dict[str, object]] = []
         self.inject_outcome = inject_outcome
@@ -60,6 +64,10 @@ class FakeRuntime:
         self.raise_on_inject = raise_on_inject
         self.locator_outcomes = list(locator_outcomes or [])
         self.enter_state_error = enter_state_error
+        self.data_count = data_count
+        self.data_count_sequence = list(data_count_sequence or [])
+        self.row_exists = row_exists
+        self.row_exists_sequence = list(row_exists_sequence or [])
         self.final_url = "https://erp.example.com/users"
         self.page_title = "用户管理"
         self.screenshot_bytes = b"fake-screenshot-png"
@@ -109,6 +117,60 @@ class FakeRuntime:
         if self.fail_action == "open_create_modal":
             return False
         return True
+
+    async def apply_filter(
+        self,
+        *,
+        field: str,
+        operator: str,
+        value: object,
+        carrier: str,
+    ) -> bool:
+        self.calls.append(
+            {
+                "action": "apply_filter",
+                "field": field,
+                "operator": operator,
+                "value": value,
+                "carrier": carrier,
+            }
+        )
+        if self.fail_action == "apply_filter":
+            return False
+        return True
+
+    async def submit_query(self, *, carrier: str) -> bool:
+        self.calls.append({"action": "submit_query", "carrier": carrier})
+        if self.fail_action == "submit_query":
+            return False
+        return True
+
+    async def read_data_count(self, *, carrier: str) -> int:
+        self.calls.append({"action": "read_data_count", "carrier": carrier})
+        if self.data_count_sequence:
+            return self.data_count_sequence.pop(0)
+        return self.data_count
+
+    async def row_exists_by_field(
+        self,
+        *,
+        carrier: str,
+        field: str,
+        operator: str,
+        value: object,
+    ) -> bool:
+        self.calls.append(
+            {
+                "action": "row_exists_by_field",
+                "carrier": carrier,
+                "field": field,
+                "operator": operator,
+                "value": value,
+            }
+        )
+        if self.row_exists_sequence:
+            return self.row_exists_sequence.pop(0)
+        return self.row_exists
 
     async def enter_state(self, *, state_signature: str) -> bool:
         self.calls.append({"action": "enter_state", "state_signature": state_signature})
@@ -476,6 +538,144 @@ def seeded_open_create_modal_check(db_session, seeded_page_check, seeded_auth_st
 
 
 @pytest.fixture
+def seeded_field_equals_exists_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="field_equals_exists",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {
+                "module": "action.apply_filter",
+                "params": {
+                    "carrier": "table",
+                    "field": "username",
+                    "operator": "equals",
+                    "value": "alice",
+                },
+            },
+            {"module": "action.submit_query", "params": {"carrier": "table"}},
+            {
+                "module": "assert.row_exists_by_field",
+                "params": {
+                    "carrier": "table",
+                    "field": "username",
+                    "operator": "equals",
+                    "value": "alice",
+                },
+            },
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "field_equals_exists"
+    seeded_page_check.goal = "field_equals_exists"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
+def seeded_no_data_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="no_data",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {"module": "action.submit_query", "params": {"carrier": "table"}},
+            {"module": "assert.data_count", "params": {"carrier": "table", "expected_max": 0}},
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "no_data"
+    seeded_page_check.goal = "no_data"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
+def seeded_count_gte_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="count_gte",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {"module": "action.submit_query", "params": {"carrier": "table"}},
+            {"module": "assert.data_count", "params": {"carrier": "table", "expected_min": 2}},
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "count_gte"
+    seeded_page_check.goal = "count_gte"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
+def seeded_status_exists_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
+    module_plan = ModulePlan(
+        page_asset_id=seeded_page_check.page_asset_id,
+        check_code="status_exists",
+        plan_version="v1",
+        steps_json=[
+            {"module": "auth.inject_state", "params": {"policy": "server_injected"}},
+            {"module": "nav.menu_chain", "params": {"menu_chain": ["系统管理"], "route_path": "/users"}},
+            {"module": "page.wait_ready", "params": {"route_path": "/users"}},
+            {
+                "module": "action.apply_filter",
+                "params": {
+                    "carrier": "table",
+                    "field": "status",
+                    "operator": "equals",
+                    "value": "启用",
+                },
+            },
+            {"module": "action.submit_query", "params": {"carrier": "table"}},
+            {
+                "module": "assert.row_exists_by_field",
+                "params": {
+                    "carrier": "table",
+                    "field": "status",
+                    "operator": "equals",
+                    "value": "启用",
+                },
+            },
+        ],
+    )
+    db_session.add(module_plan)
+    db_session.flush()
+
+    seeded_page_check.check_code = "status_exists"
+    seeded_page_check.goal = "status_exists"
+    seeded_page_check.module_plan_id = module_plan.id
+    db_session.add(seeded_page_check)
+    db_session.commit()
+    db_session.refresh(seeded_page_check)
+    return seeded_page_check
+
+
+@pytest.fixture
 def seeded_locator_bundle_check(db_session, seeded_page_check, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
         page_asset_id=seeded_page_check.page_asset_id,
@@ -649,6 +849,49 @@ async def test_run_page_check_supports_open_create_modal(
 ):
     result = await runner_service.run_page_check(page_check_id=seeded_open_create_modal_check.id)
     assert result.status == "passed"
+
+
+@pytest.mark.anyio
+async def test_run_page_check_supports_field_equals_exists_module_chain(
+    runner_service,
+    seeded_field_equals_exists_check,
+):
+    result = await runner_service.run_page_check(page_check_id=seeded_field_equals_exists_check.id)
+    modules = [step.module for step in result.step_results]
+    assert "action.apply_filter" in modules
+    assert "assert.row_exists_by_field" in modules
+
+
+@pytest.mark.anyio
+async def test_run_page_check_supports_no_data_and_count_gte_assertions(
+    db_session,
+    seeded_no_data_check,
+    seeded_count_gte_check,
+):
+    from app.domains.runner_service.service import RunnerService
+
+    service = RunnerService(
+        session=db_session,
+        runtime=FakeRuntime(data_count_sequence=[0, 3]),
+    )
+
+    no_data_result = await service.run_page_check(page_check_id=seeded_no_data_check.id)
+    count_gte_result = await service.run_page_check(page_check_id=seeded_count_gte_check.id)
+
+    modules = [step.module for step in no_data_result.step_results] + [
+        step.module for step in count_gte_result.step_results
+    ]
+    assert "assert.data_count" in modules
+
+
+@pytest.mark.anyio
+async def test_run_page_check_supports_status_exists_assertion(
+    runner_service,
+    seeded_status_exists_check,
+):
+    result = await runner_service.run_page_check(page_check_id=seeded_status_exists_check.id)
+    modules = [step.module for step in result.step_results]
+    assert "assert.row_exists_by_field" in modules
 
 
 @pytest.mark.anyio

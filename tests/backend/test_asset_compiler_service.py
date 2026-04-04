@@ -126,6 +126,42 @@ def test_build_module_plan_for_default_open_create_modal_uses_action_step():
     ]
 
 
+def test_build_module_plan_for_field_equals_exists_uses_query_assert_chain():
+    from app.domains.asset_compiler.module_plan_builder import build_module_plan
+
+    plan = build_module_plan(
+        check_code="field_equals_exists",
+        page_context={
+            "route_path": "/users",
+            "menu_chain": ["系统管理", "用户管理"],
+            "has_table": True,
+        },
+        locator_bundle={"candidates": []},
+    )
+
+    assert [step["module"] for step in plan.steps_json][-3:] == [
+        "action.apply_filter",
+        "action.submit_query",
+        "assert.row_exists_by_field",
+    ]
+
+
+def test_build_module_plan_for_count_gte_uses_data_count_assert():
+    from app.domains.asset_compiler.module_plan_builder import build_module_plan
+
+    plan = build_module_plan(
+        check_code="count_gte",
+        page_context={
+            "route_path": "/users",
+            "menu_chain": ["系统管理", "用户管理"],
+            "has_table": True,
+        },
+        locator_bundle={"candidates": []},
+    )
+
+    assert plan.steps_json[-1]["module"] == "assert.data_count"
+
+
 @pytest.fixture
 def asset_compiler_service(db_session):
     from app.domains.asset_compiler.service import AssetCompilerService

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.shared.enums import CrawlScope
 
@@ -66,6 +66,11 @@ class CreateCheckRequest(BaseModel):
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value)
 
+    @field_validator("template_code", "template_version", mode="before")
+    @classmethod
+    def normalize_optional_template_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
     @field_validator("strictness", "request_source", mode="before")
     @classmethod
     def normalize_text(cls, value: str) -> str:
@@ -75,6 +80,67 @@ class CreateCheckRequest(BaseModel):
     @classmethod
     def validate_time_budget(cls, value: int) -> int:
         return _validate_positive_int(value)
+
+    @model_validator(mode="after")
+    def validate_template_metadata_consistency(self):
+        has_template_context = any(
+            [
+                self.template_code is not None,
+                self.template_version is not None,
+                self.carrier_hint is not None,
+                self.template_params is not None,
+            ]
+        )
+        if not has_template_context:
+            return self
+
+        missing: list[str] = []
+        if self.template_code is None:
+            missing.append("template_code")
+        if self.template_version is None:
+            missing.append("template_version")
+        if self.carrier_hint is None:
+            missing.append("carrier_hint")
+        if missing:
+            missing_fields = ", ".join(missing)
+            raise ValueError(
+                f"template metadata is incomplete, missing required field(s): {missing_fields}"
+            )
+        return self
+
+
+class CheckCandidatesRequest(BaseModel):
+    system_hint: str
+    page_hint: str | None = None
+    intent: str
+    slot_hints: dict[str, object] | None = None
+
+    @field_validator("system_hint", "intent", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+    @field_validator("page_hint", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class CheckCandidateItem(BaseModel):
+    page_asset_id: UUID
+    page_check_id: UUID
+    asset_key: str
+    check_code: str
+    goal: str
+    alias_confidence: float
+    success_rate: float
+    sample_count: int
+    recency_score: float
+    rank_score: float
+
+
+class CheckCandidatesResponse(BaseModel):
+    candidates: list[CheckCandidateItem]
 
 
 class RunPageCheck(BaseModel):

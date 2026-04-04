@@ -8,6 +8,7 @@ from sqlmodel import Session
 
 from app.domains.runner_service.service import ASSET_RETIRED_FAILURE_MESSAGE, ExecutionBlockedError
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
+from app.infrastructure.db.models.execution import ExecutionRequest
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
 from app.shared.enums import AssetLifecycleStatus, PublishedJobState, QueuedJobStatus
 
@@ -92,6 +93,24 @@ class RunCheckJobHandler:
         execution_request_id = (
             raw_execution_request_id if isinstance(raw_execution_request_id, str) else None
         )
+        parsed_execution_request_id = _parse_uuid(execution_request_id) if execution_request_id else None
+        if execution_request_id is not None and parsed_execution_request_id is None:
+            await self._mark_failed(job, message="invalid execution_request_id in run_check job payload")
+            return
+        execution_request = None
+        if parsed_execution_request_id is not None:
+            execution_request = await self._get(ExecutionRequest, parsed_execution_request_id)
+            if execution_request is None:
+                await self._mark_failed(
+                    job,
+                    message=f"execution request {parsed_execution_request_id} not found",
+                )
+                return
+        runtime_inputs = (
+            execution_request.template_params
+            if execution_request is not None and isinstance(execution_request.template_params, dict)
+            else None
+        )
         raw_job_run_id = job.payload.get("job_run_id")
         job_run = None
         if raw_job_run_id is not None:
@@ -144,6 +163,7 @@ class RunCheckJobHandler:
                 result = await self.runner_service.run_page_check(
                     page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
+                    runtime_inputs=runtime_inputs,
                 )
         except ExecutionBlockedError:
             await self._mark_skipped(

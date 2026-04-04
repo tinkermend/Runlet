@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.domains.asset_compiler.schemas import StandardCheckDefinition
+from app.domains.asset_compiler.template_registry import list_templates
 
 
 def build_standard_checks(
@@ -27,6 +28,11 @@ def build_standard_checks(
                 goal="table_render",
                 assertion_schema={"assertion": "table_visible"},
                 state_signature=default_state_signature,
+            )
+        )
+        checks.extend(
+            _build_template_checks(
+                default_state_signature=default_state_signature,
             )
         )
 
@@ -97,6 +103,24 @@ def _build_representative_state_checks(
             )
 
     return checks
+
+
+def _build_template_checks(
+    *,
+    default_state_signature: str | None,
+) -> list[StandardCheckDefinition]:
+    template_checks: list[StandardCheckDefinition] = []
+    for template in list_templates(version="v1"):
+        template_checks.append(
+            StandardCheckDefinition(
+                check_code=template.template_code,
+                goal=template.template_code,
+                input_schema={"required_slots": list(template.required_slots)},
+                assertion_schema=dict(template.assertion_contract),
+                state_signature=default_state_signature,
+            )
+        )
+    return template_checks
 
 
 def _summary_suggests_create_action(page_summary: str | None) -> bool:

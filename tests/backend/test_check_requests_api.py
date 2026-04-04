@@ -27,7 +27,7 @@ def test_post_check_requests_accepts_template_payload(client, seeded_asset):
         json={
             "system_hint": "ERP",
             "page_hint": "用户管理",
-            "check_goal": "field_equals_exists",
+            "check_goal": "table_render",
             "template_code": "field_equals_exists",
             "template_version": "v1",
             "carrier_hint": "table",
@@ -35,6 +35,21 @@ def test_post_check_requests_accepts_template_payload(client, seeded_asset):
         },
     )
     assert response.status_code == 202
+
+
+def test_post_check_requests_rejects_template_payload_without_required_metadata(client, seeded_asset):
+    response = client.post(
+        "/api/v1/check-requests",
+        json={
+            "system_hint": "ERP",
+            "page_hint": "用户管理",
+            "check_goal": "table_render",
+            "template_params": {"field": "username", "operator": "equals", "value": "alice"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "template metadata is incomplete" in response.text
 
 
 def test_post_check_requests_rejects_non_positive_time_budget(client, db_session):

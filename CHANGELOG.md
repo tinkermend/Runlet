@@ -9,6 +9,10 @@
 - **异常处理器收窄（Issue 5 review）**：移除全局 `ValueError` 处理器（过于宽泛，会吞掉标准库错误），改为注册专用 `BusinessRuleError` 处理器，仅对业务规则异常返回 422。
 - **修复 runtime_policies.py 重复字段**：移除 `SystemAuthPolicy` 上重复的 `system: Relationship()` 声明。
 - **清理未使用导入**：移除 `main.py` 中未使用的 `traceback`、`runner.py` 中未使用的 `col`。
+- **候选推荐排序收口（Task 3）**：`control_plane.recommendation` 改为按候选粒度应用冷启动规则（不再全局切换），统一以 `rank_score` 作为主排序键，并在冷启动同分场景按最近执行时间打破并列；补齐 service 侧“冷热混排”和“冷启动同置信度按 recency 排序”回归测试。
+- **模板注册与编译映射（Task 4）**：新增 `template_registry`（V1: `has_data/no_data/field_equals_exists/status_exists/count_gte`），`check_templates` 改为注册中心驱动追加模板化检查，`module_plan_builder` 新增模板链路编译（`action.apply_filter/action.submit_query/assert.*`）并保留旧 `table_render/open_create_modal` 路径兼容。
+- **Runner 数据断言模块（Task 5）**：新增 `data_assertion_modules` 占位解析与计数断言工具，`module_executor` 与 `playwright_runtime` 支持 `action.apply_filter/action.submit_query/assert.data_count/assert.row_exists_by_field`，并补齐 `field_equals_exists/no_data/count_gte/status_exists` 的 runner 回归测试。
+- **参数透传与只读守卫（Task 6）**：`control_plane.submit_check_request` 增加只读模板守卫（拒绝非 V1 readonly 模板），`run_check_job` 在执行 `precompiled` 检查时会读取 `execution_request.template_params` 并透传到 `RunnerService.run_page_check(runtime_inputs=...)`，补齐 `readonly/template_params/element_asset_missing` 回归测试。
 
 ### Added
 - Frontend management console (React + Vite + TypeScript) under `front/`
@@ -19,12 +23,15 @@
 - Asset browser API (`/api/console/assets/`)
 - Run results API (`/api/console/results/`)
 - UI foundation docs (`docs/front/`)
+- 新增检查候选推荐 API（`POST /api/v1/check-requests:candidates`），支持成功率优先排序与冷启动回退。
 - 新增 `precompiled` 轨道分层重试策略设计文档：`docs/superpowers/specs/2026-04-04-precompiled-retry-policy-design.md`，明确第一阶段仅在 `precompiled` 启用“按失败类型重试（最多 3 次）”，并定义可重试/不可重试边界、退避策略、`queued_jobs.result_payload` 的 attempt 审计字段以及首周验收指标。
+- 新增 `precompiled` 轨道分层重试 V1 实施计划：`docs/superpowers/plans/2026-04-04-precompiled-retry-policy-v1-plan.md`，按 TDD 拆分 retry policy 纯函数层、`run_check` 重试循环、边界回归、退避序列验证与全量回归收口步骤。
 - 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并补充前端会话认证配套改造（`/api/console/auth/me` 登录态校验、统一 401 处理）及 `.env` 密钥建议（`SESSION_SECRET`、可选 `PASSWORD_PEPPER`）。
 - 新增 Web Session + Skills PAT 认证治理 V1 实施计划：`docs/superpowers/plans/2026-04-04-web-session-skills-pat-auth-v1-plan.md`，按“身份模型与迁移、console 会话收敛、PAT 管理 API、channel-action 判权、前端 `/me` 登录态改造、PAT 管理页、全量验证”拆解可执行任务。
 - 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
 - 更新 AI Chat 模板化数据断言设计文档：补齐 V1 与 `detail` 载体边界、候选排序冷启动回退规则、覆盖率临时统计窗口，并明确 V1 不包含详情 carrier。
 - 新增 AI Chat 模板化数据断言 V1 实施计划：`docs/superpowers/plans/2026-04-04-chat-template-data-assertion-v1-plan.md`，按 TDD 拆分请求契约、模板参数持久化、候选推荐、模板编译、runner 断言模块、只读守卫与回归验证任务。
+- 新增 `execution_requests` 模板元数据持久化（Task 2）：新增 `template_code/template_version/carrier_hint/template_params` 字段与 Alembic 迁移 `0012_execution_request_template_params`，`control_plane` 入库路径已透传该字段集并补齐 schema/service 回归测试。
 
 ## 2026-04-04
 

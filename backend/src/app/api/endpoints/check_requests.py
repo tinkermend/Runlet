@@ -8,6 +8,8 @@ from app.api.deps import ControlPlaneServiceDep
 from app.domains.control_plane.schemas import (
     CheckRequestAccepted,
     CheckRequestStatus,
+    CheckCandidatesRequest,
+    CheckCandidatesResponse,
     CreateCheckRequest,
     PublishCheckRequest,
 )
@@ -24,6 +26,14 @@ async def create_check_request(
     service: ControlPlaneServiceDep,
 ) -> CheckRequestAccepted:
     return await service.submit_check_request(**payload.model_dump())
+
+
+@router.post(":candidates", response_model=CheckCandidatesResponse)
+async def list_check_request_candidates(
+    payload: CheckCandidatesRequest,
+    service: ControlPlaneServiceDep,
+) -> CheckCandidatesResponse:
+    return await service.get_check_candidates(**payload.model_dump())
 
 
 @router.get("/{request_id}", response_model=CheckRequestStatus)

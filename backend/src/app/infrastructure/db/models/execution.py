@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
@@ -45,8 +46,18 @@ class ExecutionRequest(BaseModel, table=True):
     check_goal: str = Field(max_length=64)
     strictness: str = Field(default="balanced", max_length=32)
     time_budget_ms: int = Field(default=20_000)
+    template_code: str | None = Field(default=None, max_length=64)
+    template_version: str | None = Field(default=None, max_length=32)
+    carrier_hint: str | None = Field(default=None, max_length=16)
+    template_params: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
 
-    plans: list["ExecutionPlan"] = Relationship(back_populates="request")
+    plans: list["ExecutionPlan"] = Relationship(
+        back_populates="request",
+        sa_relationship=relationship("ExecutionPlan", back_populates="request"),
+    )
 
 
 class ExecutionPlan(BaseModel, table=True):
@@ -61,8 +72,14 @@ class ExecutionPlan(BaseModel, table=True):
     auth_policy: str = Field(max_length=64)
     module_plan_id: UUID | None = Field(default=None)
 
-    request: "ExecutionRequest | None" = Relationship(back_populates="plans")
-    runs: list["ExecutionRun"] = Relationship(back_populates="plan")
+    request: "ExecutionRequest | None" = Relationship(
+        back_populates="plans",
+        sa_relationship=relationship("ExecutionRequest", back_populates="plans"),
+    )
+    runs: list["ExecutionRun"] = Relationship(
+        back_populates="plan",
+        sa_relationship=relationship("ExecutionRun", back_populates="plan"),
+    )
 
 
 class ExecutionRun(BaseModel, table=True):
@@ -81,8 +98,14 @@ class ExecutionRun(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
-    plan: "ExecutionPlan | None" = Relationship(back_populates="runs")
-    artifacts: list["ExecutionArtifact"] = Relationship(back_populates="run")
+    plan: "ExecutionPlan | None" = Relationship(
+        back_populates="runs",
+        sa_relationship=relationship("ExecutionPlan", back_populates="runs"),
+    )
+    artifacts: list["ExecutionArtifact"] = Relationship(
+        back_populates="run",
+        sa_relationship=relationship("ExecutionArtifact", back_populates="run"),
+    )
 
 
 class ExecutionArtifact(BaseModel, table=True):
@@ -105,7 +128,10 @@ class ExecutionArtifact(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
-    run: "ExecutionRun | None" = Relationship(back_populates="artifacts")
+    run: "ExecutionRun | None" = Relationship(
+        back_populates="artifacts",
+        sa_relationship=relationship("ExecutionRun", back_populates="artifacts"),
+    )
 
 
 class ScriptRender(BaseModel, table=True):

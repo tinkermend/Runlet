@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.domains.asset_compiler.template_registry import get_template
 from app.domains.control_plane.job_types import (
     ASSET_COMPILE_JOB_TYPE,
     AUTH_REFRESH_JOB_TYPE,
@@ -13,6 +14,7 @@ from app.domains.control_plane.job_types import (
     RUN_CHECK_JOB_TYPE,
 )
 from app.domains.control_plane.repository import ControlPlaneRepository
+from app.domains.control_plane.recommendation import rank_candidates
 from app.domains.control_plane.runtime_policies import (
     InvalidRuntimePolicyScheduleError,
     UpsertSystemAuthPolicy,
@@ -31,6 +33,9 @@ from app.domains.control_plane.schemas import (
     CheckRequestStatus,
     CompileAssetsAccepted,
     CompileAssetsRequest,
+    CheckCandidateItem,
+    CheckCandidatesRequest,
+    CheckCandidatesResponse,
     CreateCheckRequest,
     CrawlAccepted,
     SystemAuthPolicyRead,
@@ -104,6 +109,7 @@ class ControlPlaneService:
             carrier_hint=carrier_hint,
             template_params=template_params,
         )
+        self._assert_readonly_template_request(payload=payload)
 
         resolution = await self.repository.resolve_page_asset_and_check(
             system_hint=payload.system_hint,
@@ -140,6 +146,42 @@ class ControlPlaneService:
             module_plan_id=page_check.module_plan_id if page_check else None,
             execution_track=execution_track,
         )
+
+    async def get_check_candidates(
+        self,
+        *,
+        system_hint: str,
+        page_hint: str | None,
+        intent: str,
+        slot_hints: dict[str, object] | None = None,
+    ) -> CheckCandidatesResponse:
+        payload = CheckCandidatesRequest(
+            system_hint=system_hint,
+            page_hint=page_hint,
+            intent=intent,
+            slot_hints=slot_hints,
+        )
+        candidates = await self.repository.list_check_candidates(
+            system_hint=payload.system_hint,
+            page_hint=payload.page_hint,
+        )
+        ranked = rank_candidates(candidates)
+        top_candidates = [
+            CheckCandidateItem(
+                page_asset_id=item.page_asset_id,
+                page_check_id=item.page_check_id,
+                asset_key=item.asset_key,
+                check_code=item.check_code,
+                goal=item.goal,
+                alias_confidence=item.alias_confidence,
+                success_rate=item.success_rate,
+                sample_count=item.sample_count,
+                recency_score=item.recency_score,
+                rank_score=item.rank_score,
+            )
+            for item in ranked[:3]
+        ]
+        return CheckCandidatesResponse(candidates=top_candidates)
 
     async def get_check_request_status(self, request_id: UUID) -> CheckRequestStatus:
         status = await self.repository.get_check_request_status(request_id=request_id)
@@ -552,6 +594,16 @@ class ControlPlaneService:
             published_jobs_paused=published_jobs_paused,
             published_jobs_resumed=published_jobs_resumed,
         )
+
+    def _assert_readonly_template_request(self, *, payload: CreateCheckRequest) -> None:
+        if payload.template_code is None:
+            return
+        template = get_template(
+            template_code=payload.template_code,
+            version=payload.template_version or "v1",
+        )
+        if template is None or not template.readonly:
+            raise HTTPException(status_code=422, detail="readonly template required")
 
     async def _accept_check_request(
         self,

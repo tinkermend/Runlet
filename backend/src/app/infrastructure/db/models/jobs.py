@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
@@ -101,8 +102,16 @@ class PublishedJob(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False, onupdate=utcnow),
     )
 
-    page_check: "PageCheck | None" = Relationship()
-    job_runs: list["JobRun"] = Relationship(back_populates="published_job")
+    page_check: "PageCheck | None" = Relationship(
+        sa_relationship=relationship(
+            "PageCheck",
+            foreign_keys="PublishedJob.page_check_id",
+        ),
+    )
+    job_runs: list["JobRun"] = Relationship(
+        back_populates="published_job",
+        sa_relationship=relationship("JobRun", back_populates="published_job"),
+    )
 
 
 class JobRun(BaseModel, table=True):
@@ -140,4 +149,7 @@ class JobRun(BaseModel, table=True):
         sa_column=sa.Column(sa.Text(), nullable=True),
     )
 
-    published_job: "PublishedJob | None" = Relationship(back_populates="job_runs")
+    published_job: "PublishedJob | None" = Relationship(
+        back_populates="job_runs",
+        sa_relationship=relationship("PublishedJob", back_populates="job_runs"),
+    )
