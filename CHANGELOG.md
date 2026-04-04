@@ -10,6 +10,7 @@
 - Run results API (`/api/console/results/`)
 - UI foundation docs (`docs/front/`)
 - 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并约束 `skills` 不可手动触发采集、手动采集仅 `web/cli` 可调用。
+- 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
 
 ## 2026-04-04
 
