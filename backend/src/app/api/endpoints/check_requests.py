@@ -5,6 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter
 
 from app.api.deps import ControlPlaneServiceDep
+from app.api.deps_auth import PrincipalDep
+from app.domains.control_plane.authorization import authorize
 from app.domains.control_plane.schemas import (
     CheckRequestAccepted,
     CheckRequestStatus,
@@ -21,8 +23,10 @@ router = APIRouter(prefix="/check-requests", tags=["check-requests"])
 @router.post("", status_code=202, response_model=CheckRequestAccepted)
 async def create_check_request(
     payload: CreateCheckRequest,
+    principal: PrincipalDep,
     service: ControlPlaneServiceDep,
 ) -> CheckRequestAccepted:
+    authorize(principal=principal, action="create_check_request", system_id=None)
     return await service.submit_check_request(**payload.model_dump())
 
 

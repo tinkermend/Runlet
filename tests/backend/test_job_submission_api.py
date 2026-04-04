@@ -4,8 +4,20 @@ from sqlmodel import select
 from app.infrastructure.db.models.jobs import QueuedJob
 
 
+def _auth_cookie(client) -> dict[str, str]:
+    resp = client.post(
+        "/api/console/auth/login",
+        json={"username": "admin", "password": "admin"},
+    )
+    assert resp.status_code == 200
+    return {"console_session": resp.cookies["console_session"]}
+
+
 def test_post_auth_refresh_accepts_job(client, seeded_system, db_session):
-    response = client.post(f"/api/v1/systems/{seeded_system.id}/auth:refresh")
+    response = client.post(
+        f"/api/v1/systems/{seeded_system.id}/auth:refresh",
+        cookies=_auth_cookie(client),
+    )
 
     assert response.status_code == 202
     body = response.json()
@@ -31,6 +43,7 @@ def test_post_crawl_accepts_job(client, seeded_system, db_session):
             "framework_hint": "auto",
             "max_pages": 50,
         },
+        cookies=_auth_cookie(client),
     )
 
     assert response.status_code == 202
@@ -81,28 +94,36 @@ def test_post_compile_assets_accepts_job(client, seeded_snapshot, db_session):
 
 
 @pytest.mark.parametrize(
-    ("path", "payload"),
+    ("path", "payload", "with_auth"),
     [
-        ("/api/v1/systems/00000000-0000-0000-0000-000000000001/auth:refresh", None),
+        ("/api/v1/systems/00000000-0000-0000-0000-000000000001/auth:refresh", None, True),
         (
             "/api/v1/systems/00000000-0000-0000-0000-000000000001/crawl",
             {"crawl_scope": "full", "framework_hint": "auto", "max_pages": 50},
+            True,
         ),
         (
             "/api/v1/snapshots/00000000-0000-0000-0000-000000000001/compile-assets",
             {"compile_scope": "impacted_pages_only"},
+            False,
         ),
     ],
 )
-def test_job_submission_returns_404_when_target_missing(client, db_session, path, payload):
-    response = client.post(path, json=payload)
+def test_job_submission_returns_404_when_target_missing(client, db_session, path, payload, with_auth):
+    kwargs = {"json": payload}
+    if with_auth:
+        kwargs["cookies"] = _auth_cookie(client)
+    response = client.post(path, **kwargs)
 
     assert response.status_code == 404
     assert db_session.exec(select(QueuedJob)).all() == []
 
 
 def test_auth_refresh_returns_job_identifier(client, seeded_system):
-    response = client.post(f"/api/v1/systems/{seeded_system.id}/auth:refresh")
+    response = client.post(
+        f"/api/v1/systems/{seeded_system.id}/auth:refresh",
+        cookies=_auth_cookie(client),
+    )
 
     assert response.status_code == 202
     assert response.json()["job_id"]
@@ -112,6 +133,7 @@ def test_crawl_returns_job_identifier(client, seeded_system):
     response = client.post(
         f"/api/v1/systems/{seeded_system.id}/crawl",
         json={"crawl_scope": "full", "framework_hint": "auto", "max_pages": 20},
+        cookies=_auth_cookie(client),
     )
 
     assert response.status_code == 202
@@ -122,7 +144,25 @@ def test_crawl_rejects_non_positive_max_pages(client, seeded_system, db_session)
     response = client.post(
         f"/api/v1/systems/{seeded_system.id}/crawl",
         json={"crawl_scope": "full", "framework_hint": "auto", "max_pages": 0},
+        cookies=_auth_cookie(client),
     )
 
     assert response.status_code == 422
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+def test_auth_refresh_requires_auth(client, seeded_system, db_session):
+    response = client.post(f"/api/v1/systems/{seeded_system.id}/auth:refresh")
+
+    assert response.status_code == 401
+    assert db_session.exec(select(QueuedJob)).all() == []
+
+
+def test_crawl_requires_auth(client, seeded_system, db_session):
+    response = client.post(
+        f"/api/v1/systems/{seeded_system.id}/crawl",
+        json={"crawl_scope": "full", "framework_hint": "auto", "max_pages": 20},
+    )
+
+    assert response.status_code == 401
     assert db_session.exec(select(QueuedJob)).all() == []
