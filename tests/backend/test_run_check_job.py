@@ -227,7 +227,7 @@ class RetryThenBlockedRunnerService:
                     "needs_recompile": False,
                 },
             )()
-        raise ExecutionBlockedError("asset_retired_missing")
+        raise ExecutionBlockedError(reason="asset_retired_missing")
 
 
 @pytest.fixture

@@ -31,7 +31,7 @@ class PrecompiledRetryTerminalError(RuntimeError):
 
 class PrecompiledRetryBlockedError(ExecutionBlockedError):
     def __init__(self, *, message: str, retry_payload: dict[str, object]) -> None:
-        super().__init__(message)
+        super().__init__(reason=message)
         self.retry_payload = retry_payload
 
 
