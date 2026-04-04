@@ -804,7 +804,10 @@ async def test_run_check_job_does_not_retry_for_non_precompiled_track(
     queued_run_check_job,
     db_session,
 ):
-    queued_run_check_job.payload["execution_track"] = "manual"
+    queued_run_check_job.payload = {
+        **queued_run_check_job.payload,
+        "execution_track": "manual",
+    }
     db_session.add(queued_run_check_job)
     db_session.commit()
     db_session.refresh(queued_run_check_job)
