@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
@@ -29,11 +30,19 @@ class System(BaseModel, table=True):
 
     credentials: list["SystemCredential"] = Relationship(
         back_populates="system",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "SystemCredential",
+            back_populates="system",
+            cascade="all, delete-orphan",
+        ),
     )
     auth_states: list["AuthState"] = Relationship(
         back_populates="system",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "AuthState",
+            back_populates="system",
+            cascade="all, delete-orphan",
+        ),
     )
 
 
@@ -52,7 +61,10 @@ class SystemCredential(BaseModel, table=True):
     )
     secret_ref: str | None = Field(default=None, max_length=255)
 
-    system: System | None = Relationship(back_populates="credentials")
+    system: System | None = Relationship(
+        back_populates="credentials",
+        sa_relationship=relationship("System", back_populates="credentials"),
+    )
 
 
 class AuthState(BaseModel, table=True):
@@ -96,4 +108,7 @@ class AuthState(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
 
-    system: System | None = Relationship(back_populates="auth_states")
+    system: System | None = Relationship(
+        back_populates="auth_states",
+        sa_relationship=relationship("System", back_populates="auth_states"),
+    )

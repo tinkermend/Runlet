@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from pydantic import field_validator
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
@@ -96,15 +97,27 @@ class PageAsset(BaseModel, table=True):
 
     checks: list["PageCheck"] = Relationship(
         back_populates="page_asset",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "PageCheck",
+            back_populates="page_asset",
+            cascade="all, delete-orphan",
+        ),
     )
     module_plans: list["ModulePlan"] = Relationship(
         back_populates="page_asset",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "ModulePlan",
+            back_populates="page_asset",
+            cascade="all, delete-orphan",
+        ),
     )
     asset_snapshots: list["AssetSnapshot"] = Relationship(
         back_populates="page_asset",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "AssetSnapshot",
+            back_populates="page_asset",
+            cascade="all, delete-orphan",
+        ),
     )
 
 
@@ -145,7 +158,10 @@ class PageCheck(BaseModel, table=True):
     success_rate: float | None = Field(default=None)
     last_verified_at: datetime | None = Field(default=None)
 
-    page_asset: "PageAsset | None" = Relationship(back_populates="checks")
+    page_asset: "PageAsset | None" = Relationship(
+        back_populates="checks",
+        sa_relationship=relationship("PageAsset", back_populates="checks"),
+    )
 
 
 class IntentAlias(BaseModel, table=True):
@@ -183,7 +199,10 @@ class ModulePlan(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=False),
     )
 
-    page_asset: "PageAsset | None" = Relationship(back_populates="module_plans")
+    page_asset: "PageAsset | None" = Relationship(
+        back_populates="module_plans",
+        sa_relationship=relationship("PageAsset", back_populates="module_plans"),
+    )
 
 
 class AssetSnapshot(BaseModel, table=True):
@@ -203,7 +222,10 @@ class AssetSnapshot(BaseModel, table=True):
         sa_column=sa.Column(asset_status_enum(), nullable=False),
     )
 
-    page_asset: "PageAsset | None" = Relationship(back_populates="asset_snapshots")
+    page_asset: "PageAsset | None" = Relationship(
+        back_populates="asset_snapshots",
+        sa_relationship=relationship("PageAsset", back_populates="asset_snapshots"),
+    )
 
 
 class AssetReconciliationAudit(BaseModel, table=True):

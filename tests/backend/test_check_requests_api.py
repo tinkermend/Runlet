@@ -27,8 +27,8 @@ def test_post_check_requests_accepts_template_payload(client, seeded_asset):
         json={
             "system_hint": "ERP",
             "page_hint": "用户管理",
-            "check_goal": "field_equals_exists",
-            "template_code": "field_equals_exists",
+            "check_goal": "table_render",
+            "template_code": "table_render",
             "template_version": "v1",
             "carrier_hint": "table",
             "template_params": {"field": "username", "operator": "equals", "value": "alice"},

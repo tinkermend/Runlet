@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
@@ -46,15 +47,27 @@ class CrawlSnapshot(BaseModel, table=True):
 
     pages: list["Page"] = Relationship(
         back_populates="snapshot",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "Page",
+            back_populates="snapshot",
+            cascade="all, delete-orphan",
+        ),
     )
     menu_nodes: list["MenuNode"] = Relationship(
         back_populates="snapshot",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "MenuNode",
+            back_populates="snapshot",
+            cascade="all, delete-orphan",
+        ),
     )
     page_elements: list["PageElement"] = Relationship(
         back_populates="snapshot",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "PageElement",
+            back_populates="snapshot",
+            cascade="all, delete-orphan",
+        ),
     )
 
 
@@ -91,14 +104,25 @@ class Page(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
-    snapshot: "CrawlSnapshot | None" = Relationship(back_populates="pages")
+    snapshot: "CrawlSnapshot | None" = Relationship(
+        back_populates="pages",
+        sa_relationship=relationship("CrawlSnapshot", back_populates="pages"),
+    )
     menu_nodes: list["MenuNode"] = Relationship(
         back_populates="page",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "MenuNode",
+            back_populates="page",
+            cascade="all, delete-orphan",
+        ),
     )
     page_elements: list["PageElement"] = Relationship(
         back_populates="page",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        sa_relationship=relationship(
+            "PageElement",
+            back_populates="page",
+            cascade="all, delete-orphan",
+        ),
     )
 
 
@@ -131,8 +155,14 @@ class MenuNode(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=True),
     )
 
-    snapshot: "CrawlSnapshot | None" = Relationship(back_populates="menu_nodes")
-    page: "Page | None" = Relationship(back_populates="menu_nodes")
+    snapshot: "CrawlSnapshot | None" = Relationship(
+        back_populates="menu_nodes",
+        sa_relationship=relationship("CrawlSnapshot", back_populates="menu_nodes"),
+    )
+    page: "Page | None" = Relationship(
+        back_populates="menu_nodes",
+        sa_relationship=relationship("Page", back_populates="menu_nodes"),
+    )
 
 
 class PageElement(BaseModel, table=True):
@@ -171,5 +201,11 @@ class PageElement(BaseModel, table=True):
         sa_column=sa.Column(sa.Text(), nullable=True),
     )
 
-    snapshot: "CrawlSnapshot | None" = Relationship(back_populates="page_elements")
-    page: "Page | None" = Relationship(back_populates="page_elements")
+    snapshot: "CrawlSnapshot | None" = Relationship(
+        back_populates="page_elements",
+        sa_relationship=relationship("CrawlSnapshot", back_populates="page_elements"),
+    )
+    page: "Page | None" = Relationship(
+        back_populates="page_elements",
+        sa_relationship=relationship("Page", back_populates="page_elements"),
+    )

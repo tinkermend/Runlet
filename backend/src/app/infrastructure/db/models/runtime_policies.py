@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
+from sqlalchemy.orm import relationship
 from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
@@ -37,7 +38,9 @@ class SystemAuthPolicy(BaseModel, table=True):
         sa_column=sa.Column(sa.Text(), nullable=True),
     )
 
-    system: "System | None" = Relationship()
+    system: "System | None" = Relationship(
+        sa_relationship=relationship("System"),
+    )
 
 
 class SystemCrawlPolicy(BaseModel, table=True):
@@ -66,4 +69,6 @@ class SystemCrawlPolicy(BaseModel, table=True):
         sa_column=sa.Column(sa.Text(), nullable=True),
     )
 
-    system: "System | None" = Relationship()
+    system: "System | None" = Relationship(
+        sa_relationship=relationship("System"),
+    )
