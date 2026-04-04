@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from sqlmodel import Field
+from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
 from app.shared.enums import ExecutionResultStatus, RenderResultStatus
@@ -46,6 +46,8 @@ class ExecutionRequest(BaseModel, table=True):
     strictness: str = Field(default="balanced", max_length=32)
     time_budget_ms: int = Field(default=20_000)
 
+    plans: list["ExecutionPlan"] = Relationship(back_populates="request")
+
 
 class ExecutionPlan(BaseModel, table=True):
     __tablename__ = "execution_plans"
@@ -58,6 +60,9 @@ class ExecutionPlan(BaseModel, table=True):
     execution_track: str = Field(max_length=32)
     auth_policy: str = Field(max_length=64)
     module_plan_id: UUID | None = Field(default=None)
+
+    request: "ExecutionRequest | None" = Relationship(back_populates="plans")
+    runs: list["ExecutionRun"] = Relationship(back_populates="plan")
 
 
 class ExecutionRun(BaseModel, table=True):
@@ -75,6 +80,9 @@ class ExecutionRun(BaseModel, table=True):
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
+
+    plan: "ExecutionPlan | None" = Relationship(back_populates="runs")
+    artifacts: list["ExecutionArtifact"] = Relationship(back_populates="run")
 
 
 class ExecutionArtifact(BaseModel, table=True):
@@ -96,6 +104,8 @@ class ExecutionArtifact(BaseModel, table=True):
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
+
+    run: "ExecutionRun | None" = Relationship(back_populates="artifacts")
 
 
 class ScriptRender(BaseModel, table=True):

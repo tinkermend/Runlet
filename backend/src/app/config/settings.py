@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     app_name: str = Field(default="AI Playwright Platform")
     app_env: str = Field(default="development")
     log_level: str = Field(default="INFO")
+    json_logs: bool = Field(default=False)
     database_url: str = Field(
         default="postgresql+asyncpg://aiops:AIOps!1234@127.0.0.1:5432/runlet"
     )

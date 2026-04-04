@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from pydantic import field_validator
 from sqlalchemy.dialects import postgresql
-from sqlmodel import Field
+from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
 from app.shared.enums import AssetLifecycleStatus, AssetStatus
@@ -94,6 +94,19 @@ class PageAsset(BaseModel, table=True):
     compiled_from_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
     last_verified_at: datetime | None = Field(default=None)
 
+    checks: list["PageCheck"] = Relationship(
+        back_populates="page_asset",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    module_plans: list["ModulePlan"] = Relationship(
+        back_populates="page_asset",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    asset_snapshots: list["AssetSnapshot"] = Relationship(
+        back_populates="page_asset",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
 
 class PageCheck(BaseModel, table=True):
     __tablename__ = "page_checks"
@@ -132,6 +145,8 @@ class PageCheck(BaseModel, table=True):
     success_rate: float | None = Field(default=None)
     last_verified_at: datetime | None = Field(default=None)
 
+    page_asset: "PageAsset | None" = Relationship(back_populates="checks")
+
 
 class IntentAlias(BaseModel, table=True):
     __tablename__ = "intent_aliases"
@@ -168,6 +183,8 @@ class ModulePlan(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=False),
     )
 
+    page_asset: "PageAsset | None" = Relationship(back_populates="module_plans")
+
 
 class AssetSnapshot(BaseModel, table=True):
     __tablename__ = "asset_snapshots"
@@ -185,6 +202,8 @@ class AssetSnapshot(BaseModel, table=True):
         default=AssetStatus.SAFE,
         sa_column=sa.Column(asset_status_enum(), nullable=False),
     )
+
+    page_asset: "PageAsset | None" = Relationship(back_populates="asset_snapshots")
 
 
 class AssetReconciliationAudit(BaseModel, table=True):

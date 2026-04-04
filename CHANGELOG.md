@@ -1,5 +1,15 @@
 ## [Unreleased] - 2026-04-04
 
+### Changed
+- **模型关系补齐（Issue 4）**：为全部 18 个数据库模型添加 SQLAlchemy `Relationship()` 定义（同文件双向 + ORM cascade），覆盖 system→credential/auth_state、snapshot→page/menu_node/page_element、page→menu_node/page_element、page_asset→check/module_plan/snapshot、execution_request→plan→run→artifact、published_job→job_run 共 30 条关系链路，不引入数据库级 FK CASCADE 约束，由应用层 ORM cascade 保证一致性。
+- **全局异常处理（Issue 5）**：`main.py` 新增 `Exception` / `ValueError` 全局异常处理器，返回结构化 JSON（含 `request_id`、`error_type`），不再返回裸 500。
+- **结构化日志（Issue 5）**：新增 `app.infrastructure.logging` 模块，支持 JSON 格式（生产）和彩色人类可读格式（开发），通过 `settings.log_level` / `settings.json_logs` 控制；所有日志自动携带 `request_id`。
+- **Worker 竞态修复（Issue 5）**：`WorkerRunner._next_accepted_job()` 改用 `SELECT ... FOR UPDATE SKIP LOCKED`，多 Worker 并行部署时不再重复消费同一任务；Worker 主循环增加 `claimed/completed/failed` 结构化日志。
+- **请求 ID 中间件（Issue 5）**：新增 `@app.middleware("http")` 纯 ASGI 中间件，注入 `X-Request-ID` 响应头并记录请求耗时；不使用 `BaseHTTPMiddleware` 以避免流式响应问题。
+- **异常处理器收窄（Issue 5 review）**：移除全局 `ValueError` 处理器（过于宽泛，会吞掉标准库错误），改为注册专用 `BusinessRuleError` 处理器，仅对业务规则异常返回 422。
+- **修复 runtime_policies.py 重复字段**：移除 `SystemAuthPolicy` 上重复的 `system: Relationship()` 声明。
+- **清理未使用导入**：移除 `main.py` 中未使用的 `traceback`、`runner.py` 中未使用的 `col`。
+
 ### Added
 - Frontend management console (React + Vite + TypeScript) under `front/`
 - Console session authentication (`/api/console/auth/`)

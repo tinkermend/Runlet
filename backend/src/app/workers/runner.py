@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
@@ -34,6 +35,9 @@ class JobHandler(Protocol):
     async def run(self, *, job_id: UUID) -> None: ...
 
 
+logger = logging.getLogger("runlet.worker")
+
+
 class WorkerRunner:
     def __init__(
         self,
@@ -55,16 +59,20 @@ class WorkerRunner:
             job.started_at = job.started_at or utcnow()
             job.finished_at = utcnow()
             job.failure_message = f"no handler registered for job type: {job.job_type}"
+            logger.warning("skipped job %s: no handler for type %s", job.id, job.job_type)
             await self._commit()
             return True
 
+        logger.info("claimed job %s (type=%s)", job.id, job.job_type)
         try:
             await handler.run(job_id=job.id)
+            logger.info("completed job %s (type=%s)", job.id, job.job_type)
         except Exception as exc:
             job.status = QueuedJobStatus.FAILED.value
             job.started_at = job.started_at or utcnow()
             job.finished_at = utcnow()
             job.failure_message = f"handler crashed: {exc}"
+            logger.exception("failed job %s (type=%s): %s", job.id, job.job_type, exc)
             await self._commit()
         return True
 
@@ -86,13 +94,21 @@ class WorkerRunner:
             await anyio.sleep(interval_seconds)
 
     async def _next_accepted_job(self) -> QueuedJob | None:
+        """Claim the next accepted job using SELECT ... FOR UPDATE SKIP LOCKED.
+
+        This prevents multiple workers from claiming the same job when
+        running in parallel.  For sync sessions the lock is omitted (single
+        worker scenario).
+        """
         statement = (
             select(QueuedJob)
             .where(QueuedJob.status == QueuedJobStatus.ACCEPTED.value)
             .order_by(QueuedJob.created_at, QueuedJob.id)
         )
         if isinstance(self.session, AsyncSession):
-            result = await self.session.exec(statement)
+            result = await self.session.exec(
+                statement.with_for_update(skip_locked=True)
+            )
             return result.first()
         return self.session.exec(statement).first()
 

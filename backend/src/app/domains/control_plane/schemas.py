@@ -51,6 +51,10 @@ class CreateCheckRequest(BaseModel):
     strictness: str = "balanced"
     time_budget_ms: int = 20_000
     request_source: str = "api"
+    template_code: str | None = None
+    template_version: str | None = None
+    carrier_hint: Literal["table", "list"] | None = None
+    template_params: dict[str, object] | None = None
 
     @field_validator("system_hint", "check_goal", mode="before")
     @classmethod

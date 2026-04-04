@@ -21,6 +21,22 @@ def test_post_check_requests_returns_accepted(client, seeded_asset):
     assert response.json()["execution_track"] == "precompiled"
 
 
+def test_post_check_requests_accepts_template_payload(client, seeded_asset):
+    response = client.post(
+        "/api/v1/check-requests",
+        json={
+            "system_hint": "ERP",
+            "page_hint": "用户管理",
+            "check_goal": "field_equals_exists",
+            "template_code": "field_equals_exists",
+            "template_version": "v1",
+            "carrier_hint": "table",
+            "template_params": {"field": "username", "operator": "equals", "value": "alice"},
+        },
+    )
+    assert response.status_code == 202
+
+
 def test_post_check_requests_rejects_non_positive_time_budget(client, db_session):
     response = client.post(
         "/api/v1/check-requests",

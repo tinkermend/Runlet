@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from sqlmodel import Field
+from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
 from app.shared.enums import PublishedJobState, QueuedJobStatus, RuntimeTriggerSource
@@ -101,6 +101,9 @@ class PublishedJob(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False, onupdate=utcnow),
     )
 
+    page_check: "PageCheck | None" = Relationship()
+    job_runs: list["JobRun"] = Relationship(back_populates="published_job")
+
 
 class JobRun(BaseModel, table=True):
     __tablename__ = "job_runs"
@@ -136,3 +139,5 @@ class JobRun(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(sa.Text(), nullable=True),
     )
+
+    published_job: "PublishedJob | None" = Relationship(back_populates="job_runs")

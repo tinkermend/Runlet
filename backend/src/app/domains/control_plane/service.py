@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -86,6 +87,10 @@ class ControlPlaneService:
         strictness: str = "balanced",
         time_budget_ms: int = 20_000,
         request_source: str = "api",
+        template_code: str | None = None,
+        template_version: str | None = None,
+        carrier_hint: Literal["table", "list"] | None = None,
+        template_params: dict[str, object] | None = None,
     ) -> CheckRequestAccepted:
         payload = CreateCheckRequest(
             system_hint=system_hint,
@@ -94,6 +99,10 @@ class ControlPlaneService:
             strictness=strictness,
             time_budget_ms=time_budget_ms,
             request_source=request_source,
+            template_code=template_code,
+            template_version=template_version,
+            carrier_hint=carrier_hint,
+            template_params=template_params,
         )
 
         resolution = await self.repository.resolve_page_asset_and_check(

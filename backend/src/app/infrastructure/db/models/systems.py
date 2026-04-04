@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from sqlmodel import Field
+from sqlmodel import Field, Relationship
 
 from app.infrastructure.db.base import BaseModel
 from app.shared.enums import AuthStateStatus
@@ -27,6 +27,15 @@ class System(BaseModel, table=True):
     base_url: str = Field(max_length=512)
     framework_type: str = Field(max_length=32)
 
+    credentials: list["SystemCredential"] = Relationship(
+        back_populates="system",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    auth_states: list["AuthState"] = Relationship(
+        back_populates="system",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
 
 class SystemCredential(BaseModel, table=True):
     __tablename__ = "system_credentials"
@@ -42,6 +51,8 @@ class SystemCredential(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=True),
     )
     secret_ref: str | None = Field(default=None, max_length=255)
+
+    system: System | None = Relationship(back_populates="credentials")
 
 
 class AuthState(BaseModel, table=True):
@@ -84,3 +95,5 @@ class AuthState(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
+
+    system: System | None = Relationship(back_populates="auth_states")
