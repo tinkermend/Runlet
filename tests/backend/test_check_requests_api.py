@@ -40,6 +40,7 @@ def test_post_check_requests_returns_accepted(client, seeded_asset):
 
 
 def test_post_check_requests_accepts_template_payload(client, seeded_asset):
+    token = _issue_skills_pat(client)
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -51,11 +52,13 @@ def test_post_check_requests_accepts_template_payload(client, seeded_asset):
             "carrier_hint": "table",
             "template_params": {"field": "username", "operator": "equals", "value": "alice"},
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 202
 
 
 def test_post_check_requests_rejects_template_payload_without_required_metadata(client, seeded_asset):
+    token = _issue_skills_pat(client)
     response = client.post(
         "/api/v1/check-requests",
         json={
@@ -64,6 +67,7 @@ def test_post_check_requests_rejects_template_payload_without_required_metadata(
             "check_goal": "table_render",
             "template_params": {"field": "username", "operator": "equals", "value": "alice"},
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 422

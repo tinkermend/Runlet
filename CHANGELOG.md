@@ -18,6 +18,7 @@
 - 前端 HTTP 客户端新增 `ApiError(status)` 与统一 401 处理挂点，支持 204/无 JSON 响应安全返回。
 - 补充 `backend/.env.example` 与 `backend/README.md` 的 session/PAT 配置说明，明确 Web session 与 Skills PAT 分层认证模型。
 - **Alembic head 收敛**：新增 merge revision `0013_merge_0012_heads`，合并 `0012_exec_req_tpl_params` 与 `0012_identity_pat_auth` 双分支，恢复 `alembic upgrade head` 的单 head 升级路径。
+- **模板请求 API 鉴权回归对齐**：`test_check_requests_api` 中模板相关用例改为携带 skills PAT，确保与 `/api/v1/check-requests` 的最新鉴权策略一致，避免错误地以 401 覆盖参数校验断言。
 
 ### Added
 - Frontend management console (React + Vite + TypeScript) under `front/`
