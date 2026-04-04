@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.api.deps_auth import require_console_user
 from app.domains.control_plane.console_schemas import (
     CHECK_TYPE_LABELS,
     AssetDetail,
@@ -16,6 +17,7 @@ from app.domains.control_plane.console_schemas import (
 from app.infrastructure.db.console_session import get_console_db
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
+from app.infrastructure.db.models.identity import User
 from app.infrastructure.db.models.systems import System
 
 router = APIRouter(prefix="/assets", tags=["console-assets"])
@@ -50,7 +52,10 @@ def _get_check_codes_for_asset(session: Session, asset_id: UUID) -> list[str]:
 
 
 @router.get("/", response_model=list[SystemAssetGroup])
-def list_assets(session: ConsoleDep) -> list[SystemAssetGroup]:
+def list_assets(
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> list[SystemAssetGroup]:
     assets = session.exec(select(PageAsset)).all()
 
     # Group: system_id -> page_id -> list[PageAsset]
@@ -96,7 +101,11 @@ def list_assets(session: ConsoleDep) -> list[SystemAssetGroup]:
 
 
 @router.get("/{asset_id}", response_model=AssetDetail)
-def get_asset(asset_id: UUID, session: ConsoleDep) -> AssetDetail:
+def get_asset(
+    asset_id: UUID,
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> AssetDetail:
     asset = session.get(PageAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")

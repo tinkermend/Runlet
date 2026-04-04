@@ -13,6 +13,9 @@
 - 新增 Web Session + Skills PAT 认证治理 V1 实施计划：`docs/superpowers/plans/2026-04-04-web-session-skills-pat-auth-v1-plan.md`，按“身份模型与迁移、console 会话收敛、PAT 管理 API、channel-action 判权、前端 `/me` 登录态改造、PAT 管理页、全量验证”拆解可执行任务。
 - 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
 
+### Changed
+- Console 会话认证改为 `users/user_sessions` 驱动，并为 `/api/console/*` 接口统一补齐登录校验（未登录返回 401）。
+
 ## 2026-04-04
 
 - 完成采集完整性增强 Task 6 回归收口：新增 `crawl -> compile -> run` 第一阶段基线回归测试，锁定 crawl 侧 `state_signature/locator_candidates` 持久化、compile 侧 `state.enter + locator_bundle` 计划产出、runner 侧 primary/fallback locator telemetry 记录；并新增指标基线常量断言（`main_nav_coverage=0.95`、`representative_state_coverage=0.80`、`key_element_precision=0.90`、`primary_locator_hit_rate=0.85`）。

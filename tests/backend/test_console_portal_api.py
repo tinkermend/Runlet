@@ -4,8 +4,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def _login(client: TestClient) -> None:
+    resp = client.post("/api/console/auth/login", json={"username": "admin", "password": "admin"})
+    assert resp.status_code == 200
+
+
+def test_dashboard_requires_auth(client: TestClient):
+    resp = client.get("/api/console/portal/dashboard")
+    assert resp.status_code == 401
+
+
 def test_dashboard_summary(client: TestClient):
     """Dashboard summary returns counts."""
+    _login(client)
     resp = client.get("/api/console/portal/dashboard")
     assert resp.status_code == 200
     data = resp.json()
@@ -19,6 +30,7 @@ def test_dashboard_summary(client: TestClient):
 
 def test_systems_list(client: TestClient):
     """Systems list returns array."""
+    _login(client)
     resp = client.get("/api/console/portal/systems")
     assert resp.status_code == 200
     data = resp.json()
@@ -27,6 +39,7 @@ def test_systems_list(client: TestClient):
 
 def test_system_onboard(client: TestClient):
     """Onboard a new system."""
+    _login(client)
     resp = client.post("/api/console/portal/systems", json={
         "name": "Test System",
         "base_url": "https://example.com",

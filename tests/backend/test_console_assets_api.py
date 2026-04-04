@@ -6,8 +6,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def _login(client: TestClient) -> None:
+    resp = client.post("/api/console/auth/login", json={"username": "admin", "password": "admin"})
+    assert resp.status_code == 200
+
+
+def test_assets_requires_auth(client: TestClient):
+    resp = client.get("/api/console/assets/")
+    assert resp.status_code == 401
+
+
 def test_assets_list_empty(client: TestClient):
     """Asset list returns an empty list when no assets exist."""
+    _login(client)
     resp = client.get("/api/console/assets/")
     assert resp.status_code == 200
     data = resp.json()
@@ -16,6 +27,7 @@ def test_assets_list_empty(client: TestClient):
 
 def test_assets_list_with_seeded_asset(client: TestClient, seeded_page_asset):
     """Asset list returns grouped structure when assets exist."""
+    _login(client)
     resp = client.get("/api/console/assets/")
     assert resp.status_code == 200
     data = resp.json()
@@ -44,12 +56,14 @@ def test_assets_list_with_seeded_asset(client: TestClient, seeded_page_asset):
 
 def test_asset_detail_not_found(client: TestClient):
     """Asset detail returns 404 for unknown ID."""
+    _login(client)
     resp = client.get("/api/console/assets/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
 
 
 def test_asset_detail(client: TestClient, seeded_page_asset):
     """Asset detail returns full info including raw_facts field."""
+    _login(client)
     asset_id = str(seeded_page_asset.id)
     resp = client.get(f"/api/console/assets/{asset_id}")
     assert resp.status_code == 200
@@ -66,6 +80,7 @@ def test_asset_detail(client: TestClient, seeded_page_asset):
 
 def test_asset_detail_via_task_creation(client: TestClient):
     """Create a system + task, then verify asset appears in list and detail."""
+    _login(client)
     sys_resp = client.post(
         "/api/console/portal/systems",
         json={

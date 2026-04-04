@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, func, select
 
+from app.api.deps_auth import require_console_user
 from app.domains.control_plane.console_schemas import (
     RunResultItem,
     SystemItem,
@@ -26,6 +27,7 @@ from app.infrastructure.db.models.execution import (
     ExecutionRequest,
     ExecutionRun,
 )
+from app.infrastructure.db.models.identity import User
 from app.infrastructure.db.models.systems import System
 
 router = APIRouter(prefix="/tasks", tags=["console-tasks"])
@@ -90,7 +92,10 @@ def _last_run_for_check(session: Session, check_id: UUID) -> ExecutionRun | None
 
 # IMPORTANT: wizard-options must be defined BEFORE {task_id} routes
 @router.get("/wizard-options", response_model=WizardOptions)
-def get_wizard_options(session: ConsoleDep) -> WizardOptions:
+def get_wizard_options(
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> WizardOptions:
     systems = session.exec(select(System)).all()
     system_items = []
     for sys in systems:
@@ -108,7 +113,10 @@ def get_wizard_options(session: ConsoleDep) -> WizardOptions:
 
 
 @router.get("/", response_model=list[TaskItem])
-def list_tasks(session: ConsoleDep) -> list[TaskItem]:
+def list_tasks(
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> list[TaskItem]:
     checks = session.exec(select(PageCheck)).all()
     result = []
     for check in checks:
@@ -136,7 +144,11 @@ def list_tasks(session: ConsoleDep) -> list[TaskItem]:
 
 
 @router.post("/", status_code=201, response_model=TaskCreated)
-def create_task(body: TaskCreateRequest, session: ConsoleDep) -> TaskCreated:
+def create_task(
+    body: TaskCreateRequest,
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> TaskCreated:
     system = session.get(System, body.system_id)
     if not system:
         raise HTTPException(status_code=404, detail="System not found")
@@ -181,7 +193,11 @@ def create_task(body: TaskCreateRequest, session: ConsoleDep) -> TaskCreated:
 
 
 @router.get("/{task_id}", response_model=TaskDetail)
-def get_task(task_id: str, session: ConsoleDep) -> TaskDetail:
+def get_task(
+    task_id: str,
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> TaskDetail:
     try:
         uid = UUID(task_id)
     except ValueError:
@@ -246,7 +262,11 @@ def get_task(task_id: str, session: ConsoleDep) -> TaskDetail:
 
 
 @router.post("/{task_id}/trigger", status_code=202, response_model=TriggerResponse)
-def trigger_task(task_id: str, session: ConsoleDep) -> TriggerResponse:
+def trigger_task(
+    task_id: str,
+    _: User = Depends(require_console_user),
+    session: ConsoleDep,
+) -> TriggerResponse:
     try:
         uid = UUID(task_id)
     except ValueError:
