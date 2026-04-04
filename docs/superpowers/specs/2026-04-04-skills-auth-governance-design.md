@@ -8,9 +8,10 @@
 
 ## 1. 文档定位
 
-本文档定义 Runlet 平台在 `skills/web console/scheduler -> control_plane -> runner_service` 调用链上的认证与授权治理方案，解决以下核心问题：
+本文档定义 Runlet 平台在 `skills/web console/cli/scheduler -> control_plane -> runner_service` 调用链上的认证与授权治理方案，解决以下核心问题：
 
 - 不能允许任意人通过 `skills` 调用任意系统
+- `skills` 只负责用户对话与自动化测试任务构建，不直接触发手动采集
 - 认证与授权必须统一由后端控制面收敛，不在 `skills` 层分散实现
 - 正式执行仍保持“服务端认证注入 + 资产主模型 + 受控执行”主链
 - 支持会话登录、系统级授权、短期执行凭证、高风险动作闸门与调度委托执行
@@ -29,6 +30,7 @@
 4. 对部分高风险动作增加二次确认闸门
 5. 建立调度执行的服务主体授权模型，覆盖“人配置、机器触发”场景
 6. 建立完整审计链路，记录认证、授权、执行授权决策与拒绝原因
+7. 明确手动采集触发入口仅允许 Web 管理平台与 CLI
 
 ### 2.2 非目标
 
@@ -106,6 +108,7 @@
 3. `auth_service`：仅负责目标系统认证注入，不负责平台用户身份认证
 4. `runner_service`：仅执行已批准计划，不接收裸会话 token
 5. `scheduler_runtime`：仅以服务主体触发已发布对象，不继承用户会话
+6. `cli`：仅作为命令入口，可触发手动采集，但不绕过控制面鉴权
 
 ### 4.2 核心约束
 
@@ -148,7 +151,9 @@
 
 本平台存在两类入口：
 
-1. 交互入口：`skills` 或 Web 管理平台手动触发
+1. 交互入口：
+   - `skills`：仅对话解析与自动化测试任务构建
+   - `web_console/cli`：可执行手动触发（含手动采集）
 2. 调度入口：`scheduler_runtime` 到点触发 `published_job`
 
 统一规则：
@@ -158,12 +163,18 @@
 3. 调度触发时由 `control_plane` 依据 `published_job` 绑定的授权快照签发内部 grant
 4. 若策略启用 `strict_owner_guard=true`，当创建者权限失效时自动暂停 `published_job`
 
+补充约束：
+
+1. `skills` 不允许调用手动采集触发（`trigger_full_crawl`/`trigger_incremental_crawl`）
+2. 手动采集触发入口仅允许 `web_console` 与 `cli`
+3. `skills` 仅允许执行“对话解析 -> 自动化测试任务构建/发布”相关动作
+
 ### 5.4 统一时序图（交互调用 vs 调度调用）
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant S as Skills/Web Console
+    participant S as Skills/Web/CLI
     participant CP as Control Plane
     participant SCH as Scheduler Runtime
     participant R as Runner Service
@@ -223,6 +234,13 @@ sequenceDiagram
 - `created_by`
 - `created_at`
 
+第一版动作白名单建议：
+
+1. `skills`：`create_check_request`、`create_or_update_published_job`
+2. `web_console`：`create_check_request`、`create_or_update_published_job`、`trigger_full_crawl`、`trigger_incremental_crawl`
+3. `cli`：`create_or_update_published_job`、`trigger_full_crawl`、`trigger_incremental_crawl`
+4. `scheduler`：`trigger_published_job`
+
 ### 6.3 执行授权凭证
 
 `execution_grants`
@@ -254,7 +272,7 @@ sequenceDiagram
 - `request_id`
 - `ip`
 - `user_agent`
-- `channel`（skill/web_console/scheduler）
+- `channel`（skill/web_console/cli/scheduler）
 - `subject_type`（human/service）
 - `delegated_from_user_id`（可空，调度触发时记录任务创建者）
 - `created_at`
@@ -292,7 +310,7 @@ sequenceDiagram
 
 - `requested_by_user_id`（可空，兼容非用户来源）
 - `request_source_detail`（如 `skill:<name>`）
-- `channel`（skill/web_console/scheduler）
+- `channel`（skill/web_console/cli/scheduler）
 - `delegated_from_published_job_id`（可空，调度触发场景）
 
 ---
@@ -327,6 +345,7 @@ sequenceDiagram
 
 - `request_source` 保留用于来源标识，不再作为安全凭证
 - 任何正式执行入口不接受“仅会话、无 grant”模式
+- `skills` 入口申请 `execution_grant` 时，若 action 为手动采集触发，返回 `403`
 
 ---
 
@@ -346,6 +365,7 @@ sequenceDiagram
 3. grant 使用后写 `used_at`，重复使用返回冲突
 4. grant 过期、撤销、scope 不匹配均拒绝
 5. 内部 grant 与外部 grant 使用同一校验器，避免双轨安全分叉
+6. 增加 `channel-action` 绑定校验，拒绝跨入口越权（如 `skills -> trigger_full_crawl`）
 
 ### 9.3 敏感信息处理
 
@@ -363,6 +383,7 @@ sequenceDiagram
 4. `409`：grant 已使用（重放）
 5. `422`：grant 与请求 scope 不匹配
 6. `423`：调度触发被 owner guard 锁定（创建者权限失效）
+7. `403`（细分）：入口通道不允许该动作（例如 skills 触发手动采集）
 
 ---
 
@@ -378,6 +399,8 @@ sequenceDiagram
 6. 审计日志在 allow/deny/challenge 场景均落库
 7. Web 配置任务后，调度触发可走 service principal 授权链
 8. 创建者权限撤销后（strict guard），调度任务自动暂停并拒绝触发
+9. `skills` 调用手动采集触发接口时必须稳定返回 `403`
+10. Web/CLI 调用手动采集触发接口在具备权限时可通过
 
 ### 11.2 验收标准
 
@@ -395,6 +418,7 @@ sequenceDiagram
 
 - 落地 `users/user_sessions/user_system_permissions`
 - 管理端支持用户与系统授权配置
+- 落地 `channel-action` 白名单与默认拒绝策略
 
 ### Phase 2：execution_grant 与执行入口强校验
 
