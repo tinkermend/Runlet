@@ -1,15 +1,8 @@
 import secrets
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, EnvSettingsSource, SettingsConfigDict
-
-
-class PatEnvSettingsSource(EnvSettingsSource):
-    def prepare_field_value(self, field_name, field, value, value_is_complex):
-        if field_name == "pat_allowed_ttl_days" and isinstance(value, str):
-            parts = [part.strip() for part in value.split(",") if part.strip()]
-            return parts
-        return super().prepare_field_value(field_name, field, value, value_is_complex)
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -32,7 +25,7 @@ class Settings(BaseSettings):
     session_secret: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
     session_ttl_hours: int = Field(default=8, ge=1)
     pat_max_ttl_days: int = Field(default=7, ge=1)
-    pat_allowed_ttl_days: list[int] = Field(default_factory=lambda: [3, 7])
+    pat_allowed_ttl_days: Annotated[list[int], NoDecode] = Field(default_factory=lambda: [3, 7])
     password_pepper: str | None = Field(default=None)
 
     @field_validator("pat_allowed_ttl_days", mode="before")
@@ -47,26 +40,21 @@ class Settings(BaseSettings):
             return [int(part) for part in value]
         return value
 
+    @field_validator("pat_allowed_ttl_days")
     @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls,
-        init_settings,
-        env_settings,
-        dotenv_settings,
-        file_secret_settings,
-    ):
-        return (
-            init_settings,
-            PatEnvSettingsSource(settings_cls),
-            dotenv_settings,
-            file_secret_settings,
-        )
+    def validate_pat_allowed_ttl_days(cls, value, info):
+        if not value:
+            raise ValueError("pat_allowed_ttl_days must not be empty")
+        if any(item <= 0 for item in value):
+            raise ValueError("pat_allowed_ttl_days must contain only positive integers")
+        max_days = info.data.get("pat_max_ttl_days")
+        if max_days is not None and any(item > max_days for item in value):
+            raise ValueError("pat_allowed_ttl_days must be <= pat_max_ttl_days")
+        return value
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        env_parse_delimiter=",",
         case_sensitive=False,
     )
 

@@ -10,6 +10,8 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from sqlmodel import Session, create_engine, inspect
 
+from pydantic import ValidationError
+
 from app.config.settings import Settings, settings
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
@@ -91,6 +93,22 @@ def test_settings_parse_pat_allowed_ttl_days_from_env(monkeypatch):
     monkeypatch.setenv("PAT_ALLOWED_TTL_DAYS", "3,7")
     parsed = Settings().pat_allowed_ttl_days
     assert parsed == [3, 7]
+
+
+def test_settings_parse_pat_allowed_ttl_days_from_env_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("PAT_ALLOWED_TTL_DAYS=3,7\n")
+    parsed = Settings(_env_file=env_file).pat_allowed_ttl_days
+    assert parsed == [3, 7]
+
+
+def test_settings_reject_invalid_pat_allowed_ttl_days():
+    with pytest.raises(ValidationError):
+        Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[])
+    with pytest.raises(ValidationError):
+        Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[0, 3])
+    with pytest.raises(ValidationError):
+        Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[3, 8])
 
 
 def test_initial_schema_exposes_core_columns(db_engine):
