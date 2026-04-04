@@ -166,6 +166,10 @@ class RunCheckJobHandler:
         job.status = QueuedJobStatus.COMPLETED.value
         job.finished_at = utcnow()
         job.failure_message = None
+        result_payload_kwargs: dict[str, object] = {}
+        if execution_track != "realtime_probe":
+            result_payload_kwargs["attempt_count"] = attempt_count
+            result_payload_kwargs["flaky"] = flaky
         job.result_payload = self._build_result_payload(
             job=job,
             queue_status=job.status,
@@ -176,8 +180,7 @@ class RunCheckJobHandler:
             auth_status=result.auth_status.value,
             artifact_ids=[str(artifact_id) for artifact_id in result.artifact_ids],
             page_check_id=str(result.page_check_id) if result.page_check_id is not None else None,
-            attempt_count=attempt_count if execution_track != "realtime_probe" else None,
-            flaky=flaky if execution_track != "realtime_probe" else None,
+            **result_payload_kwargs,
         )
         if job_run is not None:
             job_run.execution_run_id = result.execution_run_id
@@ -342,8 +345,8 @@ class RunCheckJobHandler:
         artifact_ids: list[str] | None = None,
         error_message: str | None = None,
         page_check_id: str | None | object = _UNSET,
-        attempt_count: int | None = None,
-        flaky: bool | None = None,
+        attempt_count: int | None | object = _UNSET,
+        flaky: bool | None | object = _UNSET,
     ) -> dict[str, object]:
         payload = job.payload
         resolved_page_check_id = (
@@ -351,7 +354,7 @@ class RunCheckJobHandler:
             if page_check_id is _UNSET
             else _optional_string(page_check_id)
         )
-        return {
+        result = {
             "queued_job_id": str(job.id),
             "queue_status": queue_status,
             "status": execution_status,
@@ -372,9 +375,12 @@ class RunCheckJobHandler:
             "auth_status": auth_status,
             "artifact_ids": artifact_ids or [],
             "error_message": error_message,
-            "attempt_count": attempt_count,
-            "flaky": flaky,
         }
+        if attempt_count is not _UNSET:
+            result["attempt_count"] = attempt_count
+        if flaky is not _UNSET:
+            result["flaky"] = flaky
+        return result
 
     async def _get(self, model, identifier):
         if isinstance(self.session, AsyncSession):
