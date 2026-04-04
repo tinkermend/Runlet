@@ -10,6 +10,7 @@
 - Run results API (`/api/console/results/`)
 - UI foundation docs (`docs/front/`)
 - 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并补充前端会话认证配套改造（`/api/console/auth/me` 登录态校验、统一 401 处理）及 `.env` 密钥建议（`SESSION_SECRET`、可选 `PASSWORD_PEPPER`）。
+- 新增 Web Session + Skills PAT 认证治理 V1 实施计划：`docs/superpowers/plans/2026-04-04-web-session-skills-pat-auth-v1-plan.md`，按“身份模型与迁移、console 会话收敛、PAT 管理 API、channel-action 判权、前端 `/me` 登录态改造、PAT 管理页、全量验证”拆解可执行任务。
 - 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
 
 ## 2026-04-04
