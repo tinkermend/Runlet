@@ -186,6 +186,50 @@ class AlwaysRaiseRunnerService:
         raise RuntimeError(self._error_message)
 
 
+class RetryThenBlockedRunnerService:
+    def __init__(self) -> None:
+        from app.domains.runner_service.failure_categories import FailureCategory
+        from app.domains.runner_service.schemas import AuthInjectStatus, RunnerRunStatus, StepExecutionResult
+
+        self._failure_category = FailureCategory
+        self._auth_status = AuthInjectStatus
+        self._run_status = RunnerRunStatus
+        self._step_execution_result = StepExecutionResult
+        self.run_page_check_calls = 0
+
+    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+        from app.domains.runner_service.service import ExecutionBlockedError
+
+        self.run_page_check_calls += 1
+        if self.run_page_check_calls == 1:
+            return type(
+                "RunPageCheckResultStub",
+                (),
+                {
+                    "page_check_id": page_check_id,
+                    "execution_run_id": uuid4(),
+                    "status": self._run_status.FAILED,
+                    "auth_status": self._auth_status.REFRESHED,
+                    "artifact_ids": [],
+                    "screenshot_artifact_ids": [],
+                    "step_results": [
+                        self._step_execution_result(
+                            module="nav.menu_chain",
+                            status=self._run_status.FAILED,
+                            detail="timeout while navigating to target page",
+                            output={"failure_category": self._failure_category.NAVIGATION_FAILED.value},
+                        )
+                    ],
+                    "failure_category": self._failure_category.NAVIGATION_FAILED,
+                    "final_url": None,
+                    "page_title": None,
+                    "needs_recrawl": False,
+                    "needs_recompile": False,
+                },
+            )()
+        raise ExecutionBlockedError("asset_retired_missing")
+
+
 @pytest.fixture
 def seeded_run_check_target(db_session, seeded_page_check, seeded_page_asset, seeded_system, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -582,6 +626,11 @@ def retryable_exception_runner_service():
 
 
 @pytest.fixture
+def retry_then_blocked_runner_service():
+    return RetryThenBlockedRunnerService()
+
+
+@pytest.fixture
 def job_runner_with_precompiled_retry(db_session, flaky_once_runner_service):
     from app.jobs.run_check_job import RunCheckJobHandler
 
@@ -651,6 +700,21 @@ def job_runner_with_retryable_precompiled_exception(db_session, retryable_except
             RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
                 session=db_session,
                 runner_service=retryable_exception_runner_service,
+            )
+        },
+    )
+
+
+@pytest.fixture
+def job_runner_with_retry_then_blocked(db_session, retry_then_blocked_runner_service):
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    return WorkerRunner(
+        session=db_session,
+        handlers={
+            RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
+                session=db_session,
+                runner_service=retry_then_blocked_runner_service,
             )
         },
     )
@@ -1092,3 +1156,30 @@ async def test_run_check_job_realtime_probe_failure_does_not_retry(
     assert "final_failure_category" not in refreshed.result_payload
     assert "final_error_message" not in refreshed.result_payload
     assert realtime_probe_failure_runner_service.run_realtime_probe_calls == 1
+
+
+@pytest.mark.anyio
+async def test_run_check_job_precompiled_retry_then_blocked_keeps_skipped_and_retry_metadata(
+    job_runner_with_retry_then_blocked,
+    retry_then_blocked_runner_service,
+    queued_run_check_job,
+    db_session,
+):
+    await job_runner_with_retry_then_blocked.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "skipped"
+    assert refreshed.result_payload["status"] == "skipped"
+    assert refreshed.failure_message == "asset_retired_missing"
+    assert refreshed.result_payload["attempt_count"] == 1
+    assert refreshed.result_payload["retry_exhausted"] is False
+    assert refreshed.result_payload["retry_policy"] == {
+        "max_attempts": 3,
+        "base_backoff_ms": 100,
+        "jitter_ms": 0,
+    }
+    assert len(refreshed.result_payload["attempts"]) == 1
+    assert refreshed.result_payload["final_failure_category"] == "navigation_failed"
+    assert refreshed.result_payload["final_error_message"] == "timeout while navigating to target page"
+    assert retry_then_blocked_runner_service.run_page_check_calls == 2

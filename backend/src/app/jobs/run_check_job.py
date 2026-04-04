@@ -29,6 +29,12 @@ class PrecompiledRetryTerminalError(RuntimeError):
         self.retry_payload = retry_payload
 
 
+class PrecompiledRetryBlockedError(ExecutionBlockedError):
+    def __init__(self, *, message: str, retry_payload: dict[str, object]) -> None:
+        super().__init__(message)
+        self.retry_payload = retry_payload
+
+
 class RunCheckJobHandler:
     def __init__(
         self,
@@ -162,6 +168,14 @@ class RunCheckJobHandler:
                     page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
                 )
+        except PrecompiledRetryBlockedError as exc:
+            await self._mark_skipped(
+                job,
+                message=ASSET_RETIRED_FAILURE_MESSAGE,
+                job_run=job_run,
+                result_payload_kwargs=exc.retry_payload,
+            )
+            return
         except ExecutionBlockedError:
             await self._mark_skipped(
                 job,
@@ -237,16 +251,19 @@ class RunCheckJobHandler:
         *,
         message: str | None,
         job_run: JobRun | None = None,
+        result_payload_kwargs: dict[str, object] | None = None,
     ) -> None:
         job.status = QueuedJobStatus.SKIPPED.value
         job.started_at = job.started_at or utcnow()
         job.finished_at = utcnow()
         job.failure_message = message
+        payload_kwargs = result_payload_kwargs or {}
         job.result_payload = self._build_result_payload(
             job=job,
             queue_status=job.status,
             execution_status="skipped",
             error_message=message,
+            **payload_kwargs,
         )
         if job_run is not None:
             job_run.run_status = QueuedJobStatus.SKIPPED.value
@@ -304,8 +321,20 @@ class RunCheckJobHandler:
                     page_check_id=page_check_id,
                     execution_plan_id=execution_plan_id,
                 )
-            except ExecutionBlockedError:
-                raise
+            except ExecutionBlockedError as exc:
+                if not attempts:
+                    raise
+                raise PrecompiledRetryBlockedError(
+                    message=str(exc),
+                    retry_payload=self._build_precompiled_retry_payload(
+                        attempt_count=len(attempts),
+                        flaky=False,
+                        retry_exhausted=False,
+                        attempts=attempts,
+                        final_failure_category=final_failure_category,
+                        final_error_message=final_error_message,
+                    ),
+                ) from exc
             except Exception as exc:
                 finished_at = utcnow()
                 await self._rollback()
