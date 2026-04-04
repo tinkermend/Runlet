@@ -9,7 +9,7 @@
 - Asset browser API (`/api/console/assets/`)
 - Run results API (`/api/console/results/`)
 - UI foundation docs (`docs/front/`)
-- 新增 `skills` 调用认证与授权治理设计文档：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，收敛“用户会话 + 短期执行授权 + 高风险二次确认”主链，并明确 `control_plane` 统一鉴权与审计边界。
+- 新增 `skills`/Web 管理平台调用认证与授权治理设计文档：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，收敛“用户会话 + 短期执行授权 + 高风险二次确认 + 调度服务主体委托授权”主链，并明确 `control_plane` 统一鉴权与审计边界。
 
 ## 2026-04-04
 
