@@ -9,7 +9,7 @@
 - Asset browser API (`/api/console/assets/`)
 - Run results API (`/api/console/results/`)
 - UI foundation docs (`docs/front/`)
-- 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，收敛“用户会话 + 短期执行授权 + 高风险二次确认 + 调度服务主体委托授权 + channel-action 白名单”主链，并明确 `skills` 不可手动触发采集、手动采集仅 `web/cli` 可调用。
+- 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并约束 `skills` 不可手动触发采集、手动采集仅 `web/cli` 可调用。
 
 ## 2026-04-04
 

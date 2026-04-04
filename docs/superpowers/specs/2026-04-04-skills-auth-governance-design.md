@@ -1,4 +1,4 @@
-# Skills 调用认证与授权治理设计
+# Skills / Web 调用认证与授权治理设计（V1）
 
 **日期：** 2026-04-04  
 **作者：** Codex  
@@ -8,15 +8,18 @@
 
 ## 1. 文档定位
 
-本文档定义 Runlet 平台在 `skills/web_console/cli/scheduler -> control_plane -> runner_service` 调用链上的认证与授权治理方案，解决以下核心问题：
+本文档定义 Runlet 在以下调用入口上的认证与授权治理方案：
 
-- 不能允许任意人通过 `skills` 调用任意系统
-- `skills` 只负责用户对话与自动化测试任务构建，不直接触发手动采集
-- 认证与授权必须统一由后端控制面收敛，不在 `skills` 层分散实现
-- 正式执行仍保持“服务端认证注入 + 资产主模型 + 受控执行”主链
-- 支持会话登录、系统级授权、短期执行凭证、高风险动作闸门与调度委托执行
+- `web_console -> control_plane -> runner_service`
+- `skills -> control_plane -> runner_service`
+- `scheduler -> control_plane -> runner_service`
 
-本设计只讨论后端治理边界与调用契约，不涉及前端 UI 细节实现。
+本版目标是先交付可落地、低复杂度的 V1：
+
+1. Web 访问 API 使用会话认证（session/cookie）
+2. Skills 调用 API 使用用户临时 token（PAT）
+3. 两种凭证在后端统一归一为同一用户主体做授权判定
+4. 手动采集触发只允许 Web/CLI，Skills 不允许
 
 ---
 
@@ -24,190 +27,143 @@
 
 ### 2.1 目标
 
-1. 建立“人用户登录态”和“执行态授权”分离模型
-2. 支持用户级别的 `system` 访问控制（第一版最小颗粒度）
-3. 引入短期执行授权凭证，避免会话 token 直接进入执行入口
-4. 对部分高风险动作增加二次确认闸门
-5. 建立调度执行的服务主体授权模型，覆盖“人配置、机器触发”场景
-6. 建立完整审计链路，记录认证、授权、执行授权决策与拒绝原因
-7. 明确手动采集触发入口仅允许 Web 管理平台与 CLI
+1. 明确区分 Web 会话认证与 Skills token 认证
+2. 保持统一授权模型：`principal + channel + action + system`
+3. 支持用户在管理平台创建可过期 PAT（如 3 天/7 天）
+4. 支持 PAT 吊销、审计、最小权限
+5. 不影响现有 `auth_policy/crawl_policy` 调度主链
 
-### 2.2 非目标
+### 2.2 非目标（V1 不做）
 
-1. 第一版不引入 OIDC/SSO 外部身份源
-2. 第一版不做 `page_check` 级细粒度权限
-3. 第一版不引入完整策略引擎（OPA/Casbin）
-4. 不把本地浏览器登录态复用为正式执行主链
-5. 不让 `skills` 直接持有系统凭据或直接调用 runner
+1. 不引入 OIDC/SSO
+2. 不引入复杂 challenge/二次确认体系
+3. 不强制引入 `execution_grant` 双层令牌
+4. 不做 `page_check` 级细粒度授权
 
 ---
 
 ## 3. 方案比较与推荐
 
-### 3.1 方案 A：会话直连执行
-
-做法：
-
-- 用户登录后携带会话直接调用执行 API
-- 后端直接以会话判权
+### 3.1 方案 A：Web 与 Skills 共用 session
 
 优点：
 
-- 实现最简单
+- 实现最少
 
 缺点：
 
-- 会话权限边界宽，执行接口暴露面较大
-- 防重放、最小授权和审计追踪能力弱
+- AI 侧很难稳定使用浏览器会话
+- 会话泄露风险边界不清晰
+- 不适合脚本/终端环境注入
 
-### 3.2 方案 B：会话 + 短期执行授权（推荐）
-
-做法：
-
-- 用户先登录获得会话
-- 调用前由 `control_plane` 签发短期 `execution_grant`
-- 执行入口仅接受 `execution_grant`
+### 3.2 方案 B：全面 `execution_grant` 双层令牌
 
 优点：
 
-- 最小授权和短时有效边界清晰
-- 防重放能力强
-- 审计可精确追溯到“人-系统-动作-请求”
+- 安全边界清晰，防重放强
 
 缺点：
 
-- 比方案 A 多一层授权签发与校验逻辑
+- 第一版复杂度高，交付慢
+- 对当前平台演进节奏不友好
 
-### 3.3 方案 C：会话 + 外置策略引擎
+### 3.3 方案 C：凭证分离、授权统一（推荐，V1）
 
 做法：
 
-- 会话认证后由策略引擎做动态 ABAC 判权
+1. Web：`session/cookie`
+2. Skills：`PAT(Bearer)`
+3. 后端统一判权：`user_id + channel + action + system`
 
 优点：
 
-- 长期灵活性最高
-
-缺点：
-
-- 第一版复杂度过高
-- 需要额外运维、规则治理和调试成本
-
-### 3.4 推荐结论
-
-第一版采用 **方案 B（会话 + 短期执行授权）**，并预留策略扩展点，为后续演进到外置策略引擎保留接口。
+- 实现复杂度可控
+- 满足你当前“用户自己生成临时 token”诉求
+- 后续可平滑升级到 `execution_grant`
 
 ---
 
-## 4. 架构边界与职责
+## 4. 核心原则
 
-### 4.1 总体边界
-
-1. `skills`：只负责自然语言编排与结构化参数构造
-2. `control_plane`：唯一跨域编排者，负责认证、授权、签发执行授权、投递执行任务
-3. `auth_service`：仅负责目标系统认证注入，不负责平台用户身份认证
-4. `runner_service`：仅执行已批准计划，不接收裸会话 token
-5. `scheduler_runtime`：仅以服务主体触发已发布对象，不继承用户会话
-6. `cli`：仅作为命令入口，可触发手动采集，但不绕过控制面鉴权
-
-### 4.2 核心约束
-
-1. 正式执行必须由服务端注入认证
-2. 不输出完整 `storage_state` 到上层调用方
-3. 调度主对象保持 `page_check / asset_version / runtime_policy`
-4. `script_renders` 继续是派生产物，不成为执行真相
+1. 认证入口分离：Web 与 Skills 不复用同一凭证
+2. 授权逻辑统一：所有入口进入同一权限决策层
+3. 入口动作白名单：按 `channel-action` 绑定
+4. 采集触发边界：手动采集只允许 `web_console/cli`
+5. 正式执行边界不变：认证注入仍由服务端统一完成
 
 ---
 
-## 5. 认证授权流程
+## 5. 通道与动作矩阵（V1）
 
-### 5.1 标准流程（低风险动作）
+### 5.1 `skills` 允许动作
 
-1. 用户登录平台，获得 `session`（短期）
-2. 调用端（`skills` 或 `web_console` 或 `cli`）请求 `control_plane` 签发 `execution_grant`
-3. 控制面校验：
-   - session 有效
-   - 用户对目标 `system` 有权限
-   - action 在角色允许范围内
-4. 校验通过后签发短期 `execution_grant`（绑定 user/system/action/request）
-5. 执行接口使用 `execution_grant` 调用，runner 校验后执行
+1. `create_or_update_published_job`
+2. `create_check_request`（仅用于测试任务构建相关检查）
 
-### 5.2 高风险动作流程
+限制：
 
-高风险动作（第一版）：
+1. 禁止 `trigger_full_crawl`
+2. 禁止 `trigger_incremental_crawl`
 
-- `publish_job`
-- `update_auth_policy`
-- `trigger_full_crawl`
-- `manage_system_credentials`
+### 5.2 `web_console` 允许动作
 
-流程差异：
+1. `create_check_request`
+2. `create_or_update_published_job`
+3. `trigger_full_crawl`
+4. `trigger_incremental_crawl`
+5. `update_runtime_policy`
 
-1. 在签发 `execution_grant` 前进入 `pending_challenge`
-2. 用户完成二次确认（第一版可采用“登录密码再验证”）
-3. 通过后签发 grant；未通过返回拒绝并记录审计
+### 5.3 `cli` 允许动作
 
-### 5.3 Web 管理平台任务配置与调度触发流程
+1. `create_or_update_published_job`
+2. `trigger_full_crawl`
+3. `trigger_incremental_crawl`
 
-本平台存在两类入口：
+### 5.4 `scheduler` 允许动作
 
-1. 交互入口：
-   - `skills`：仅对话解析与自动化测试任务构建
-   - `web_console/cli`：可执行手动触发（含手动采集）
-2. 调度入口：`scheduler_runtime` 到点触发 `published_job`
-
-统一规则：
-
-1. 配置阶段（创建/更新 `published_job`）始终按“人用户会话 + system 权限 + 高风险闸门”判权
-2. 触发阶段（cron 到点）不复用用户会话，改为服务主体授权
-3. 调度触发时由 `control_plane` 依据 `published_job` 绑定的授权快照签发内部 grant
-4. 若策略启用 `strict_owner_guard=true`，当创建者权限失效时自动暂停 `published_job`
-
-补充约束：
-
-1. `skills` 不允许调用手动采集触发（`trigger_full_crawl`/`trigger_incremental_crawl`）
-2. 手动采集触发入口仅允许 `web_console` 与 `cli`
-3. `skills` 仅允许执行“对话解析 -> 自动化测试任务构建/发布”相关动作
-
-### 5.4 统一时序图（交互调用 vs 调度调用）
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant S as Skills/Web/CLI
-    participant CP as Control Plane
-    participant SCH as Scheduler Runtime
-    participant R as Runner Service
-
-    rect rgb(235, 248, 255)
-        U->>S: 发起交互调用/配置任务
-        S->>CP: 请求 execution_grant(session)
-        CP->>CP: 校验会话 + system 权限 + (可选)challenge
-        CP-->>S: 返回 execution_grant
-        S->>CP: 提交 check_request / publish_job
-        CP->>R: 下发已批准执行计划
-    end
-
-    rect rgb(245, 255, 240)
-        SCH->>CP: 到点触发 published_job
-        CP->>CP: 校验 published_job 授权快照与 owner guard
-        CP-->>SCH: 签发 internal execution_grant(service principal)
-        CP->>R: 下发已批准执行计划
-    end
-```
+1. `trigger_published_job`
+2. `trigger_auth_policy`
+3. `trigger_crawl_policy`
 
 ---
 
-## 6. 数据模型设计（新增）
+## 6. 关键流程
 
-### 6.1 用户与会话
+### 6.1 Web 手动采集触发
+
+1. 用户登录 Web，获得 session
+2. Web 调用 `/systems/{id}/crawl`（cookie）
+3. 后端解析 session -> user
+4. 权限层判定：`channel=web_console + action=trigger_*_crawl + system`
+5. 通过则入队；拒绝则返回 403
+
+### 6.2 Skills 自动化任务构建
+
+1. 用户在 Web 创建 PAT（3 天/7 天）
+2. PAT 写入用户本地环境变量（例如 `RUNLET_PAT`）
+3. Skills 调后端时携带 `Authorization: Bearer <PAT>`
+4. 后端解析 PAT -> user
+5. 权限层判定：`channel=skills + action + system`
+6. 通过则执行任务构建；越权则返回 403
+
+### 6.3 Scheduler 定时触发
+
+1. scheduler 使用内部服务主体身份调用 control plane
+2. control plane 按 `channel=scheduler` 与对象归属判权
+3. 通过后投递执行；拒绝则写审计并告警
+
+---
+
+## 7. 数据模型（新增/调整）
+
+### 7.1 用户与会话
 
 `users`
 
 - `id`
-- `username`（唯一）
+- `username`
 - `password_hash`
-- `status`（active/disabled）
+- `status`
 - `created_at`
 - `updated_at`
 
@@ -219,171 +175,115 @@ sequenceDiagram
 - `issued_at`
 - `expires_at`
 - `revoked_at`
-- `client_fingerprint`
 
-### 6.2 系统级授权
+### 7.2 PAT（新增）
+
+`user_pats`
+
+- `id`
+- `user_id`
+- `name`
+- `token_prefix`
+- `token_hash`
+- `allowed_channels`（默认 `skills`）
+- `allowed_actions`
+- `allowed_system_ids`
+- `issued_at`
+- `expires_at`
+- `last_used_at`
+- `revoked_at`
+
+约束：
+
+1. 仅保存 hash，不保存明文 token
+2. 明文 token 仅创建时返回一次
+
+### 7.3 授权关系
 
 `user_system_permissions`
 
 - `id`
 - `user_id`
 - `system_id`
-- `role`（viewer/operator/admin）
-- `effect`（allow）
+- `role`
+- `effect`
 - `expires_at`
-- `created_by`
 - `created_at`
 
-第一版动作白名单建议：
-
-1. `skills`：`create_or_update_published_job`
-2. `web_console`：`create_check_request`、`create_or_update_published_job`、`trigger_full_crawl`、`trigger_incremental_crawl`
-3. `cli`：`create_or_update_published_job`、`trigger_full_crawl`、`trigger_incremental_crawl`
-4. `scheduler`：`trigger_published_job`
-
-### 6.3 执行授权凭证
-
-`execution_grants`
-
-- `id`
-- `grant_jti`（唯一）
-- `user_id`
-- `system_id`
-- `action`
-- `request_id`
-- `issued_at`
-- `expires_at`
-- `used_at`
-- `status`（active/used/revoked/expired）
-- `challenge_id`（可空，高风险动作必填）
-- `subject_type`（human/service）
-- `subject_id`（user_id 或 service_principal_id）
-
-### 6.4 审计日志
-
-`auth_audit_logs`
-
-- `id`
-- `user_id`
-- `system_id`
-- `action`
-- `decision`（allow/deny/challenge_required/challenge_failed）
-- `reason`
-- `request_id`
-- `ip`
-- `user_agent`
-- `channel`（skill/web_console/cli/scheduler）
-- `subject_type`（human/service）
-- `delegated_from_user_id`（可空，调度触发时记录任务创建者）
-- `created_at`
-
-### 6.5 调度服务主体与委托快照
+### 7.4 调度服务主体
 
 `service_principals`
 
 - `id`
 - `code`（如 `scheduler_runtime`）
-- `status`（active/disabled）
+- `status`
 - `allowed_actions`
+
+### 7.5 审计日志
+
+`auth_audit_logs`
+
+- `id`
+- `user_id`（可空，服务主体场景）
+- `subject_type`（human/service）
+- `subject_id`
+- `channel`（web_console/skills/cli/scheduler）
+- `system_id`
+- `action`
+- `decision`（allow/deny）
+- `reason`
+- `request_id`
+- `ip`
+- `user_agent`
 - `created_at`
 
-`published_jobs`（补充字段）
-
-- `created_by_user_id`
-- `authorization_snapshot`（创建时的 system/action/role 快照）
-- `strict_owner_guard`（默认 true）
-
 ---
 
-## 7. 与现有执行模型的衔接
+## 8. API 契约（V1）
 
-### 7.1 现有模型保持不变
-
-1. `execution_requests`：继续记录结构化请求
-2. `execution_plans.auth_policy`：继续使用 `server_injected`
-3. `auth_states.token_fingerprint`：继续追踪目标系统认证态，不与用户会话混用
-4. `published_jobs`：新增授权快照字段，显式绑定“谁创建、谁授权、以何规则调度”
-
-### 7.2 新增字段建议
-
-为增强可追溯性，建议在 `execution_requests` 增加：
-
-- `requested_by_user_id`（可空，兼容非用户来源）
-- `request_source_detail`（如 `skill:<name>`）
-- `channel`（skill/web_console/cli/scheduler）
-- `delegated_from_published_job_id`（可空，调度触发场景）
-
----
-
-## 8. API 契约建议（第一版）
-
-### 8.1 平台身份认证
+### 8.1 Web 认证
 
 1. `POST /api/v1/platform-auth/login`
 2. `POST /api/v1/platform-auth/logout`
 3. `GET /api/v1/platform-auth/me`
 
-### 8.2 二次确认
+### 8.2 PAT 管理
 
-1. `POST /api/v1/platform-auth/challenges`
-2. `POST /api/v1/platform-auth/challenges/{challenge_id}:verify`
+1. `POST /api/v1/platform-auth/pats`（创建，返回一次明文）
+2. `GET /api/v1/platform-auth/pats`（仅返回摘要）
+3. `POST /api/v1/platform-auth/pats/{pat_id}:revoke`
 
-### 8.3 执行授权
+建议 `expires_in_days` 仅允许：
 
-1. `POST /api/v1/execution-grants`
-2. `POST /api/v1/check-requests`（要求 `execution_grant`）
-3. 其他高风险执行入口同样要求 `execution_grant`
+1. `3`
+2. `7`
 
-### 8.4 调度授权接口（内部）
+### 8.3 业务调用约束
 
-1. `POST /api/v1/internal/published-jobs/{job_id}:issue-grant`
-2. 仅 `scheduler_runtime` 服务主体可调用
-3. 返回 `subject_type=service` 的内部 `execution_grant`
-4. 若命中 owner guard 拒绝策略，可返回“自动暂停任务 + 拒绝触发”
-
-说明：
-
-- `request_source` 保留用于来源标识，不再作为安全凭证
-- 任何正式执行入口不接受“仅会话、无 grant”模式
-- `skills` 入口申请 `execution_grant` 时，若 action 为手动采集触发，返回 `403`
+1. Web 接口接受 session
+2. Skills 接口接受 PAT
+3. 同一业务接口可以支持两种认证方式，但必须在服务端标注 `channel`
+4. `skills` 调用采集触发接口时必须返回 403
 
 ---
 
-## 9. 安全控制细节
+## 9. 安全要求
 
-### 9.1 token 与会话安全
-
-1. 会话 token 仅以 hash 落库
-2. Cookie 使用 `HttpOnly + SameSite=Lax + Secure(生产)`
-3. 会话默认 TTL 8 小时（可配置）
-4. grant 默认 TTL 1-5 分钟（可配置）
-
-### 9.2 防重放与最小授权
-
-1. grant 绑定 `grant_jti` 唯一值
-2. grant 绑定 `system_id + action + request_id`
-3. grant 使用后写 `used_at`，重复使用返回冲突
-4. grant 过期、撤销、scope 不匹配均拒绝
-5. 内部 grant 与外部 grant 使用同一校验器，避免双轨安全分叉
-6. 增加 `channel-action` 绑定校验，拒绝跨入口越权（如 `skills -> trigger_full_crawl`）
-
-### 9.3 敏感信息处理
-
-1. 禁止日志记录明文 token/密码/storage_state
-2. API 对外错误信息最小化
-3. 详细拒绝原因只进入审计日志
+1. PAT 最长有效期不超过 7 天（V1）
+2. PAT 支持立即吊销
+3. PAT 明文只显示一次
+4. PAT 日志、报错、审计输出必须脱敏
+5. 每次 PAT 使用更新 `last_used_at`
+6. 支持按用户查看活跃 PAT 列表
 
 ---
 
 ## 10. 错误语义
 
-1. `401`：未认证或会话过期
+1. `401`：未认证或凭证过期
 2. `403`：无系统权限或动作未授权
-3. `428`：需要二次确认但未完成
-4. `409`：grant 已使用（重放）
-5. `422`：grant 与请求 scope 不匹配
-6. `423`：调度触发被 owner guard 锁定（创建者权限失效）
-7. `403`（细分）：入口通道不允许该动作（例如 skills 触发手动采集）
+3. `403`（细分）：入口通道不允许该动作（例如 `skills -> trigger_full_crawl`）
+4. `423`：调度触发被策略锁定（如服务主体禁用）
 
 ---
 
@@ -391,74 +291,46 @@ sequenceDiagram
 
 ### 11.1 必测用例
 
-1. 登录成功/失败与会话过期
-2. `system` 级权限命中与拒绝
-3. grant 签发、过期、撤销、重放
-4. 高风险动作 challenge 闸门
-5. 无 grant 调执行接口必须拒绝
-6. 审计日志在 allow/deny/challenge 场景均落库
-7. Web 配置任务后，调度触发可走 service principal 授权链
-8. 创建者权限撤销后（strict guard），调度任务自动暂停并拒绝触发
-9. `skills` 调用手动采集触发接口时必须稳定返回 `403`
-10. Web/CLI 调用手动采集触发接口在具备权限时可通过
+1. Web session 登录成功/失败/过期
+2. PAT 创建、过期、吊销、重复使用
+3. PAT hash 存储校验（不得落明文）
+4. `skills` 触发手动采集稳定返回 403
+5. `web/cli` 在有权限时可触发手动采集
+6. scheduler 触发不依赖用户会话
+7. 审计日志正确区分 `channel` 与 `subject_type`
 
 ### 11.2 验收标准
 
-1. 任意未授权用户无法通过 `skills` 调用未授权系统
-2. 任意正式执行均可追溯到具体用户与授权决策
-3. 高风险动作未经二次确认无法执行
-4. 不泄露平台会话、系统凭据和 storage_state
-5. Web 管理平台创建的任务在调度触发时仍满足可审计和最小授权
+1. 用户可在 Web 自助创建 3 天/7 天临时 PAT
+2. Skills 可通过环境变量 PAT 调用任务构建接口
+3. Skills 无法调用手动采集触发
+4. Web/CLI 手动采集能力不受影响
+5. 全链路具备可追溯审计
 
 ---
 
-## 12. 分阶段落地计划（建议）
+## 12. 分阶段实施
 
-### Phase 1：身份与系统级授权基线
+### Phase 1（本次）
 
-- 落地 `users/user_sessions/user_system_permissions`
-- 管理端支持用户与系统授权配置
-- 落地 `channel-action` 白名单与默认拒绝策略
+1. 增加 `user_pats` 模型与 PAT 管理 API
+2. 业务鉴权增加 `channel-action` 白名单
+3. 落地 `skills` 禁止手动采集触发
+4. 补齐审计字段与回归测试
 
-### Phase 2：execution_grant 与执行入口强校验
+### Phase 2
 
-- 落地 `execution_grants`
-- 执行入口统一改造为“仅认 grant”
+1. 为 scheduler 补充更细粒度委托策略
+2. 增加异常访问告警（如 PAT 高频失败）
 
-### Phase 2.5：调度服务主体与委托授权
+### Phase 3（可选增强）
 
-- 落地 `service_principals`
-- 为 `published_jobs` 增加授权快照与 owner guard
-- 调度触发改为内部 grant 签发与统一校验
-
-### Phase 3：高风险动作二次确认
-
-- 落地 challenge 模型与校验链路
-- 高风险动作接入闸门
-
-### Phase 4：审计与风控增强
-
-- 审计检索页与异常告警规则
-- 补充报表与安全运营视图
+1. 引入 `execution_grant` 二次令牌
+2. 引入 challenge/审批流
+3. 对接 OIDC/SSO
 
 ---
 
-## 13. 风险与后续演进
+## 13. 结论
 
-### 13.1 已知风险
-
-1. 第一版仅 system 级授权，仍可能过粗
-2. 内置账号体系在多团队协作下管理成本上升
-3. challenge 机制若体验设计不当，会增加操作摩擦
-
-### 13.2 后续演进方向
-
-1. 扩展到 `system + action + page_check` 分层授权
-2. 对接 OIDC/SSO
-3. 引入外置策略引擎（ABAC）与审批流
-
----
-
-## 14. 结论
-
-本方案以“会话认证 + 短期执行授权 + 高风险二次确认 + 调度服务主体委托授权”为核心，在不破坏当前架构边界的前提下，提供了可审计、可收敛、可迭代的调用安全治理路径。第一版先收敛系统级权限、`channel-action` 白名单与执行授权主链，确保“谁能通过哪个入口调用哪个系统执行什么动作”成为平台内可控、可追踪、可验证的正式能力。
+V1 采用“Web session + Skills PAT + 授权统一判定”的简化方案，能够在不明显增加系统复杂度的前提下，满足你当前的核心诉求：用户可控地发放短期 token 给 AI 对话使用，同时保持平台对系统调用边界、手动采集入口和审计追踪的治理能力。
