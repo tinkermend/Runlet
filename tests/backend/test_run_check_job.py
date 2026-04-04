@@ -52,6 +52,72 @@ class RetireBeforeRunnerService:
         )
 
 
+class FlakyOnceRunnerService:
+    def __init__(self) -> None:
+        from app.domains.runner_service.failure_categories import FailureCategory
+        from app.domains.runner_service.schemas import AuthInjectStatus, RunnerRunStatus, StepExecutionResult
+
+        self._failure_category = FailureCategory
+        self._auth_status = AuthInjectStatus
+        self._run_status = RunnerRunStatus
+        self._step_execution_result = StepExecutionResult
+        self.run_page_check_calls = 0
+
+    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+        self.run_page_check_calls += 1
+        if self.run_page_check_calls == 1:
+            return self._build_result(
+                page_check_id=page_check_id,
+                status=self._run_status.FAILED,
+                failure_category=self._failure_category.NAVIGATION_FAILED,
+                detail="timeout while navigating to target page",
+            )
+        return self._build_result(
+            page_check_id=page_check_id,
+            status=self._run_status.PASSED,
+            failure_category=None,
+            detail=None,
+        )
+
+    def _build_result(
+        self,
+        *,
+        page_check_id: UUID,
+        status,
+        failure_category,
+        detail: str | None,
+    ):
+        return type(
+            "RunPageCheckResultStub",
+            (),
+            {
+                "page_check_id": page_check_id,
+                "execution_run_id": uuid4(),
+                "status": status,
+                "auth_status": self._auth_status.REFRESHED,
+                "artifact_ids": [],
+                "screenshot_artifact_ids": [],
+                "step_results": [
+                    self._step_execution_result(
+                        module="nav.menu_chain",
+                        status=status,
+                        detail=detail,
+                        output=(
+                            {"failure_category": failure_category.value}
+                            if failure_category is not None
+                            else None
+                        ),
+                    )
+                ],
+                "failure_category": failure_category,
+                "final_url": None,
+                "page_title": None,
+                "needs_recrawl": False,
+                "needs_recompile": False,
+            },
+        )()
+
+
 @pytest.fixture
 def seeded_run_check_target(db_session, seeded_page_check, seeded_page_asset, seeded_system, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -413,6 +479,26 @@ def job_runner_with_race_retirement(db_session):
 
 
 @pytest.fixture
+def flaky_once_runner_service():
+    return FlakyOnceRunnerService()
+
+
+@pytest.fixture
+def job_runner_with_precompiled_retry(db_session, flaky_once_runner_service):
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    return WorkerRunner(
+        session=db_session,
+        handlers={
+            RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
+                session=db_session,
+                runner_service=flaky_once_runner_service,
+            )
+        },
+    )
+
+
+@pytest.fixture
 def pause_linked_published_job_for_retirement(db_session, seeded_published_job_for_run_check):
     seeded_published_job_for_run_check.state = PublishedJobState.PAUSED
     seeded_published_job_for_run_check.pause_reason = "asset_retired_replaced"
@@ -689,3 +775,21 @@ async def test_run_check_job_fails_when_published_job_linkage_mismatches(
     assert job_run is not None
     assert job_run.run_status == "failed"
     assert job_run.failure_message == refreshed.failure_message
+
+
+@pytest.mark.anyio
+async def test_run_check_job_retries_precompiled_once_then_succeeds_retries_precompiled(
+    job_runner_with_precompiled_retry,
+    flaky_once_runner_service,
+    queued_run_check_job,
+    db_session,
+):
+    await job_runner_with_precompiled_retry.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["status"] == "passed"
+    assert refreshed.result_payload["attempt_count"] == 2
+    assert refreshed.result_payload["flaky"] is True
+    assert flaky_once_runner_service.run_page_check_calls == 2

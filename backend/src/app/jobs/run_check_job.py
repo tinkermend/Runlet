@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import anyio
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -9,9 +10,13 @@ from sqlmodel import Session
 from app.domains.runner_service.service import ASSET_RETIRED_FAILURE_MESSAGE, ExecutionBlockedError
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
+from app.jobs.run_check_retry import compute_backoff_ms, is_retryable_failure
 from app.shared.enums import AssetLifecycleStatus, PublishedJobState, QueuedJobStatus
 
 _UNSET = object()
+_PRECOMPILED_MAX_ATTEMPTS = 3
+_PRECOMPILED_BASE_BACKOFF_MS = 100
+_PRECOMPILED_JITTER_MS = 0
 
 
 def utcnow() -> datetime:
@@ -126,6 +131,8 @@ class RunCheckJobHandler:
             job_run.started_at = job_run.started_at or utcnow()
         await self._commit()
 
+        attempt_count = 1
+        flaky = False
         try:
             if execution_track == "realtime_probe":
                 result = await self.runner_service.run_realtime_probe(
@@ -141,7 +148,7 @@ class RunCheckJobHandler:
                         execution_run_id=result.execution_run_id,
                     )
             else:
-                result = await self.runner_service.run_page_check(
+                result, attempt_count, flaky = await self._run_precompiled_with_retry(
                     page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
                 )
@@ -169,6 +176,8 @@ class RunCheckJobHandler:
             auth_status=result.auth_status.value,
             artifact_ids=[str(artifact_id) for artifact_id in result.artifact_ids],
             page_check_id=str(result.page_check_id) if result.page_check_id is not None else None,
+            attempt_count=attempt_count if execution_track != "realtime_probe" else None,
+            flaky=flaky if execution_track != "realtime_probe" else None,
         )
         if job_run is not None:
             job_run.execution_run_id = result.execution_run_id
@@ -256,6 +265,70 @@ class RunCheckJobHandler:
             return ASSET_RETIRED_FAILURE_MESSAGE
         return None
 
+    async def _run_precompiled_with_retry(
+        self,
+        *,
+        page_check_id: UUID | None,
+        execution_plan_id: UUID | None,
+    ):
+        last_result = None
+        for attempt_no in range(1, _PRECOMPILED_MAX_ATTEMPTS + 1):
+            try:
+                result = await self.runner_service.run_page_check(
+                    page_check_id=page_check_id,
+                    execution_plan_id=execution_plan_id,
+                )
+            except Exception as exc:
+                retryable = is_retryable_failure(
+                    failure_category="runtime_error",
+                    error_message=str(exc),
+                )
+                if (not retryable) or attempt_no >= _PRECOMPILED_MAX_ATTEMPTS:
+                    raise
+                await self._sleep_for_backoff(attempt_no=attempt_no)
+                continue
+
+            last_result = result
+            if _enum_value(result.status) == "passed":
+                return result, attempt_no, attempt_no > 1
+
+            failure_category = _enum_value(getattr(result, "failure_category", None))
+            error_message = self._extract_error_message(result)
+            retryable = is_retryable_failure(
+                failure_category=failure_category,
+                error_message=error_message,
+            )
+            if (not retryable) or attempt_no >= _PRECOMPILED_MAX_ATTEMPTS:
+                return result, attempt_no, attempt_no > 1
+
+            await self._sleep_for_backoff(attempt_no=attempt_no)
+
+        return last_result, _PRECOMPILED_MAX_ATTEMPTS, _PRECOMPILED_MAX_ATTEMPTS > 1
+
+    async def _sleep_for_backoff(self, *, attempt_no: int) -> None:
+        backoff_ms = compute_backoff_ms(
+            attempt_no=attempt_no,
+            base_backoff_ms=_PRECOMPILED_BASE_BACKOFF_MS,
+            jitter_ms=_PRECOMPILED_JITTER_MS,
+        )
+        if backoff_ms <= 0:
+            return
+        await anyio.sleep(backoff_ms / 1000)
+
+    def _extract_error_message(self, result) -> str | None:
+        step_results = getattr(result, "step_results", None)
+        if not step_results:
+            return None
+        for step_result in step_results:
+            if _enum_value(getattr(step_result, "status", None)) != "failed":
+                continue
+            detail = getattr(step_result, "detail", None)
+            if detail is not None:
+                normalized = str(detail).strip()
+                if normalized:
+                    return normalized
+        return None
+
     def _build_result_payload(
         self,
         *,
@@ -269,6 +342,8 @@ class RunCheckJobHandler:
         artifact_ids: list[str] | None = None,
         error_message: str | None = None,
         page_check_id: str | None | object = _UNSET,
+        attempt_count: int | None = None,
+        flaky: bool | None = None,
     ) -> dict[str, object]:
         payload = job.payload
         resolved_page_check_id = (
@@ -297,6 +372,8 @@ class RunCheckJobHandler:
             "auth_status": auth_status,
             "artifact_ids": artifact_ids or [],
             "error_message": error_message,
+            "attempt_count": attempt_count,
+            "flaky": flaky,
         }
 
     async def _get(self, model, identifier):
@@ -315,6 +392,15 @@ def _optional_string(value: object) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
+    return text or None
+
+
+def _enum_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        return str(getattr(value, "value")).strip().lower()
+    text = str(value).strip().lower()
     return text or None
 
 
