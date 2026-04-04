@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-04
 
 ### Changed
+- **precompiled 重试退避验证补强（Task 5）**：`tests/backend/test_run_check_job.py` 新增退避调用序列回归，用 `monkeypatch` 捕获 `app.jobs.run_check_job.anyio.sleep` 调用并断言指数退避序列；同时在测试内固定 `_PRECOMPILED_BASE_BACKOFF_MS=1000`、`_PRECOMPILED_JITTER_MS=0`，并断言序列为 `[1.0, 2.0]`，保证退避与断言稳定可复现。
 - **模型关系补齐（Issue 4）**：为全部 18 个数据库模型添加 SQLAlchemy `Relationship()` 定义（同文件双向 + ORM cascade），覆盖 system→credential/auth_state、snapshot→page/menu_node/page_element、page→menu_node/page_element、page_asset→check/module_plan/snapshot、execution_request→plan→run→artifact、published_job→job_run 共 30 条关系链路，不引入数据库级 FK CASCADE 约束，由应用层 ORM cascade 保证一致性。
 - **全局异常处理（Issue 5）**：`main.py` 新增 `Exception` / `ValueError` 全局异常处理器，返回结构化 JSON（含 `request_id`、`error_type`），不再返回裸 500。
 - **结构化日志（Issue 5）**：新增 `app.infrastructure.logging` 模块，支持 JSON 格式（生产）和彩色人类可读格式（开发），通过 `settings.log_level` / `settings.json_logs` 控制；所有日志自动携带 `request_id`。
