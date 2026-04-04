@@ -10,8 +10,10 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from sqlmodel import Session, create_engine, inspect
 
+from app.config.settings import settings
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
+from app.infrastructure.db.models import identity  # noqa: F401
 
 
 @pytest.fixture
@@ -45,6 +47,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
     assert table_names == {
         "alembic_version",
         "asset_snapshots",
+        "auth_audit_logs",
         "auth_states",
         "crawl_snapshots",
         "execution_artifacts",
@@ -67,7 +70,18 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "system_crawl_policies",
         "system_credentials",
         "systems",
+        "user_pats",
+        "user_sessions",
+        "users",
     }
+
+
+def test_settings_expose_session_and_pat_controls():
+    assert hasattr(settings, "session_secret")
+    assert hasattr(settings, "session_ttl_hours")
+    assert hasattr(settings, "pat_max_ttl_days")
+    assert hasattr(settings, "pat_allowed_ttl_days")
+    assert hasattr(settings, "password_pepper")
 
 
 def test_initial_schema_exposes_core_columns(db_engine):
@@ -236,6 +250,43 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "failure_reason",
         "warning_messages",
     } <= crawl_snapshot_columns
+
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    assert {"username", "password_hash", "status", "created_at", "updated_at"} <= user_columns
+
+    user_session_columns = {column["name"] for column in inspector.get_columns("user_sessions")}
+    assert {"user_id", "session_token_hash", "issued_at", "expires_at", "revoked_at"} <= user_session_columns
+
+    user_pat_columns = {column["name"] for column in inspector.get_columns("user_pats")}
+    assert {
+        "user_id",
+        "name",
+        "token_prefix",
+        "token_hash",
+        "allowed_channels",
+        "allowed_actions",
+        "allowed_system_ids",
+        "issued_at",
+        "expires_at",
+        "last_used_at",
+        "revoked_at",
+    } <= user_pat_columns
+
+    audit_log_columns = {column["name"] for column in inspector.get_columns("auth_audit_logs")}
+    assert {
+        "user_id",
+        "subject_type",
+        "subject_id",
+        "channel",
+        "system_id",
+        "action",
+        "decision",
+        "reason",
+        "request_id",
+        "ip",
+        "user_agent",
+        "created_at",
+    } <= audit_log_columns
 
     menu_node_columns = {column["name"] for column in inspector.get_columns("menu_nodes")}
     assert {"system_id", "snapshot_id", "label", "playwright_locator"} <= menu_node_columns

@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     credential_crypto_secret: str = Field(default="runlet-local-credential-secret")
     console_username: str = Field(default="admin")
     console_password: str = Field(default="admin")
+    session_secret: str = Field(default="runlet-dev-session-secret")
+    session_ttl_hours: int = Field(default=8, ge=1)
+    pat_max_ttl_days: int = Field(default=7, ge=1)
+    pat_allowed_ttl_days: list[int] = Field(default_factory=lambda: [3, 7])
+    password_pepper: str | None = Field(default=None)
 
     model_config = SettingsConfigDict(
         env_file=".env",
