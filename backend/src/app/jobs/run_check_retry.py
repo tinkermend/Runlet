@@ -19,16 +19,27 @@ TRANSIENT_ERROR_PATTERNS = (
 )
 
 
+def _normalize_failure_category(failure_category: str | None) -> str | None:
+    if not failure_category:
+        return None
+    return failure_category.strip().lower()
+
+
 def _contains_transient_pattern(haystack: str, patterns: Iterable[str]) -> bool:
     haystack_lower = haystack.lower()
     return any(pattern in haystack_lower for pattern in patterns)
 
 
 def is_retryable_failure(*, failure_category: str | None, error_message: str | None) -> bool:
-    if failure_category and failure_category in RETRYABLE_FAILURE_CATEGORIES:
+    category = _normalize_failure_category(failure_category)
+    if category and category in RETRYABLE_FAILURE_CATEGORIES:
         return True
-    if failure_category and failure_category in NON_RETRYABLE_STEP_FAILURES:
+    if category and category in NON_RETRYABLE_STEP_FAILURES:
         return False
-    if error_message and _contains_transient_pattern(error_message, TRANSIENT_ERROR_PATTERNS):
+    if (
+        category == "runtime_error"
+        and error_message
+        and _contains_transient_pattern(error_message, TRANSIENT_ERROR_PATTERNS)
+    ):
         return True
     return False
