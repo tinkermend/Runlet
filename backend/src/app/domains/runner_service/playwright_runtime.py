@@ -103,6 +103,80 @@ class PlaywrightRunnerRuntime:
             raise RuntimeError("open_create_modal did not change dialog state")
         return True
 
+    async def apply_filter(
+        self,
+        *,
+        field: str,
+        operator: str,
+        value: object,
+        carrier: str,
+    ) -> bool:
+        del operator, carrier
+        page = self._require_page()
+        text_value = str(value or "").strip()
+        if not text_value:
+            raise ValueError("filter value is empty")
+
+        textbox = page.get_by_role("textbox", name=re.compile(re.escape(field), re.IGNORECASE)).first
+        if await textbox.count() == 0:
+            textbox = page.locator("input, textarea").first
+        if await textbox.count() == 0:
+            return True
+        await textbox.wait_for(state="visible")
+        await textbox.fill(text_value)
+        return True
+
+    async def submit_query(self, *, carrier: str) -> bool:
+        del carrier
+        page = self._require_page()
+        trigger = page.get_by_role(
+            "button",
+            name=re.compile("查询|搜索|search|query", re.IGNORECASE),
+        ).first
+        if await trigger.count() > 0:
+            await trigger.wait_for(state="visible")
+            await trigger.click()
+            return True
+        if hasattr(page, "keyboard"):
+            await page.keyboard.press("Enter")
+        return True
+
+    async def read_data_count(self, *, carrier: str) -> int:
+        page = self._require_page()
+        if carrier == "list":
+            role_items = await page.get_by_role("listitem").count()
+            if role_items > 0:
+                return role_items
+            return await page.locator(".ant-list-item").count()
+
+        table_rows = await page.locator("table tbody tr").count()
+        if table_rows > 0:
+            return table_rows
+        row_count = await page.get_by_role("row").count()
+        if row_count <= 1:
+            return 0
+        return row_count - 1
+
+    async def row_exists_by_field(
+        self,
+        *,
+        carrier: str,
+        field: str,
+        operator: str,
+        value: object,
+    ) -> bool:
+        del carrier, field
+        page = self._require_page()
+        target = str(value or "").strip()
+        if not target:
+            return False
+        normalized_operator = operator.strip().lower()
+        if normalized_operator in {"not_equals", "neq"}:
+            return await page.get_by_text(target, exact=True).count() == 0
+        if normalized_operator in {"contains", "like"}:
+            return await page.get_by_text(target, exact=False).count() > 0
+        return await page.get_by_text(target, exact=True).count() > 0
+
     async def enter_state(self, *, state_signature: str) -> bool:
         modal_target = _extract_modal_target(state_signature)
         if modal_target is None:
