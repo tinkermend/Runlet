@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { AuthProvider } from "../../../app/providers/auth-provider";
@@ -14,11 +14,26 @@ function renderLoginPage() {
   );
 }
 
-it("renders login form", () => {
+it("renders login form", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 401,
+    json: async () => ({ detail: "Not authenticated" }),
+  });
+  global.fetch = fetchMock;
+
   renderLoginPage();
   expect(screen.getByRole("heading", { name: "登录 Runlet 平台" })).toBeInTheDocument();
   expect(screen.getByLabelText("用户名")).toBeInTheDocument();
   expect(screen.getByLabelText("密码")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/console/auth/me",
+      expect.objectContaining({
+        credentials: "include",
+      }),
+    );
+  });
 });
 
 it("shows error on failed login", async () => {
