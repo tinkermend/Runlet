@@ -8,7 +8,7 @@
 
 ## 1. 文档定位
 
-本文档定义 Runlet 平台在 `skills/web console/cli/scheduler -> control_plane -> runner_service` 调用链上的认证与授权治理方案，解决以下核心问题：
+本文档定义 Runlet 平台在 `skills/web_console/cli/scheduler -> control_plane -> runner_service` 调用链上的认证与授权治理方案，解决以下核心问题：
 
 - 不能允许任意人通过 `skills` 调用任意系统
 - `skills` 只负责用户对话与自动化测试任务构建，不直接触发手动采集
@@ -124,7 +124,7 @@
 ### 5.1 标准流程（低风险动作）
 
 1. 用户登录平台，获得 `session`（短期）
-2. `skills` 请求 `control_plane` 签发 `execution_grant`
+2. 调用端（`skills` 或 `web_console` 或 `cli`）请求 `control_plane` 签发 `execution_grant`
 3. 控制面校验：
    - session 有效
    - 用户对目标 `system` 有权限
@@ -236,7 +236,7 @@ sequenceDiagram
 
 第一版动作白名单建议：
 
-1. `skills`：`create_check_request`、`create_or_update_published_job`
+1. `skills`：`create_or_update_published_job`
 2. `web_console`：`create_check_request`、`create_or_update_published_job`、`trigger_full_crawl`、`trigger_incremental_crawl`
 3. `cli`：`create_or_update_published_job`、`trigger_full_crawl`、`trigger_incremental_crawl`
 4. `scheduler`：`trigger_published_job`
@@ -461,4 +461,4 @@ sequenceDiagram
 
 ## 14. 结论
 
-本方案以“会话认证 + 短期执行授权 + 高风险二次确认”为核心，在不破坏当前架构边界的前提下，提供了可审计、可收敛、可迭代的 `skills` 调用安全治理路径。第一版先收敛系统级权限与执行授权主链，确保“谁能调用哪个系统”成为平台内可控、可追踪、可验证的正式能力。
+本方案以“会话认证 + 短期执行授权 + 高风险二次确认 + 调度服务主体委托授权”为核心，在不破坏当前架构边界的前提下，提供了可审计、可收敛、可迭代的调用安全治理路径。第一版先收敛系统级权限、`channel-action` 白名单与执行授权主链，确保“谁能通过哪个入口调用哪个系统执行什么动作”成为平台内可控、可追踪、可验证的正式能力。
