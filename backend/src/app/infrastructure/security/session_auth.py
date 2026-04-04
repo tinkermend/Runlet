@@ -16,6 +16,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _hash_session_token(token: str) -> str:
     payload = f"{settings.session_secret}:{token}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -59,7 +65,8 @@ def get_user_for_session(*, token: str, session: Session) -> User | None:
     now = _utcnow()
     if record.revoked_at is not None:
         return None
-    if record.expires_at <= now:
+    expires_at = _ensure_utc(record.expires_at)
+    if expires_at <= now:
         record.revoked_at = now
         session.add(record)
         session.commit()
