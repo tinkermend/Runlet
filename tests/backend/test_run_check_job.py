@@ -118,6 +118,64 @@ class FlakyOnceRunnerService:
         )()
 
 
+class AlwaysFailedRunnerService:
+    def __init__(
+        self,
+        *,
+        failure_category_name: str,
+        detail: str,
+        execution_track: str = "precompiled",
+    ) -> None:
+        from app.domains.runner_service.failure_categories import FailureCategory
+        from app.domains.runner_service.schemas import AuthInjectStatus, RunnerRunStatus, StepExecutionResult
+
+        self._failure_category = FailureCategory[failure_category_name]
+        self._auth_status = AuthInjectStatus
+        self._run_status = RunnerRunStatus
+        self._step_execution_result = StepExecutionResult
+        self._detail = detail
+        self._execution_track = execution_track
+        self.run_page_check_calls = 0
+        self.run_realtime_probe_calls = 0
+
+    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+        self.run_page_check_calls += 1
+        return self._build_result(page_check_id=page_check_id)
+
+    async def run_realtime_probe(self, *, execution_plan_id: UUID):
+        self.run_realtime_probe_calls += 1
+        return self._build_result(page_check_id=None)
+
+    def _build_result(self, *, page_check_id: UUID | None):
+        return type(
+            "RunPageCheckResultStub",
+            (),
+            {
+                "page_check_id": page_check_id,
+                "execution_run_id": uuid4(),
+                "status": self._run_status.FAILED,
+                "auth_status": self._auth_status.REFRESHED,
+                "artifact_ids": [],
+                "screenshot_artifact_ids": [],
+                "step_results": [
+                    self._step_execution_result(
+                        module=(
+                            "realtime_probe" if self._execution_track == "realtime_probe" else "assert.table_visible"
+                        ),
+                        status=self._run_status.FAILED,
+                        detail=self._detail,
+                        output={"failure_category": self._failure_category.value},
+                    )
+                ],
+                "failure_category": self._failure_category,
+                "final_url": None,
+                "page_title": None,
+                "needs_recrawl": False,
+                "needs_recompile": False,
+            },
+        )()
+
+
 @pytest.fixture
 def seeded_run_check_target(db_session, seeded_page_check, seeded_page_asset, seeded_system, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -484,6 +542,31 @@ def flaky_once_runner_service():
 
 
 @pytest.fixture
+def non_retryable_failure_runner_service():
+    return AlwaysFailedRunnerService(
+        failure_category_name="ASSERTION_FAILED",
+        detail="assertion failed for expected table rows",
+    )
+
+
+@pytest.fixture
+def retryable_failure_runner_service():
+    return AlwaysFailedRunnerService(
+        failure_category_name="NAVIGATION_FAILED",
+        detail="timeout while navigating to target page",
+    )
+
+
+@pytest.fixture
+def realtime_probe_failure_runner_service():
+    return AlwaysFailedRunnerService(
+        failure_category_name="NAVIGATION_FAILED",
+        detail="timeout while probing route",
+        execution_track="realtime_probe",
+    )
+
+
+@pytest.fixture
 def job_runner_with_precompiled_retry(db_session, flaky_once_runner_service):
     from app.jobs.run_check_job import RunCheckJobHandler
 
@@ -493,6 +576,51 @@ def job_runner_with_precompiled_retry(db_session, flaky_once_runner_service):
             RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
                 session=db_session,
                 runner_service=flaky_once_runner_service,
+            )
+        },
+    )
+
+
+@pytest.fixture
+def job_runner_with_non_retryable_precompiled_failure(db_session, non_retryable_failure_runner_service):
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    return WorkerRunner(
+        session=db_session,
+        handlers={
+            RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
+                session=db_session,
+                runner_service=non_retryable_failure_runner_service,
+            )
+        },
+    )
+
+
+@pytest.fixture
+def job_runner_with_retryable_precompiled_failure(db_session, retryable_failure_runner_service):
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    return WorkerRunner(
+        session=db_session,
+        handlers={
+            RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
+                session=db_session,
+                runner_service=retryable_failure_runner_service,
+            )
+        },
+    )
+
+
+@pytest.fixture
+def job_runner_with_realtime_probe_failure(db_session, realtime_probe_failure_runner_service):
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    return WorkerRunner(
+        session=db_session,
+        handlers={
+            RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
+                session=db_session,
+                runner_service=realtime_probe_failure_runner_service,
             )
         },
     )
@@ -821,3 +949,56 @@ async def test_run_check_job_does_not_retry_for_non_precompiled_track(
     assert flaky_once_runner_service.run_page_check_calls == 1
     assert "attempt_count" not in refreshed.result_payload
     assert "flaky" not in refreshed.result_payload
+
+
+@pytest.mark.anyio
+async def test_run_check_job_precompiled_non_retryable_failure_runs_once(
+    job_runner_with_non_retryable_precompiled_failure,
+    non_retryable_failure_runner_service,
+    queued_run_check_job,
+    db_session,
+):
+    await job_runner_with_non_retryable_precompiled_failure.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["status"] == "failed"
+    assert refreshed.result_payload["attempt_count"] == 1
+    assert refreshed.result_payload["retry_exhausted"] is False
+    assert non_retryable_failure_runner_service.run_page_check_calls == 1
+
+
+@pytest.mark.anyio
+async def test_run_check_job_precompiled_retryable_failure_reaches_retry_limit(
+    job_runner_with_retryable_precompiled_failure,
+    retryable_failure_runner_service,
+    queued_run_check_job,
+    db_session,
+):
+    await job_runner_with_retryable_precompiled_failure.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["status"] == "failed"
+    assert refreshed.result_payload["attempt_count"] == 3
+    assert refreshed.result_payload["retry_exhausted"] is True
+    assert retryable_failure_runner_service.run_page_check_calls == 3
+
+
+@pytest.mark.anyio
+async def test_run_check_job_realtime_probe_failure_does_not_retry(
+    job_runner_with_realtime_probe_failure,
+    realtime_probe_failure_runner_service,
+    queued_realtime_probe_job,
+    db_session,
+):
+    await job_runner_with_realtime_probe_failure.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_realtime_probe_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["execution_track"] == "realtime_probe"
+    assert refreshed.result_payload.get("attempt_count") in {None, 1}
+    assert realtime_probe_failure_runner_service.run_realtime_probe_calls == 1

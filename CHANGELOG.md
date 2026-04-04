@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-04
 
 ### Changed
+- **run_check 重试边界回归补齐（Task 4）**：新增 precompiled 轨道“不可重试失败仅 1 次”“可重试失败 3 次耗尽”“realtime_probe 不重试”回归测试；`RunCheckJobHandler` 在 precompiled 结果中补齐 `attempt_count/retry_exhausted/flaky/retry_policy/attempts/final_failure_category/final_error_message` 字段，并复用 `build_attempt_entry` 记录每次尝试审计信息。
 - **模型关系补齐（Issue 4）**：为全部 18 个数据库模型添加 SQLAlchemy `Relationship()` 定义（同文件双向 + ORM cascade），覆盖 system→credential/auth_state、snapshot→page/menu_node/page_element、page→menu_node/page_element、page_asset→check/module_plan/snapshot、execution_request→plan→run→artifact、published_job→job_run 共 30 条关系链路，不引入数据库级 FK CASCADE 约束，由应用层 ORM cascade 保证一致性。
 - **全局异常处理（Issue 5）**：`main.py` 新增 `Exception` / `ValueError` 全局异常处理器，返回结构化 JSON（含 `request_id`、`error_type`），不再返回裸 500。
 - **结构化日志（Issue 5）**：新增 `app.infrastructure.logging` 模块，支持 JSON 格式（生产）和彩色人类可读格式（开发），通过 `settings.log_level` / `settings.json_logs` 控制；所有日志自动携带 `request_id`。

@@ -10,7 +10,7 @@ from sqlmodel import Session
 from app.domains.runner_service.service import ASSET_RETIRED_FAILURE_MESSAGE, ExecutionBlockedError
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
 from app.infrastructure.db.models.jobs import JobRun, PublishedJob, QueuedJob
-from app.jobs.run_check_retry import compute_backoff_ms, is_retryable_failure
+from app.jobs.run_check_retry import build_attempt_entry, compute_backoff_ms, is_retryable_failure
 from app.shared.enums import AssetLifecycleStatus, PublishedJobState, QueuedJobStatus
 
 _UNSET = object()
@@ -131,8 +131,7 @@ class RunCheckJobHandler:
             job_run.started_at = job_run.started_at or utcnow()
         await self._commit()
 
-        attempt_count = 1
-        flaky = False
+        precompiled_retry_payload: dict[str, object] | None = None
         try:
             if execution_track == "realtime_probe":
                 result = await self.runner_service.run_realtime_probe(
@@ -148,7 +147,7 @@ class RunCheckJobHandler:
                         execution_run_id=result.execution_run_id,
                     )
             elif execution_track == "precompiled":
-                result, attempt_count, flaky = await self._run_precompiled_with_retry(
+                result, precompiled_retry_payload = await self._run_precompiled_with_retry(
                     page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
                 )
@@ -171,10 +170,7 @@ class RunCheckJobHandler:
         job.status = QueuedJobStatus.COMPLETED.value
         job.finished_at = utcnow()
         job.failure_message = None
-        result_payload_kwargs: dict[str, object] = {}
-        if execution_track == "precompiled":
-            result_payload_kwargs["attempt_count"] = attempt_count
-            result_payload_kwargs["flaky"] = flaky
+        result_payload_kwargs: dict[str, object] = precompiled_retry_payload or {}
         job.result_payload = self._build_result_payload(
             job=job,
             queue_status=job.status,
@@ -279,27 +275,76 @@ class RunCheckJobHandler:
         page_check_id: UUID | None,
         execution_plan_id: UUID | None,
     ):
+        attempts: list[dict[str, object]] = []
         last_result = None
+        final_failure_category: str | None = None
+        final_error_message: str | None = None
+        final_retryable = False
         for attempt_no in range(1, _PRECOMPILED_MAX_ATTEMPTS + 1):
+            started_at = utcnow()
             try:
                 result = await self.runner_service.run_page_check(
                     page_check_id=page_check_id,
                     execution_plan_id=execution_plan_id,
                 )
             except Exception as exc:
+                finished_at = utcnow()
                 await self._rollback()
                 retryable = is_retryable_failure(
                     failure_category="runtime_error",
                     error_message=str(exc),
                 )
-                if (not retryable) or attempt_no >= _PRECOMPILED_MAX_ATTEMPTS:
+                should_retry = retryable and attempt_no < _PRECOMPILED_MAX_ATTEMPTS
+                backoff_ms = (
+                    compute_backoff_ms(
+                        attempt_no=attempt_no,
+                        base_backoff_ms=_PRECOMPILED_BASE_BACKOFF_MS,
+                        jitter_ms=_PRECOMPILED_JITTER_MS,
+                    )
+                    if should_retry
+                    else 0
+                )
+                attempts.append(
+                    build_attempt_entry(
+                        attempt_no=attempt_no,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        status="failed",
+                        failure_category="runtime_error",
+                        retryable=retryable,
+                        backoff_ms=backoff_ms,
+                    )
+                )
+                final_failure_category = "runtime_error"
+                final_error_message = str(exc)
+                final_retryable = retryable
+                if not should_retry:
                     raise
-                await self._sleep_for_backoff(attempt_no=attempt_no)
+                await self._sleep_for_backoff(backoff_ms=backoff_ms)
                 continue
 
+            finished_at = utcnow()
             last_result = result
             if _enum_value(result.status) == "passed":
-                return result, attempt_no, attempt_no > 1
+                attempts.append(
+                    build_attempt_entry(
+                        attempt_no=attempt_no,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        status="passed",
+                        failure_category=None,
+                        retryable=False,
+                        backoff_ms=0,
+                    )
+                )
+                return result, self._build_precompiled_retry_payload(
+                    attempt_count=attempt_no,
+                    flaky=attempt_no > 1,
+                    retry_exhausted=False,
+                    attempts=attempts,
+                    final_failure_category=None,
+                    final_error_message=None,
+                )
 
             failure_category = _enum_value(getattr(result, "failure_category", None))
             error_message = self._extract_error_message(result)
@@ -307,22 +352,79 @@ class RunCheckJobHandler:
                 failure_category=failure_category,
                 error_message=error_message,
             )
-            if (not retryable) or attempt_no >= _PRECOMPILED_MAX_ATTEMPTS:
-                return result, attempt_no, attempt_no > 1
+            should_retry = retryable and attempt_no < _PRECOMPILED_MAX_ATTEMPTS
+            backoff_ms = (
+                compute_backoff_ms(
+                    attempt_no=attempt_no,
+                    base_backoff_ms=_PRECOMPILED_BASE_BACKOFF_MS,
+                    jitter_ms=_PRECOMPILED_JITTER_MS,
+                )
+                if should_retry
+                else 0
+            )
+            attempts.append(
+                build_attempt_entry(
+                    attempt_no=attempt_no,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    status="failed",
+                    failure_category=failure_category,
+                    retryable=retryable,
+                    backoff_ms=backoff_ms,
+                )
+            )
+            final_failure_category = failure_category
+            final_error_message = error_message
+            final_retryable = retryable
+            if not should_retry:
+                return result, self._build_precompiled_retry_payload(
+                    attempt_count=attempt_no,
+                    flaky=attempt_no > 1 and _enum_value(result.status) == "passed",
+                    retry_exhausted=retryable and attempt_no >= _PRECOMPILED_MAX_ATTEMPTS,
+                    attempts=attempts,
+                    final_failure_category=failure_category,
+                    final_error_message=error_message,
+                )
 
-            await self._sleep_for_backoff(attempt_no=attempt_no)
+            await self._sleep_for_backoff(backoff_ms=backoff_ms)
 
-        return last_result, _PRECOMPILED_MAX_ATTEMPTS, _PRECOMPILED_MAX_ATTEMPTS > 1
-
-    async def _sleep_for_backoff(self, *, attempt_no: int) -> None:
-        backoff_ms = compute_backoff_ms(
-            attempt_no=attempt_no,
-            base_backoff_ms=_PRECOMPILED_BASE_BACKOFF_MS,
-            jitter_ms=_PRECOMPILED_JITTER_MS,
+        return last_result, self._build_precompiled_retry_payload(
+            attempt_count=_PRECOMPILED_MAX_ATTEMPTS,
+            flaky=False,
+            retry_exhausted=final_retryable,
+            attempts=attempts,
+            final_failure_category=final_failure_category,
+            final_error_message=final_error_message,
         )
+
+    async def _sleep_for_backoff(self, *, backoff_ms: int) -> None:
         if backoff_ms <= 0:
             return
         await anyio.sleep(backoff_ms / 1000)
+
+    def _build_precompiled_retry_payload(
+        self,
+        *,
+        attempt_count: int,
+        flaky: bool,
+        retry_exhausted: bool,
+        attempts: list[dict[str, object]],
+        final_failure_category: str | None,
+        final_error_message: str | None,
+    ) -> dict[str, object]:
+        return {
+            "attempt_count": attempt_count,
+            "retry_exhausted": retry_exhausted,
+            "flaky": flaky,
+            "retry_policy": {
+                "max_attempts": _PRECOMPILED_MAX_ATTEMPTS,
+                "base_backoff_ms": _PRECOMPILED_BASE_BACKOFF_MS,
+                "jitter_ms": _PRECOMPILED_JITTER_MS,
+            },
+            "attempts": attempts,
+            "final_failure_category": final_failure_category,
+            "final_error_message": final_error_message,
+        }
 
     def _extract_error_message(self, result) -> str | None:
         step_results = getattr(result, "step_results", None)
@@ -352,7 +454,12 @@ class RunCheckJobHandler:
         error_message: str | None = None,
         page_check_id: str | None | object = _UNSET,
         attempt_count: int | None | object = _UNSET,
+        retry_exhausted: bool | None | object = _UNSET,
         flaky: bool | None | object = _UNSET,
+        retry_policy: dict[str, object] | None | object = _UNSET,
+        attempts: list[dict[str, object]] | None | object = _UNSET,
+        final_failure_category: str | None | object = _UNSET,
+        final_error_message: str | None | object = _UNSET,
     ) -> dict[str, object]:
         payload = job.payload
         resolved_page_check_id = (
@@ -384,8 +491,18 @@ class RunCheckJobHandler:
         }
         if attempt_count is not _UNSET:
             result["attempt_count"] = attempt_count
+        if retry_exhausted is not _UNSET:
+            result["retry_exhausted"] = retry_exhausted
         if flaky is not _UNSET:
             result["flaky"] = flaky
+        if retry_policy is not _UNSET:
+            result["retry_policy"] = retry_policy
+        if attempts is not _UNSET:
+            result["attempts"] = attempts
+        if final_failure_category is not _UNSET:
+            result["final_failure_category"] = final_failure_category
+        if final_error_message is not _UNSET:
+            result["final_error_message"] = final_error_message
         return result
 
     async def _get(self, model, identifier):
