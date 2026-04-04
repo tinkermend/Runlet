@@ -4,7 +4,7 @@ from app.jobs.run_check_retry import (
     build_attempt_entry,
     compute_backoff_ms,
     is_retryable_failure,
- )
+)
 
 
 def test_is_retryable_failure_accepts_navigation_and_page_not_ready():
