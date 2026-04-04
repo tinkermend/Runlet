@@ -795,3 +795,26 @@ async def test_run_check_job_retries_precompiled_once_then_succeeds_retries_prec
     assert refreshed.result_payload["attempt_count"] == 2
     assert refreshed.result_payload["flaky"] is True
     assert flaky_once_runner_service.run_page_check_calls == 2
+
+
+@pytest.mark.anyio
+async def test_run_check_job_does_not_retry_for_non_precompiled_track(
+    job_runner_with_precompiled_retry,
+    flaky_once_runner_service,
+    queued_run_check_job,
+    db_session,
+):
+    queued_run_check_job.payload["execution_track"] = "manual"
+    db_session.add(queued_run_check_job)
+    db_session.commit()
+    db_session.refresh(queued_run_check_job)
+
+    await job_runner_with_precompiled_retry.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["status"] == "failed"
+    assert flaky_once_runner_service.run_page_check_calls == 1
+    assert "attempt_count" not in refreshed.result_payload
+    assert "flaky" not in refreshed.result_payload

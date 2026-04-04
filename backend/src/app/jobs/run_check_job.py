@@ -147,8 +147,13 @@ class RunCheckJobHandler:
                         execution_plan_id=parsed_execution_plan_id,
                         execution_run_id=result.execution_run_id,
                     )
-            else:
+            elif execution_track == "precompiled":
                 result, attempt_count, flaky = await self._run_precompiled_with_retry(
+                    page_check_id=parsed_page_check_id,
+                    execution_plan_id=parsed_execution_plan_id,
+                )
+            else:
+                result = await self.runner_service.run_page_check(
                     page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
                 )
@@ -167,7 +172,7 @@ class RunCheckJobHandler:
         job.finished_at = utcnow()
         job.failure_message = None
         result_payload_kwargs: dict[str, object] = {}
-        if execution_track != "realtime_probe":
+        if execution_track == "precompiled":
             result_payload_kwargs["attempt_count"] = attempt_count
             result_payload_kwargs["flaky"] = flaky
         job.result_payload = self._build_result_payload(
@@ -282,6 +287,7 @@ class RunCheckJobHandler:
                     execution_plan_id=execution_plan_id,
                 )
             except Exception as exc:
+                await self._rollback()
                 retryable = is_retryable_failure(
                     failure_category="runtime_error",
                     error_message=str(exc),
@@ -392,6 +398,12 @@ class RunCheckJobHandler:
             await self.session.commit()
             return
         self.session.commit()
+
+    async def _rollback(self) -> None:
+        if isinstance(self.session, AsyncSession):
+            await self.session.rollback()
+            return
+        self.session.rollback()
 
 
 def _optional_string(value: object) -> str | None:
