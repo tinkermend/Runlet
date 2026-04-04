@@ -1,6 +1,6 @@
 """persist template metadata columns on execution_requests
 
-Revision ID: 0012_execution_request_template_params
+Revision ID: 0012_exec_req_tpl_params
 Revises: 0011_crawl_state_loc_evid
 Create Date: 2026-04-04 10:00:00.000000
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0012_execution_request_template_params"
+revision = "0012_exec_req_tpl_params"
 down_revision = "0011_crawl_state_loc_evid"
 branch_labels = None
 depends_on = None

@@ -10,6 +10,9 @@
 - **修复 runtime_policies.py 重复字段**：移除 `SystemAuthPolicy` 上重复的 `system: Relationship()` 声明。
 - **清理未使用导入**：移除 `main.py` 中未使用的 `traceback`、`runner.py` 中未使用的 `col`。
 - **候选推荐排序收口（Task 3）**：`control_plane.recommendation` 改为按候选粒度应用冷启动规则（不再全局切换），统一以 `rank_score` 作为主排序键，并在冷启动同分场景按最近执行时间打破并列；补齐 service 侧“冷热混排”和“冷启动同置信度按 recency 排序”回归测试。
+- **模板注册与编译映射（Task 4）**：新增 `template_registry`（V1: `has_data/no_data/field_equals_exists/status_exists/count_gte`），`check_templates` 改为注册中心驱动追加模板化检查，`module_plan_builder` 新增模板链路编译（`action.apply_filter/action.submit_query/assert.*`）并保留旧 `table_render/open_create_modal` 路径兼容。
+- **Runner 数据断言模块（Task 5）**：新增 `data_assertion_modules` 占位解析与计数断言工具，`module_executor` 与 `playwright_runtime` 支持 `action.apply_filter/action.submit_query/assert.data_count/assert.row_exists_by_field`，并补齐 `field_equals_exists/no_data/count_gte/status_exists` 的 runner 回归测试。
+- **参数透传与只读守卫（Task 6）**：`control_plane.submit_check_request` 增加只读模板守卫（拒绝非 V1 readonly 模板），`run_check_job` 在执行 `precompiled` 检查时会读取 `execution_request.template_params` 并透传到 `RunnerService.run_page_check(runtime_inputs=...)`，补齐 `readonly/template_params/element_asset_missing` 回归测试。
 
 ### Added
 - Frontend management console (React + Vite + TypeScript) under `front/`

@@ -66,7 +66,7 @@ async def test_submit_check_request_persists_template_metadata(
     db_session,
 ):
     template_context = {
-        "template_code": "table_render",
+        "template_code": "field_equals_exists",
         "template_version": "v1",
         "carrier_hint": "table",
         "template_params": {
@@ -294,6 +294,37 @@ async def test_submit_check_request_fails_when_page_is_resolved_but_element_asse
             system_hint="WMS",
             page_hint="库存列表",
             check_goal="table_render",
+        )
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_rejects_non_readonly_template_action(control_plane_service):
+    with pytest.raises(HTTPException, match="readonly template required"):
+        await control_plane_service.submit_check_request(
+            system_hint="ERP",
+            page_hint="用户管理",
+            check_goal="delete_resource",
+            template_code="delete_resource",
+            template_version="v1",
+            carrier_hint="table",
+            template_params={"field": "username", "operator": "equals", "value": "alice"},
+        )
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_returns_element_asset_missing_for_template_when_page_resolved(
+    control_plane_service,
+    seeded_asset_without_matching_check,
+):
+    with pytest.raises(HTTPException, match="element asset is missing"):
+        await control_plane_service.submit_check_request(
+            system_hint="WMS",
+            page_hint="库存列表",
+            check_goal="field_equals_exists",
+            template_code="field_equals_exists",
+            template_version="v1",
+            carrier_hint="table",
+            template_params={"field": "username", "operator": "equals", "value": "alice"},
         )
 
 

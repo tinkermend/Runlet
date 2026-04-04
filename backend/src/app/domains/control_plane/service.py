@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.domains.asset_compiler.template_registry import get_template
 from app.domains.control_plane.job_types import (
     ASSET_COMPILE_JOB_TYPE,
     AUTH_REFRESH_JOB_TYPE,
@@ -108,6 +109,7 @@ class ControlPlaneService:
             carrier_hint=carrier_hint,
             template_params=template_params,
         )
+        self._assert_readonly_template_request(payload=payload)
 
         resolution = await self.repository.resolve_page_asset_and_check(
             system_hint=payload.system_hint,
@@ -592,6 +594,16 @@ class ControlPlaneService:
             published_jobs_paused=published_jobs_paused,
             published_jobs_resumed=published_jobs_resumed,
         )
+
+    def _assert_readonly_template_request(self, *, payload: CreateCheckRequest) -> None:
+        if payload.template_code is None:
+            return
+        template = get_template(
+            template_code=payload.template_code,
+            version=payload.template_version or "v1",
+        )
+        if template is None or not template.readonly:
+            raise HTTPException(status_code=422, detail="readonly template required")
 
     async def _accept_check_request(
         self,

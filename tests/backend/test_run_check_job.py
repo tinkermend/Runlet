@@ -39,7 +39,13 @@ class RetireBeforeRunnerService:
         self._session = session
         self._delegate = RunnerService(session=session, runtime=FakeRuntime())
 
-    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+    async def run_page_check(
+        self,
+        *,
+        page_check_id: UUID,
+        execution_plan_id: UUID | None = None,
+        runtime_inputs: dict[str, object] | None = None,
+    ):
         target = self._session.get(PageCheck, page_check_id)
         assert target is not None
         target.lifecycle_status = AssetLifecycleStatus.RETIRED_REPLACED
@@ -49,6 +55,7 @@ class RetireBeforeRunnerService:
         return await self._delegate.run_page_check(
             page_check_id=page_check_id,
             execution_plan_id=execution_plan_id,
+            runtime_inputs=runtime_inputs,
         )
 
 
@@ -109,6 +116,7 @@ def queued_run_check_job(db_session, seeded_run_check_target):
         job_type=RUN_CHECK_JOB_TYPE,
         payload={
             "execution_plan_id": str(execution_plan.id),
+            "execution_request_id": str(execution_plan.execution_request_id),
             "page_check_id": str(seeded_run_check_target.id),
             "execution_track": "precompiled",
         },
@@ -448,6 +456,62 @@ async def test_run_check_job_creates_execution_run(job_runner, queued_run_check_
     assert refreshed.result_payload is not None
     assert refreshed.result_payload["status"] == "passed"
     assert execution_run is not None
+
+
+@pytest.mark.anyio
+async def test_run_check_job_passes_template_params_to_runner(
+    db_session,
+    queued_run_check_job,
+    seeded_run_check_target,
+):
+    from app.domains.runner_service.schemas import (
+        AuthInjectStatus,
+        RunPageCheckResult,
+        RunnerRunStatus,
+    )
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    class SpyRunnerService:
+        def __init__(self) -> None:
+            self.runtime_inputs_calls: list[dict[str, object] | None] = []
+
+        async def run_page_check(
+            self,
+            *,
+            page_check_id: UUID,
+            execution_plan_id: UUID | None = None,
+            runtime_inputs: dict[str, object] | None = None,
+        ) -> RunPageCheckResult:
+            self.runtime_inputs_calls.append(runtime_inputs)
+            return RunPageCheckResult(
+                page_check_id=page_check_id,
+                execution_run_id=uuid4(),
+                status=RunnerRunStatus.PASSED,
+                auth_status=AuthInjectStatus.REUSED,
+                artifact_ids=[],
+                screenshot_artifact_ids=[],
+                step_results=[],
+            )
+
+    execution_plan = db_session.exec(
+        select(ExecutionPlan).where(ExecutionPlan.resolved_page_check_id == seeded_run_check_target.id)
+    ).one()
+    execution_request = db_session.get(ExecutionRequest, execution_plan.execution_request_id)
+    assert execution_request is not None
+    execution_request.template_params = {"field": "username", "operator": "equals", "value": "alice"}
+    db_session.add(execution_request)
+    db_session.commit()
+
+    spy_runner = SpyRunnerService()
+    handler = RunCheckJobHandler(session=db_session, runner_service=spy_runner)
+    await handler.run(job_id=queued_run_check_job.id)
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload is not None
+    assert refreshed.result_payload["status"] == "passed"
+    assert spy_runner.runtime_inputs_calls == [execution_request.template_params]
 
 
 @pytest.mark.anyio
