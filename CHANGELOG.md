@@ -17,6 +17,8 @@
 - 前端认证态改为 `/api/console/auth/me` 启动态，`ProtectedRoute` 增加 bootstrap loading 保护，登录后会主动重拉 `/me` 保证前后端会话一致。
 - 前端 HTTP 客户端新增 `ApiError(status)` 与统一 401 处理挂点，支持 204/无 JSON 响应安全返回。
 - 补充 `backend/.env.example` 与 `backend/README.md` 的 session/PAT 配置说明，明确 Web session 与 Skills PAT 分层认证模型。
+- 收敛 Alembic 双 `0012` 分支：新增 `0013_merge_0012_heads` merge revision，统一 `0012_exec_req_tpl_params` 与 `0012_identity_pat_auth` 迁移头。
+- 调整 `test_check_requests_api` 的模板化请求用例鉴权方式，统一走 skills PAT `Authorization: Bearer` 请求头。
 - **Alembic head 收敛**：新增 merge revision `0013_merge_0012_heads`，合并 `0012_exec_req_tpl_params` 与 `0012_identity_pat_auth` 双分支，恢复 `alembic upgrade head` 的单 head 升级路径。
 - **模板请求 API 鉴权回归对齐**：`test_check_requests_api` 中模板相关用例改为携带 skills PAT，确保与 `/api/v1/check-requests` 的最新鉴权策略一致，避免错误地以 401 覆盖参数校验断言。
 
