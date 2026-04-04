@@ -6,10 +6,11 @@ from app.api.endpoints.console_portal import router as console_portal_router
 from app.api.endpoints.console_results import router as console_results_router
 from app.api.endpoints.console_tasks import router as console_tasks_router
 from app.api.endpoints.console_assets import router as console_assets_router
+from app.config.settings import settings
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="AI Playwright Platform")
+    app = FastAPI(title=settings.app_name)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
