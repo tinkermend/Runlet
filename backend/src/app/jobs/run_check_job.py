@@ -23,6 +23,12 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class PrecompiledRetryTerminalError(RuntimeError):
+    def __init__(self, *, message: str, retry_payload: dict[str, object]) -> None:
+        super().__init__(message)
+        self.retry_payload = retry_payload
+
+
 class RunCheckJobHandler:
     def __init__(
         self,
@@ -163,6 +169,14 @@ class RunCheckJobHandler:
                 job_run=job_run,
             )
             return
+        except PrecompiledRetryTerminalError as exc:
+            await self._mark_failed(
+                job,
+                message=str(exc),
+                job_run=job_run,
+                result_payload_kwargs=exc.retry_payload,
+            )
+            return
         except Exception as exc:
             await self._mark_failed(job, message=str(exc), job_run=job_run)
             return
@@ -196,16 +210,19 @@ class RunCheckJobHandler:
         *,
         message: str | None,
         job_run: JobRun | None = None,
+        result_payload_kwargs: dict[str, object] | None = None,
     ) -> None:
         job.status = QueuedJobStatus.FAILED.value
         job.started_at = job.started_at or utcnow()
         job.finished_at = utcnow()
         job.failure_message = message
+        payload_kwargs = result_payload_kwargs or {}
         job.result_payload = self._build_result_payload(
             job=job,
             queue_status=job.status,
             execution_status="failed",
             error_message=message,
+            **payload_kwargs,
         )
         if job_run is not None:
             job_run.run_status = QueuedJobStatus.FAILED.value
@@ -319,7 +336,17 @@ class RunCheckJobHandler:
                 final_error_message = str(exc)
                 final_retryable = retryable
                 if not should_retry:
-                    raise
+                    raise PrecompiledRetryTerminalError(
+                        message=str(exc),
+                        retry_payload=self._build_precompiled_retry_payload(
+                            attempt_count=attempt_no,
+                            flaky=False,
+                            retry_exhausted=retryable and attempt_no >= _PRECOMPILED_MAX_ATTEMPTS,
+                            attempts=attempts,
+                            final_failure_category=final_failure_category,
+                            final_error_message=final_error_message,
+                        ),
+                    ) from exc
                 await self._sleep_for_backoff(backoff_ms=backoff_ms)
                 continue
 

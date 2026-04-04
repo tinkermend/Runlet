@@ -176,6 +176,16 @@ class AlwaysFailedRunnerService:
         )()
 
 
+class AlwaysRaiseRunnerService:
+    def __init__(self, *, error_message: str) -> None:
+        self._error_message = error_message
+        self.run_page_check_calls = 0
+
+    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+        self.run_page_check_calls += 1
+        raise RuntimeError(self._error_message)
+
+
 @pytest.fixture
 def seeded_run_check_target(db_session, seeded_page_check, seeded_page_asset, seeded_system, seeded_auth_state) -> PageCheck:
     module_plan = ModulePlan(
@@ -567,6 +577,11 @@ def realtime_probe_failure_runner_service():
 
 
 @pytest.fixture
+def retryable_exception_runner_service():
+    return AlwaysRaiseRunnerService(error_message="timeout while connecting to target page")
+
+
+@pytest.fixture
 def job_runner_with_precompiled_retry(db_session, flaky_once_runner_service):
     from app.jobs.run_check_job import RunCheckJobHandler
 
@@ -621,6 +636,21 @@ def job_runner_with_realtime_probe_failure(db_session, realtime_probe_failure_ru
             RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
                 session=db_session,
                 runner_service=realtime_probe_failure_runner_service,
+            )
+        },
+    )
+
+
+@pytest.fixture
+def job_runner_with_retryable_precompiled_exception(db_session, retryable_exception_runner_service):
+    from app.jobs.run_check_job import RunCheckJobHandler
+
+    return WorkerRunner(
+        session=db_session,
+        handlers={
+            RUN_CHECK_JOB_TYPE: RunCheckJobHandler(
+                session=db_session,
+                runner_service=retryable_exception_runner_service,
             )
         },
     )
@@ -921,7 +951,16 @@ async def test_run_check_job_retries_precompiled_once_then_succeeds_retries_prec
     assert refreshed.status == "completed"
     assert refreshed.result_payload["status"] == "passed"
     assert refreshed.result_payload["attempt_count"] == 2
+    assert refreshed.result_payload["retry_exhausted"] is False
     assert refreshed.result_payload["flaky"] is True
+    assert refreshed.result_payload["retry_policy"] == {
+        "max_attempts": 3,
+        "base_backoff_ms": 100,
+        "jitter_ms": 0,
+    }
+    assert len(refreshed.result_payload["attempts"]) == 2
+    assert refreshed.result_payload["final_failure_category"] is None
+    assert refreshed.result_payload["final_error_message"] is None
     assert flaky_once_runner_service.run_page_check_calls == 2
 
 
@@ -966,6 +1005,15 @@ async def test_run_check_job_precompiled_non_retryable_failure_runs_once(
     assert refreshed.result_payload["status"] == "failed"
     assert refreshed.result_payload["attempt_count"] == 1
     assert refreshed.result_payload["retry_exhausted"] is False
+    assert refreshed.result_payload["flaky"] is False
+    assert refreshed.result_payload["retry_policy"] == {
+        "max_attempts": 3,
+        "base_backoff_ms": 100,
+        "jitter_ms": 0,
+    }
+    assert len(refreshed.result_payload["attempts"]) == 1
+    assert refreshed.result_payload["final_failure_category"] == "assertion_failed"
+    assert refreshed.result_payload["final_error_message"] == "assertion failed for expected table rows"
     assert non_retryable_failure_runner_service.run_page_check_calls == 1
 
 
@@ -984,7 +1032,43 @@ async def test_run_check_job_precompiled_retryable_failure_reaches_retry_limit(
     assert refreshed.result_payload["status"] == "failed"
     assert refreshed.result_payload["attempt_count"] == 3
     assert refreshed.result_payload["retry_exhausted"] is True
+    assert refreshed.result_payload["flaky"] is False
+    assert refreshed.result_payload["retry_policy"] == {
+        "max_attempts": 3,
+        "base_backoff_ms": 100,
+        "jitter_ms": 0,
+    }
+    assert len(refreshed.result_payload["attempts"]) == 3
+    assert refreshed.result_payload["final_failure_category"] == "navigation_failed"
+    assert refreshed.result_payload["final_error_message"] == "timeout while navigating to target page"
     assert retryable_failure_runner_service.run_page_check_calls == 3
+
+
+@pytest.mark.anyio
+async def test_run_check_job_precompiled_retryable_exception_reaches_retry_limit_with_metadata(
+    job_runner_with_retryable_precompiled_exception,
+    retryable_exception_runner_service,
+    queued_run_check_job,
+    db_session,
+):
+    await job_runner_with_retryable_precompiled_exception.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.result_payload["status"] == "failed"
+    assert refreshed.result_payload["attempt_count"] == 3
+    assert refreshed.result_payload["retry_exhausted"] is True
+    assert refreshed.result_payload["flaky"] is False
+    assert refreshed.result_payload["retry_policy"] == {
+        "max_attempts": 3,
+        "base_backoff_ms": 100,
+        "jitter_ms": 0,
+    }
+    assert len(refreshed.result_payload["attempts"]) == 3
+    assert refreshed.result_payload["final_failure_category"] == "runtime_error"
+    assert refreshed.result_payload["final_error_message"] == "timeout while connecting to target page"
+    assert retryable_exception_runner_service.run_page_check_calls == 3
 
 
 @pytest.mark.anyio
@@ -1000,5 +1084,11 @@ async def test_run_check_job_realtime_probe_failure_does_not_retry(
     assert refreshed is not None
     assert refreshed.status == "completed"
     assert refreshed.result_payload["execution_track"] == "realtime_probe"
-    assert refreshed.result_payload.get("attempt_count") in {None, 1}
+    assert "attempt_count" not in refreshed.result_payload
+    assert "retry_exhausted" not in refreshed.result_payload
+    assert "flaky" not in refreshed.result_payload
+    assert "retry_policy" not in refreshed.result_payload
+    assert "attempts" not in refreshed.result_payload
+    assert "final_failure_category" not in refreshed.result_payload
+    assert "final_error_message" not in refreshed.result_payload
     assert realtime_probe_failure_runner_service.run_realtime_probe_calls == 1
