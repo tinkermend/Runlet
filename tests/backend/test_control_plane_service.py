@@ -58,6 +58,37 @@ async def test_submit_check_request_creates_request_plan_and_job(
 
 
 @pytest.mark.anyio
+async def test_submit_check_request_persists_template_metadata(
+    control_plane_service,
+    seeded_asset,
+    db_session,
+):
+    template_context = {
+        "template_code": "table_render",
+        "template_version": "v1",
+        "carrier_hint": "table",
+        "template_params": {
+            "field": "username",
+            "operator": "equals",
+            "value": "alice",
+        },
+    }
+
+    await control_plane_service.submit_check_request(
+        system_hint="ERP",
+        page_hint="用户管理",
+        check_goal="table_render",
+        **template_context,
+    )
+
+    request = db_session.exec(select(ExecutionRequest)).one()
+    assert request.template_code == template_context["template_code"]
+    assert request.template_version == template_context["template_version"]
+    assert request.carrier_hint == template_context["carrier_hint"]
+    assert request.template_params == template_context["template_params"]
+
+
+@pytest.mark.anyio
 async def test_submit_check_request_normalizes_defaults_and_falls_back_to_realtime_probe(
     control_plane_service,
     db_session,

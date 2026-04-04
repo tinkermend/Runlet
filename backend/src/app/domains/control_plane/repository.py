@@ -708,6 +708,10 @@ class SqlControlPlaneRepository:
             check_goal=payload.check_goal,
             strictness=payload.strictness,
             time_budget_ms=payload.time_budget_ms,
+            template_code=payload.template_code,
+            template_version=payload.template_version,
+            carrier_hint=payload.carrier_hint,
+            template_params=payload.template_params,
         )
         self.session.add(request)
         await self._flush()

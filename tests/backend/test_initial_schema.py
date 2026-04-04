@@ -199,6 +199,11 @@ def test_initial_schema_exposes_core_columns(db_engine):
         "updated_at",
     } <= published_job_columns
 
+
+def test_execution_requests_table_contains_template_columns(inspector):
+    columns = {column["name"] for column in inspector.get_columns("execution_requests")}
+    assert {"template_code", "template_version", "carrier_hint", "template_params"} <= columns
+
     reconciliation_audit_columns = {
         column["name"] for column in inspector.get_columns("asset_reconciliation_audits")
     }

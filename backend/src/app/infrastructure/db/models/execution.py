@@ -46,6 +46,13 @@ class ExecutionRequest(BaseModel, table=True):
     check_goal: str = Field(max_length=64)
     strictness: str = Field(default="balanced", max_length=32)
     time_budget_ms: int = Field(default=20_000)
+    template_code: str | None = Field(default=None, max_length=64)
+    template_version: str | None = Field(default=None, max_length=32)
+    carrier_hint: str | None = Field(default=None, max_length=16)
+    template_params: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
 
     plans: list["ExecutionPlan"] = Relationship(
         back_populates="request",
