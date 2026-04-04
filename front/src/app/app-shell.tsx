@@ -6,6 +6,7 @@ import {
   Server,
   Activity,
   Zap,
+  KeyRound,
 } from "lucide-react";
 
 const navItems = [
@@ -14,6 +15,7 @@ const navItems = [
   { to: "/assets",    label: "采集资产",   icon: Database },
   { to: "/systems",   label: "系统接入",   icon: Server },
   { to: "/results",   label: "运行结果",   icon: Activity },
+  { to: "/auth/pats", label: "PAT 管理",   icon: KeyRound },
 ];
 
 export function AppShell() {

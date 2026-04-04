@@ -11,6 +11,7 @@ import { TaskCreatePage } from "../features/tasks/pages/task-create-page";
 import { TaskDetailPage } from "../features/tasks/pages/task-detail-page";
 import { AssetBrowserPage } from "../features/assets/pages/asset-browser-page";
 import { AssetDetailPage } from "../features/assets/pages/asset-detail-page";
+import { PatManagementPage } from "../features/auth/pages/pat-management-page";
 
 export const routes = [
   {
@@ -33,6 +34,7 @@ export const routes = [
           { path: "/systems", element: <SystemListPage /> },
           { path: "/systems/new", element: <SystemOnboardingPage /> },
           { path: "/results", element: <RunResultsPage /> },
+          { path: "/auth/pats", element: <PatManagementPage /> },
         ],
       },
     ],

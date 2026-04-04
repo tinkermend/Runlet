@@ -12,9 +12,15 @@
 - 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并补充前端会话认证配套改造（`/api/console/auth/me` 登录态校验、统一 401 处理）及 `.env` 密钥建议（`SESSION_SECRET`、可选 `PASSWORD_PEPPER`）。
 - 新增 Web Session + Skills PAT 认证治理 V1 实施计划：`docs/superpowers/plans/2026-04-04-web-session-skills-pat-auth-v1-plan.md`，按“身份模型与迁移、console 会话收敛、PAT 管理 API、channel-action 判权、前端 `/me` 登录态改造、PAT 管理页、全量验证”拆解可执行任务。
 - 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
+- 新增平台身份认证基础设施：`users/user_sessions/user_pats/auth_audit_logs` 模型与迁移、PAT 生成/哈希/校验能力、`/api/v1/platform-auth/pats` 创建/列表/吊销接口。
+- 新增统一 `channel-action-system` 授权层，默认收敛到后端判权，并显式阻断 `skills` 渠道触发手动 crawl（返回 403）。
+- 新增前端 `PAT 管理` 页面与路由入口（`/auth/pats`），支持 3/7 天 PAT 创建、一次性明文展示、吊销操作。
 
 ### Changed
 - Console 会话认证改为 `users/user_sessions` 驱动，并为 `/api/console/*` 接口统一补齐登录校验（未登录返回 401）。
+- 前端认证态改为 `/api/console/auth/me` 启动态，`ProtectedRoute` 增加 bootstrap loading 保护，登录后会主动重拉 `/me` 保证前后端会话一致。
+- 前端 HTTP 客户端新增 `ApiError(status)` 与统一 401 处理挂点，支持 204/无 JSON 响应安全返回。
+- 补充 `backend/.env.example` 与 `backend/README.md` 的 session/PAT 配置说明，明确 Web session 与 Skills PAT 分层认证模型。
 
 ## 2026-04-04
 

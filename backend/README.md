@@ -17,8 +17,19 @@ cp .env.example .env
 - `LOG_LEVEL`：日志级别
 - `DATABASE_URL`：API/worker 共用的异步数据库连接串
 - `REDIS_URL`：control plane 受理队列使用的 Redis 地址
+- `SESSION_SECRET`：Web 控制台 session 签名密钥（必须在环境中配置为强随机值）
+- `SESSION_TTL_HOURS`：Web 控制台 session 过期小时数
+- `PASSWORD_PEPPER`：可选密码 pepper（为空表示不启用）
+- `PAT_MAX_TTL_DAYS`：PAT 最大可签发天数上限
+- `PAT_ALLOWED_TTL_DAYS`：允许签发的 PAT 天数白名单（如 `3,7`）
 
 本地默认数据库和 Redis 参数可参考仓库内的 `docs/base_info.md`。
+
+## 认证模型（V1）
+
+- Web 管理平台：使用 `/api/console/auth/login` 写入 `console_session` cookie，并通过 `/api/console/auth/me` 校验登录态。
+- Skills 对话调用：使用 `Authorization: Bearer rpat_xxx`（用户在 Web 管理平台创建的临时 PAT）。
+- 后端统一授权：按 `channel + action + system` 判权，`skills` 渠道禁止手动触发 crawl。
 
 ## Web 系统接入 YAML 示例
 
