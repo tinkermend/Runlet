@@ -9,6 +9,7 @@
 - **异常处理器收窄（Issue 5 review）**：移除全局 `ValueError` 处理器（过于宽泛，会吞掉标准库错误），改为注册专用 `BusinessRuleError` 处理器，仅对业务规则异常返回 422。
 - **修复 runtime_policies.py 重复字段**：移除 `SystemAuthPolicy` 上重复的 `system: Relationship()` 声明。
 - **清理未使用导入**：移除 `main.py` 中未使用的 `traceback`、`runner.py` 中未使用的 `col`。
+- **候选推荐排序收口（Task 3）**：`control_plane.recommendation` 改为按候选粒度应用冷启动规则（不再全局切换），统一以 `rank_score` 作为主排序键，并在冷启动同分场景按最近执行时间打破并列；补齐 service 侧“冷热混排”和“冷启动同置信度按 recency 排序”回归测试。
 
 ### Added
 - Frontend management console (React + Vite + TypeScript) under `front/`

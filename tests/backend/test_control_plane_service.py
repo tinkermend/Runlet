@@ -710,3 +710,282 @@ async def test_get_check_candidates_weighted_prefers_success_rate(
 
     assert result.candidates
     assert result.candidates[0].page_check_id == check_a.id
+
+
+@pytest.mark.anyio
+async def test_get_check_candidates_applies_cold_start_per_candidate(
+    control_plane_service,
+    db_session,
+):
+    system = System(
+        code="mix",
+        name="MIX",
+        base_url="https://mix.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    page_warm = Page(system_id=system.id, route_path="/users/warm", page_title="用户管理")
+    page_cold = Page(system_id=system.id, route_path="/users/cold", page_title="用户管理")
+    db_session.add(page_warm)
+    db_session.add(page_cold)
+    db_session.flush()
+
+    asset_warm = PageAsset(
+        system_id=system.id,
+        page_id=page_warm.id,
+        asset_key="mix.users.warm",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    asset_cold = PageAsset(
+        system_id=system.id,
+        page_id=page_cold.id,
+        asset_key="mix.users.cold",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    db_session.add(asset_warm)
+    db_session.add(asset_cold)
+    db_session.flush()
+
+    check_warm = PageCheck(
+        page_asset_id=asset_warm.id,
+        check_code="table_render",
+        goal="table_render",
+        success_rate=1.0,
+    )
+    check_cold = PageCheck(
+        page_asset_id=asset_cold.id,
+        check_code="table_render",
+        goal="table_render",
+        success_rate=0.1,
+    )
+    db_session.add(check_warm)
+    db_session.add(check_cold)
+    db_session.flush()
+
+    db_session.add(
+        IntentAlias(
+            system_alias="MIX",
+            page_alias="用户管理",
+            check_alias="table_render",
+            asset_key=asset_warm.asset_key,
+            confidence=0.2,
+            source="seed",
+        )
+    )
+    db_session.add(
+        IntentAlias(
+            system_alias="MIX",
+            page_alias="用户管理",
+            check_alias="table_render",
+            asset_key=asset_cold.asset_key,
+            confidence=0.8,
+            source="seed",
+        )
+    )
+    db_session.flush()
+
+    request_warm = ExecutionRequest(
+        request_source="api",
+        system_hint="MIX",
+        page_hint="用户管理",
+        check_goal="table_render",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    request_cold = ExecutionRequest(
+        request_source="api",
+        system_hint="MIX",
+        page_hint="用户管理",
+        check_goal="table_render",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(request_warm)
+    db_session.add(request_cold)
+    db_session.flush()
+
+    plan_warm = ExecutionPlan(
+        execution_request_id=request_warm.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=asset_warm.id,
+        resolved_page_check_id=check_warm.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+    )
+    plan_cold = ExecutionPlan(
+        execution_request_id=request_cold.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=asset_cold.id,
+        resolved_page_check_id=check_cold.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+    )
+    db_session.add(plan_warm)
+    db_session.add(plan_cold)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    for index in range(20):
+        db_session.add(
+            ExecutionRun(
+                execution_plan_id=plan_warm.id,
+                status="passed",
+                created_at=now - timedelta(seconds=index),
+            )
+        )
+    db_session.add(
+        ExecutionRun(
+            execution_plan_id=plan_cold.id,
+            status="passed",
+            created_at=now - timedelta(days=1),
+        )
+    )
+    db_session.commit()
+
+    result = await control_plane_service.get_check_candidates(
+        system_hint="MIX",
+        page_hint="用户管理",
+        intent="查询用户",
+    )
+
+    assert len(result.candidates) >= 2
+    assert result.candidates[0].page_check_id == check_warm.id
+    assert result.candidates[0].rank_score > result.candidates[1].rank_score
+
+
+@pytest.mark.anyio
+async def test_get_check_candidates_cold_start_breaks_tie_with_recency(
+    control_plane_service,
+    db_session,
+):
+    system = System(
+        code="cold",
+        name="COLD",
+        base_url="https://cold.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    page_new = Page(system_id=system.id, route_path="/users/new", page_title="用户管理")
+    page_old = Page(system_id=system.id, route_path="/users/old", page_title="用户管理")
+    db_session.add(page_new)
+    db_session.add(page_old)
+    db_session.flush()
+
+    asset_new = PageAsset(
+        system_id=system.id,
+        page_id=page_new.id,
+        asset_key="cold.users.new",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    asset_old = PageAsset(
+        system_id=system.id,
+        page_id=page_old.id,
+        asset_key="cold.users.old",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    db_session.add(asset_new)
+    db_session.add(asset_old)
+    db_session.flush()
+
+    check_new = PageCheck(page_asset_id=asset_new.id, check_code="table_render", goal="table_render")
+    check_old = PageCheck(page_asset_id=asset_old.id, check_code="table_render", goal="table_render")
+    db_session.add(check_new)
+    db_session.add(check_old)
+    db_session.flush()
+
+    db_session.add(
+        IntentAlias(
+            system_alias="COLD",
+            page_alias="用户管理",
+            check_alias="table_render",
+            asset_key=asset_new.asset_key,
+            confidence=0.8,
+            source="seed",
+        )
+    )
+    db_session.add(
+        IntentAlias(
+            system_alias="COLD",
+            page_alias="用户管理",
+            check_alias="table_render",
+            asset_key=asset_old.asset_key,
+            confidence=0.8,
+            source="seed",
+        )
+    )
+    db_session.flush()
+
+    request_new = ExecutionRequest(
+        request_source="api",
+        system_hint="COLD",
+        page_hint="用户管理",
+        check_goal="table_render",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    request_old = ExecutionRequest(
+        request_source="api",
+        system_hint="COLD",
+        page_hint="用户管理",
+        check_goal="table_render",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(request_new)
+    db_session.add(request_old)
+    db_session.flush()
+
+    plan_new = ExecutionPlan(
+        execution_request_id=request_new.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=asset_new.id,
+        resolved_page_check_id=check_new.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+    )
+    plan_old = ExecutionPlan(
+        execution_request_id=request_old.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=asset_old.id,
+        resolved_page_check_id=check_old.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+    )
+    db_session.add(plan_new)
+    db_session.add(plan_old)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        ExecutionRun(
+            execution_plan_id=plan_new.id,
+            status="passed",
+            created_at=now,
+        )
+    )
+    db_session.add(
+        ExecutionRun(
+            execution_plan_id=plan_old.id,
+            status="passed",
+            created_at=now - timedelta(days=2),
+        )
+    )
+    db_session.commit()
+
+    result = await control_plane_service.get_check_candidates(
+        system_hint="COLD",
+        page_hint="用户管理",
+        intent="查询用户",
+    )
+
+    assert len(result.candidates) >= 2
+    assert result.candidates[0].page_check_id == check_new.id
+    assert result.candidates[0].rank_score == pytest.approx(result.candidates[1].rank_score)

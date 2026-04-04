@@ -78,11 +78,16 @@ def rank_candidates(
         success_rate = _clamp_score(item.success_rate)
         alias_confidence = _clamp_score(item.alias_confidence)
         recency_score = recency_scores.get(item.page_check_id, 0.0)
-        rank_score = (
-            success_rate_weight * success_rate
-            + alias_confidence_weight * alias_confidence
-            + recency_weight * recency_score
-        )
+        is_cold_start = item.sample_count < cold_start_threshold
+        if is_cold_start:
+            # Cold-start candidates prioritize alias confidence; recency is tie-breaker.
+            rank_score = alias_confidence
+        else:
+            rank_score = (
+                success_rate_weight * success_rate
+                + alias_confidence_weight * alias_confidence
+                + recency_weight * recency_score
+            )
         ranked.append(
             RankedCheckCandidate(
                 page_asset_id=item.page_asset_id,
@@ -98,15 +103,15 @@ def rank_candidates(
             )
         )
 
-    def cold_start_key(item: RankedCheckCandidate) -> tuple[float, float, float, str]:
-        return (
-            item.alias_confidence,
-            item.recency_score,
-            item.success_rate,
-            str(item.page_check_id),
-        )
-
-    def weighted_key(item: RankedCheckCandidate) -> tuple[float, float, float, float, str]:
+    def candidate_key(item: RankedCheckCandidate) -> tuple[float, float, float, float, str]:
+        if item.sample_count < cold_start_threshold:
+            return (
+                item.rank_score,
+                item.recency_score,
+                item.success_rate,
+                item.alias_confidence,
+                str(item.page_check_id),
+            )
         return (
             item.rank_score,
             item.alias_confidence,
@@ -115,8 +120,5 @@ def rank_candidates(
             str(item.page_check_id),
         )
 
-    if any(item.sample_count < cold_start_threshold for item in ranked):
-        ranked.sort(key=cold_start_key, reverse=True)
-    else:
-        ranked.sort(key=weighted_key, reverse=True)
+    ranked.sort(key=candidate_key, reverse=True)
     return ranked
