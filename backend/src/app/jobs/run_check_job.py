@@ -181,6 +181,7 @@ class RunCheckJobHandler:
                 result, precompiled_retry_payload = await self._run_precompiled_with_retry(
                     page_check_id=parsed_page_check_id,
                     execution_plan_id=parsed_execution_plan_id,
+                    runtime_inputs=runtime_inputs,
                 )
             else:
                 result = await self.runner_service.run_page_check(
@@ -328,6 +329,7 @@ class RunCheckJobHandler:
         *,
         page_check_id: UUID | None,
         execution_plan_id: UUID | None,
+        runtime_inputs: dict[str, object] | None = None,
     ):
         attempts: list[dict[str, object]] = []
         last_result = None
@@ -340,6 +342,7 @@ class RunCheckJobHandler:
                 result = await self.runner_service.run_page_check(
                     page_check_id=page_check_id,
                     execution_plan_id=execution_plan_id,
+                    runtime_inputs=runtime_inputs,
                 )
             except ExecutionBlockedError as exc:
                 if not attempts:

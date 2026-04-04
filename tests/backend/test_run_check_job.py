@@ -70,7 +70,13 @@ class FlakyOnceRunnerService:
         self._step_execution_result = StepExecutionResult
         self.run_page_check_calls = 0
 
-    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+    async def run_page_check(
+        self,
+        *,
+        page_check_id: UUID,
+        execution_plan_id: UUID | None = None,
+        runtime_inputs: dict[str, object] | None = None,
+    ):
         self.run_page_check_calls += 1
         if self.run_page_check_calls == 1:
             return self._build_result(
@@ -145,7 +151,13 @@ class AlwaysFailedRunnerService:
         self.run_page_check_calls = 0
         self.run_realtime_probe_calls = 0
 
-    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+    async def run_page_check(
+        self,
+        *,
+        page_check_id: UUID,
+        execution_plan_id: UUID | None = None,
+        runtime_inputs: dict[str, object] | None = None,
+    ):
         self.run_page_check_calls += 1
         return self._build_result(page_check_id=page_check_id)
 
@@ -188,7 +200,13 @@ class AlwaysRaiseRunnerService:
         self._error_message = error_message
         self.run_page_check_calls = 0
 
-    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+    async def run_page_check(
+        self,
+        *,
+        page_check_id: UUID,
+        execution_plan_id: UUID | None = None,
+        runtime_inputs: dict[str, object] | None = None,
+    ):
         self.run_page_check_calls += 1
         raise RuntimeError(self._error_message)
 
@@ -204,7 +222,13 @@ class RetryThenBlockedRunnerService:
         self._step_execution_result = StepExecutionResult
         self.run_page_check_calls = 0
 
-    async def run_page_check(self, *, page_check_id: UUID, execution_plan_id: UUID | None = None):
+    async def run_page_check(
+        self,
+        *,
+        page_check_id: UUID,
+        execution_plan_id: UUID | None = None,
+        runtime_inputs: dict[str, object] | None = None,
+    ):
         from app.domains.runner_service.service import ExecutionBlockedError
 
         self.run_page_check_calls += 1
