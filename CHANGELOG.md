@@ -44,6 +44,7 @@
 - 新增平台身份认证基础设施：`users/user_sessions/user_pats/auth_audit_logs` 模型与迁移、PAT 生成/哈希/校验能力、`/api/v1/platform-auth/pats` 创建/列表/吊销接口。
 - 新增统一 `channel-action-system` 授权层，默认收敛到后端判权，并显式阻断 `skills` 渠道触发手动 crawl（返回 403）。
 - 新增前端 `PAT 管理` 页面与路由入口（`/auth/pats`），支持 3/7 天 PAT 创建、一次性明文展示、吊销操作。
+- 新增本次认证治理实施总结文档：`docs/summary/2026-04-04-web-session-skills-pat-auth-v1-summary.md`。
 
 ## 2026-04-04
 
