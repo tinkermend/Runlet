@@ -78,8 +78,8 @@ async def login(body: LoginRequest, response: Response, session: ConsoleDep):
 @router.post("/logout", response_model=LoginResponse)
 async def logout(
     response: Response,
-    console_session: Optional[str] = Cookie(default=None),
     session: ConsoleDep,
+    console_session: Optional[str] = Cookie(default=None),
 ):
     if console_session:
         revoke_session(token=console_session, session=session)

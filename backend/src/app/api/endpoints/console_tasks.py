@@ -93,8 +93,8 @@ def _last_run_for_check(session: Session, check_id: UUID) -> ExecutionRun | None
 # IMPORTANT: wizard-options must be defined BEFORE {task_id} routes
 @router.get("/wizard-options", response_model=WizardOptions)
 def get_wizard_options(
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> WizardOptions:
     systems = session.exec(select(System)).all()
     system_items = []
@@ -114,8 +114,8 @@ def get_wizard_options(
 
 @router.get("/", response_model=list[TaskItem])
 def list_tasks(
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> list[TaskItem]:
     checks = session.exec(select(PageCheck)).all()
     result = []
@@ -146,8 +146,8 @@ def list_tasks(
 @router.post("/", status_code=201, response_model=TaskCreated)
 def create_task(
     body: TaskCreateRequest,
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> TaskCreated:
     system = session.get(System, body.system_id)
     if not system:
@@ -195,8 +195,8 @@ def create_task(
 @router.get("/{task_id}", response_model=TaskDetail)
 def get_task(
     task_id: str,
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> TaskDetail:
     try:
         uid = UUID(task_id)
@@ -264,8 +264,8 @@ def get_task(
 @router.post("/{task_id}/trigger", status_code=202, response_model=TriggerResponse)
 def trigger_task(
     task_id: str,
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> TriggerResponse:
     try:
         uid = UUID(task_id)

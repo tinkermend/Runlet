@@ -35,8 +35,8 @@ def _system_status(system: System) -> str:
 
 @router.get("/dashboard", response_model=DashboardSummary)
 def get_dashboard(
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> DashboardSummary:
     now = _utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -100,8 +100,8 @@ def get_dashboard(
 
 @router.get("/systems", response_model=list[SystemItem])
 def list_systems(
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> list[SystemItem]:
     systems = session.exec(select(System)).all()
     result = []
@@ -133,8 +133,8 @@ def _slugify(name: str) -> str:
 @router.post("/systems", status_code=201, response_model=SystemCreated)
 def onboard_system(
     body: SystemCreateRequest,
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> SystemCreated:
     base_code = _slugify(body.name)
     code = base_code

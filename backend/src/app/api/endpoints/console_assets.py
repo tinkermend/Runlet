@@ -53,8 +53,8 @@ def _get_check_codes_for_asset(session: Session, asset_id: UUID) -> list[str]:
 
 @router.get("/", response_model=list[SystemAssetGroup])
 def list_assets(
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> list[SystemAssetGroup]:
     assets = session.exec(select(PageAsset)).all()
 
@@ -103,8 +103,8 @@ def list_assets(
 @router.get("/{asset_id}", response_model=AssetDetail)
 def get_asset(
     asset_id: UUID,
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
 ) -> AssetDetail:
     asset = session.get(PageAsset, asset_id)
     if not asset:

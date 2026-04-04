@@ -21,8 +21,8 @@ ConsoleDep = Annotated[Session, Depends(get_console_db)]
 
 @router.get("/", response_model=PaginatedResults)
 def list_results(
-    _: User = Depends(require_console_user),
     session: ConsoleDep,
+    _: User = Depends(require_console_user),
     system_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
