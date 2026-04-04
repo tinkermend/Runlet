@@ -1109,6 +1109,29 @@ async def test_run_check_job_precompiled_retryable_failure_reaches_retry_limit(
 
 
 @pytest.mark.anyio
+async def test_run_check_job_precompiled_retryable_failure_uses_exponential_backoff_sleep_sequence(
+    monkeypatch,
+    job_runner_with_retryable_precompiled_failure,
+    queued_run_check_job,
+    db_session,
+):
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("app.jobs.run_check_job.anyio.sleep", fake_sleep)
+    monkeypatch.setattr("app.jobs.run_check_job._PRECOMPILED_JITTER_MS", 10)
+
+    await job_runner_with_retryable_precompiled_failure.run_once()
+
+    refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
+    assert refreshed is not None
+    assert refreshed.result_payload["attempt_count"] == 3
+    assert sleep_calls == [0.11, 0.21]
+
+
+@pytest.mark.anyio
 async def test_run_check_job_precompiled_retryable_exception_reaches_retry_limit_with_metadata(
     job_runner_with_retryable_precompiled_exception,
     retryable_exception_runner_service,
