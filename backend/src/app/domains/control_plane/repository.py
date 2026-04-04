@@ -14,6 +14,7 @@ from app.domains.control_plane.runtime_policies import (
     UpsertSystemCrawlPolicy,
     resolve_runtime_policy_state,
 )
+from app.domains.control_plane.recommendation import CheckCandidateStats
 from app.domains.control_plane.schemas import (
     CheckRequestStatus,
     CreateCheckRequest,
@@ -107,6 +108,13 @@ class ControlPlaneRepository(Protocol):
         page_hint: str | None,
         check_goal: str,
     ) -> CheckResolution: ...
+
+    async def list_check_candidates(
+        self,
+        *,
+        system_hint: str,
+        page_hint: str | None,
+    ) -> list[CheckCandidateStats]: ...
 
     async def create_execution_request(
         self,
@@ -521,6 +529,99 @@ class SqlControlPlaneRepository:
             page_check=page_check,
             miss_reason=None,
         )
+
+    async def list_check_candidates(
+        self,
+        *,
+        system_hint: str,
+        page_hint: str | None,
+    ) -> list[CheckCandidateStats]:
+        system = await self.resolve_system(system_hint=system_hint)
+        if system is None or page_hint is None:
+            return []
+
+        normalized_system_hint = system_hint.strip().lower()
+        normalized_page_hint = page_hint.strip().lower()
+
+        alias_confidence_subquery = (
+            select(
+                IntentAlias.asset_key.label("asset_key"),
+                func.max(IntentAlias.confidence).label("alias_confidence"),
+            )
+            .where(IntentAlias.is_active.is_(True))
+            .where(func.lower(IntentAlias.system_alias) == normalized_system_hint)
+            .where(
+                (func.lower(IntentAlias.page_alias) == normalized_page_hint)
+                | (func.lower(IntentAlias.route_hint) == normalized_page_hint)
+            )
+            .group_by(IntentAlias.asset_key)
+            .subquery()
+        )
+
+        sample_count = func.count(ExecutionRun.id).label("sample_count")
+        last_run_at = func.max(ExecutionRun.created_at).label("last_run_at")
+        alias_confidence = func.coalesce(
+            alias_confidence_subquery.c.alias_confidence, 0.0
+        ).label("alias_confidence")
+
+        statement = (
+            select(
+                PageCheck.id,
+                PageCheck.page_asset_id,
+                PageAsset.asset_key,
+                PageCheck.check_code,
+                PageCheck.goal,
+                alias_confidence,
+                PageCheck.success_rate,
+                sample_count,
+                last_run_at,
+            )
+            .join(PageAsset, PageAsset.id == PageCheck.page_asset_id)
+            .join(Page, Page.id == PageAsset.page_id)
+            .outerjoin(
+                alias_confidence_subquery,
+                alias_confidence_subquery.c.asset_key == PageAsset.asset_key,
+            )
+            .outerjoin(ExecutionPlan, ExecutionPlan.resolved_page_check_id == PageCheck.id)
+            .outerjoin(ExecutionRun, ExecutionRun.execution_plan_id == ExecutionPlan.id)
+            .where(PageAsset.system_id == system.id)
+            .where(PageAsset.status == AssetStatus.SAFE)
+            .where(PageAsset.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+            .where(PageCheck.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+            .where(
+                (alias_confidence_subquery.c.asset_key.is_not(None))
+                | (func.lower(Page.page_title) == normalized_page_hint)
+                | (func.lower(Page.route_path) == normalized_page_hint)
+                | (func.lower(PageAsset.asset_key) == normalized_page_hint)
+            )
+            .group_by(
+                PageCheck.id,
+                PageCheck.page_asset_id,
+                PageAsset.asset_key,
+                PageCheck.check_code,
+                PageCheck.goal,
+                alias_confidence_subquery.c.alias_confidence,
+                PageCheck.success_rate,
+            )
+            .order_by(alias_confidence.desc(), PageAsset.asset_version.desc(), PageCheck.id)
+        )
+        rows = await self._exec_all(statement)
+        candidates: list[CheckCandidateStats] = []
+        for row in rows:
+            candidates.append(
+                CheckCandidateStats(
+                    page_asset_id=row.page_asset_id,
+                    page_check_id=row.id,
+                    asset_key=row.asset_key,
+                    check_code=row.check_code,
+                    goal=row.goal,
+                    alias_confidence=row.alias_confidence or 0.0,
+                    success_rate=row.success_rate,
+                    last_run_at=row.last_run_at,
+                    sample_count=row.sample_count or 0,
+                )
+            )
+        return candidates
 
     async def get_execution_plan(
         self,

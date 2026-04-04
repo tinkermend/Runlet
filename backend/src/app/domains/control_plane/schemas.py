@@ -109,6 +109,40 @@ class CreateCheckRequest(BaseModel):
         return self
 
 
+class CheckCandidatesRequest(BaseModel):
+    system_hint: str
+    page_hint: str | None = None
+    intent: str
+    slot_hints: dict[str, object] | None = None
+
+    @field_validator("system_hint", "intent", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        return _validate_required_text(value)
+
+    @field_validator("page_hint", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class CheckCandidateItem(BaseModel):
+    page_asset_id: UUID
+    page_check_id: UUID
+    asset_key: str
+    check_code: str
+    goal: str
+    alias_confidence: float
+    success_rate: float
+    sample_count: int
+    recency_score: float
+    rank_score: float
+
+
+class CheckCandidatesResponse(BaseModel):
+    candidates: list[CheckCandidateItem]
+
+
 class RunPageCheck(BaseModel):
     strictness: str = "balanced"
     time_budget_ms: int = 20_000

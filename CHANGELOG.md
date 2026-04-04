@@ -19,6 +19,7 @@
 - Asset browser API (`/api/console/assets/`)
 - Run results API (`/api/console/results/`)
 - UI foundation docs (`docs/front/`)
+- 新增检查候选推荐 API（`POST /api/v1/check-requests:candidates`），支持成功率优先排序与冷启动回退。
 - 新增 `precompiled` 轨道分层重试策略设计文档：`docs/superpowers/specs/2026-04-04-precompiled-retry-policy-design.md`，明确第一阶段仅在 `precompiled` 启用“按失败类型重试（最多 3 次）”，并定义可重试/不可重试边界、退避策略、`queued_jobs.result_payload` 的 attempt 审计字段以及首周验收指标。
 - 新增 `precompiled` 轨道分层重试 V1 实施计划：`docs/superpowers/plans/2026-04-04-precompiled-retry-policy-v1-plan.md`，按 TDD 拆分 retry policy 纯函数层、`run_check` 重试循环、边界回归、退避序列验证与全量回归收口步骤。
 - 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并补充前端会话认证配套改造（`/api/console/auth/me` 登录态校验、统一 401 处理）及 `.env` 密钥建议（`SESSION_SECRET`、可选 `PASSWORD_PEPPER`）。

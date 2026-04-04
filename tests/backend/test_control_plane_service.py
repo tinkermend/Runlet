@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import HTTPException
 from sqlmodel import select
@@ -7,7 +9,7 @@ from app.domains.control_plane.service import ControlPlaneService
 from app.domains.runner_service.scheduler import PublishedJobService
 from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
 from app.infrastructure.db.models.crawl import Page
-from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest
+from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob
 from app.infrastructure.db.models.systems import System
 from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
@@ -492,3 +494,219 @@ async def test_apply_reconciliation_cascades_rolls_back_when_pause_fails(
     assert alias.is_active is True
     assert alias.disabled_reason is None
     assert seeded_published_job.state == "active"
+
+
+@pytest.mark.anyio
+async def test_get_check_candidates_cold_start_prefers_alias_confidence(
+    control_plane_service,
+    db_session,
+):
+    system = System(
+        code="erp",
+        name="ERP",
+        base_url="https://erp.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    page_a = Page(system_id=system.id, route_path="/users/a", page_title="用户管理")
+    page_b = Page(system_id=system.id, route_path="/users/b", page_title="用户管理")
+    db_session.add(page_a)
+    db_session.add(page_b)
+    db_session.flush()
+
+    asset_a = PageAsset(
+        system_id=system.id,
+        page_id=page_a.id,
+        asset_key="erp.users.a",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    asset_b = PageAsset(
+        system_id=system.id,
+        page_id=page_b.id,
+        asset_key="erp.users.b",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    db_session.add(asset_a)
+    db_session.add(asset_b)
+    db_session.flush()
+
+    check_a = PageCheck(page_asset_id=asset_a.id, check_code="table_render", goal="table_render")
+    check_b = PageCheck(page_asset_id=asset_b.id, check_code="table_render", goal="table_render")
+    db_session.add(check_a)
+    db_session.add(check_b)
+    db_session.flush()
+
+    alias_a = IntentAlias(
+        system_alias="ERP",
+        page_alias="用户管理",
+        check_alias="table_render",
+        asset_key=asset_a.asset_key,
+        confidence=0.9,
+        source="seed",
+    )
+    alias_b = IntentAlias(
+        system_alias="ERP",
+        page_alias="用户管理",
+        check_alias="table_render",
+        asset_key=asset_b.asset_key,
+        confidence=0.2,
+        source="seed",
+    )
+    db_session.add(alias_a)
+    db_session.add(alias_b)
+    db_session.commit()
+
+    result = await control_plane_service.get_check_candidates(
+        system_hint="ERP",
+        page_hint="用户管理",
+        intent="查询用户",
+    )
+
+    assert result.candidates
+    assert result.candidates[0].page_check_id == check_a.id
+
+
+@pytest.mark.anyio
+async def test_get_check_candidates_weighted_prefers_success_rate(
+    control_plane_service,
+    db_session,
+):
+    system = System(
+        code="crm",
+        name="CRM",
+        base_url="https://crm.example.com",
+        framework_type="react",
+    )
+    db_session.add(system)
+    db_session.flush()
+
+    page_a = Page(system_id=system.id, route_path="/users/a", page_title="用户管理")
+    page_b = Page(system_id=system.id, route_path="/users/b", page_title="用户管理")
+    db_session.add(page_a)
+    db_session.add(page_b)
+    db_session.flush()
+
+    asset_a = PageAsset(
+        system_id=system.id,
+        page_id=page_a.id,
+        asset_key="crm.users.a",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    asset_b = PageAsset(
+        system_id=system.id,
+        page_id=page_b.id,
+        asset_key="crm.users.b",
+        asset_version="2026.04.01",
+        status=AssetStatus.SAFE,
+    )
+    db_session.add(asset_a)
+    db_session.add(asset_b)
+    db_session.flush()
+
+    check_a = PageCheck(
+        page_asset_id=asset_a.id,
+        check_code="table_render",
+        goal="table_render",
+        success_rate=0.9,
+    )
+    check_b = PageCheck(
+        page_asset_id=asset_b.id,
+        check_code="table_render",
+        goal="table_render",
+        success_rate=0.2,
+    )
+    db_session.add(check_a)
+    db_session.add(check_b)
+    db_session.flush()
+
+    alias_a = IntentAlias(
+        system_alias="CRM",
+        page_alias="用户管理",
+        check_alias="table_render",
+        asset_key=asset_a.asset_key,
+        confidence=0.5,
+        source="seed",
+    )
+    alias_b = IntentAlias(
+        system_alias="CRM",
+        page_alias="用户管理",
+        check_alias="table_render",
+        asset_key=asset_b.asset_key,
+        confidence=0.5,
+        source="seed",
+    )
+    db_session.add(alias_a)
+    db_session.add(alias_b)
+    db_session.flush()
+
+    request_a = ExecutionRequest(
+        request_source="api",
+        system_hint="CRM",
+        page_hint="用户管理",
+        check_goal="table_render",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    request_b = ExecutionRequest(
+        request_source="api",
+        system_hint="CRM",
+        page_hint="用户管理",
+        check_goal="table_render",
+        strictness="balanced",
+        time_budget_ms=20_000,
+    )
+    db_session.add(request_a)
+    db_session.add(request_b)
+    db_session.flush()
+
+    plan_a = ExecutionPlan(
+        execution_request_id=request_a.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=asset_a.id,
+        resolved_page_check_id=check_a.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+    )
+    plan_b = ExecutionPlan(
+        execution_request_id=request_b.id,
+        resolved_system_id=system.id,
+        resolved_page_asset_id=asset_b.id,
+        resolved_page_check_id=check_b.id,
+        execution_track="precompiled",
+        auth_policy="server_injected",
+    )
+    db_session.add(plan_a)
+    db_session.add(plan_b)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    for index in range(20):
+        db_session.add(
+            ExecutionRun(
+                execution_plan_id=plan_a.id,
+                status="passed",
+                created_at=now - timedelta(days=2, seconds=index),
+            )
+        )
+        db_session.add(
+            ExecutionRun(
+                execution_plan_id=plan_b.id,
+                status="passed",
+                created_at=now - timedelta(days=1, seconds=index),
+            )
+        )
+    db_session.commit()
+
+    result = await control_plane_service.get_check_candidates(
+        system_hint="CRM",
+        page_hint="用户管理",
+        intent="查询用户",
+    )
+
+    assert result.candidates
+    assert result.candidates[0].page_check_id == check_a.id
