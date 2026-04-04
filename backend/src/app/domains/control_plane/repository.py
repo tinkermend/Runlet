@@ -701,7 +701,14 @@ class SqlControlPlaneRepository:
         *,
         payload: CreateCheckRequest,
     ) -> ExecutionRequest:
-        request = ExecutionRequest(**payload.model_dump())
+        request = ExecutionRequest(
+            request_source=payload.request_source,
+            system_hint=payload.system_hint,
+            page_hint=payload.page_hint,
+            check_goal=payload.check_goal,
+            strictness=payload.strictness,
+            time_budget_ms=payload.time_budget_ms,
+        )
         self.session.add(request)
         await self._flush()
         return request

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.shared.enums import CrawlScope
 
@@ -66,6 +66,11 @@ class CreateCheckRequest(BaseModel):
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value)
 
+    @field_validator("template_code", "template_version", mode="before")
+    @classmethod
+    def normalize_optional_template_text(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
     @field_validator("strictness", "request_source", mode="before")
     @classmethod
     def normalize_text(cls, value: str) -> str:
@@ -75,6 +80,33 @@ class CreateCheckRequest(BaseModel):
     @classmethod
     def validate_time_budget(cls, value: int) -> int:
         return _validate_positive_int(value)
+
+    @model_validator(mode="after")
+    def validate_template_metadata_consistency(self):
+        has_template_context = any(
+            [
+                self.template_code is not None,
+                self.template_version is not None,
+                self.carrier_hint is not None,
+                self.template_params is not None,
+            ]
+        )
+        if not has_template_context:
+            return self
+
+        missing: list[str] = []
+        if self.template_code is None:
+            missing.append("template_code")
+        if self.template_version is None:
+            missing.append("template_version")
+        if self.carrier_hint is None:
+            missing.append("carrier_hint")
+        if missing:
+            missing_fields = ", ".join(missing)
+            raise ValueError(
+                f"template metadata is incomplete, missing required field(s): {missing_fields}"
+            )
+        return self
 
 
 class RunPageCheck(BaseModel):
