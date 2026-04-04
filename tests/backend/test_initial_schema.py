@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from sqlmodel import Session, create_engine, inspect
 
-from app.config.settings import settings
+from app.config.settings import Settings, settings
 from app.infrastructure.db.base import BaseModel
 from app.infrastructure.db.models import assets, crawl, execution, jobs, runtime_policies, systems  # noqa: F401
 from app.infrastructure.db.models import identity  # noqa: F401
@@ -82,6 +82,15 @@ def test_settings_expose_session_and_pat_controls():
     assert hasattr(settings, "pat_max_ttl_days")
     assert hasattr(settings, "pat_allowed_ttl_days")
     assert hasattr(settings, "password_pepper")
+    assert settings.pat_allowed_ttl_days
+    assert all(value > 0 for value in settings.pat_allowed_ttl_days)
+    assert all(value <= settings.pat_max_ttl_days for value in settings.pat_allowed_ttl_days)
+
+
+def test_settings_parse_pat_allowed_ttl_days_from_env(monkeypatch):
+    monkeypatch.setenv("PAT_ALLOWED_TTL_DAYS", "3,7")
+    parsed = Settings().pat_allowed_ttl_days
+    assert parsed == [3, 7]
 
 
 def test_initial_schema_exposes_core_columns(db_engine):
