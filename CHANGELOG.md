@@ -26,6 +26,7 @@
 - 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
 - 更新 AI Chat 模板化数据断言设计文档：补齐 V1 与 `detail` 载体边界、候选排序冷启动回退规则、覆盖率临时统计窗口，并明确 V1 不包含详情 carrier。
 - 新增 AI Chat 模板化数据断言 V1 实施计划：`docs/superpowers/plans/2026-04-04-chat-template-data-assertion-v1-plan.md`，按 TDD 拆分请求契约、模板参数持久化、候选推荐、模板编译、runner 断言模块、只读守卫与回归验证任务。
+- 新增 `execution_requests` 模板元数据持久化（Task 2）：新增 `template_code/template_version/carrier_hint/template_params` 字段与 Alembic 迁移 `0012_execution_request_template_params`，`control_plane` 入库路径已透传该字段集并补齐 schema/service 回归测试。
 
 ## 2026-04-04
 

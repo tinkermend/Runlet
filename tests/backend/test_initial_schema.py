@@ -204,6 +204,8 @@ def test_execution_requests_table_contains_template_columns(inspector):
     columns = {column["name"] for column in inspector.get_columns("execution_requests")}
     assert {"template_code", "template_version", "carrier_hint", "template_params"} <= columns
 
+
+def test_extended_schema_columns_present(inspector):
     reconciliation_audit_columns = {
         column["name"] for column in inspector.get_columns("asset_reconciliation_audits")
     }

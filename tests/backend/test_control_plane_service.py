@@ -74,14 +74,16 @@ async def test_submit_check_request_persists_template_metadata(
         },
     }
 
-    await control_plane_service.submit_check_request(
+    result = await control_plane_service.submit_check_request(
         system_hint="ERP",
         page_hint="用户管理",
         check_goal="table_render",
         **template_context,
     )
 
-    request = db_session.exec(select(ExecutionRequest)).one()
+    request = db_session.exec(
+        select(ExecutionRequest).where(ExecutionRequest.id == result.request_id)
+    ).one()
     assert request.template_code == template_context["template_code"]
     assert request.template_version == template_context["template_version"]
     assert request.carrier_hint == template_context["carrier_hint"]
