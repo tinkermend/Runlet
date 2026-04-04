@@ -111,6 +111,13 @@ def test_settings_reject_invalid_pat_allowed_ttl_days():
         Settings(pat_max_ttl_days=7, pat_allowed_ttl_days=[3, 8])
 
 
+def test_alembic_env_imports_identity_model():
+    project_root = Path(__file__).resolve().parents[2]
+    env_path = project_root / "backend" / "alembic" / "env.py"
+    content = env_path.read_text()
+    assert "identity" in content
+
+
 def test_initial_schema_exposes_core_columns(db_engine):
     inspector = inspect(db_engine)
 
