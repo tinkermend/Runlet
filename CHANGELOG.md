@@ -12,6 +12,8 @@
 - 新增 `skills`/Web 管理平台/CLI 调用认证与授权治理设计文档（V1 简化版）：`docs/superpowers/specs/2026-04-04-skills-auth-governance-design.md`，明确“Web 使用 session、Skills 使用用户临时 PAT、后端统一按 channel-action-system 判权”，并补充前端会话认证配套改造（`/api/console/auth/me` 登录态校验、统一 401 处理）及 `.env` 密钥建议（`SESSION_SECRET`、可选 `PASSWORD_PEPPER`）。
 - 新增 Web Session + Skills PAT 认证治理 V1 实施计划：`docs/superpowers/plans/2026-04-04-web-session-skills-pat-auth-v1-plan.md`，按“身份模型与迁移、console 会话收敛、PAT 管理 API、channel-action 判权、前端 `/me` 登录态改造、PAT 管理页、全量验证”拆解可执行任务。
 - 新增 AI Chat 模板化数据断言与企业 Web 仿真测试设计文档：`docs/superpowers/specs/2026-04-04-chat-template-based-data-assertion-design.md`，明确“模板优先、双入口同内核、V1 仅只读检查、table/list 载体优先、80% 双指标覆盖率”实施基线。
+- 更新 AI Chat 模板化数据断言设计文档：补齐 V1 与 `detail` 载体边界、候选排序冷启动回退规则、覆盖率临时统计窗口，并明确 V1 不包含详情 carrier。
+- 新增 AI Chat 模板化数据断言 V1 实施计划：`docs/superpowers/plans/2026-04-04-chat-template-data-assertion-v1-plan.md`，按 TDD 拆分请求契约、模板参数持久化、候选推荐、模板编译、runner 断言模块、只读守卫与回归验证任务。
 
 ## 2026-04-04
 
