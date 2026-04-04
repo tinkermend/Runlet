@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable
+from datetime import datetime
+from typing import Any, Iterable
 
 RETRYABLE_FAILURE_CATEGORIES = {"navigation_failed", "page_not_ready"}
 NON_RETRYABLE_STEP_FAILURES = {
@@ -43,3 +44,30 @@ def is_retryable_failure(*, failure_category: str | None, error_message: str | N
     ):
         return True
     return False
+
+
+def compute_backoff_ms(*, attempt_no: int, base_backoff_ms: int, jitter_ms: int) -> int:
+    multiplier = 2 ** max(attempt_no - 1, 0)
+    backoff = base_backoff_ms * multiplier + jitter_ms
+    return max(0, backoff)
+
+
+def build_attempt_entry(
+    *,
+    attempt_no: int,
+    started_at: datetime,
+    finished_at: datetime,
+    status: str,
+    failure_category: str | None,
+    retryable: bool,
+    backoff_ms: int,
+) -> dict[str, Any]:
+    return {
+        "attempt_no": attempt_no,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "status": status,
+        "failure_category": failure_category,
+        "retryable": retryable,
+        "backoff_ms": backoff_ms,
+    }

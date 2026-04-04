@@ -1,4 +1,10 @@
-from app.jobs.run_check_retry import is_retryable_failure
+from datetime import datetime
+
+from app.jobs.run_check_retry import (
+    build_attempt_entry,
+    compute_backoff_ms,
+    is_retryable_failure,
+ )
 
 
 def test_is_retryable_failure_accepts_navigation_and_page_not_ready():
@@ -21,7 +27,7 @@ def test_is_retryable_failure_rejects_assertion_with_timeout_like_message():
     )
 
 
-def test_is_retryable_failure_allows_runtime_error_with_timeout_like_message():
+def test_runtime_error_with_transient_message_is_retryable():
     assert (
         is_retryable_failure(
             failure_category="runtime_error", error_message="Timeout 30000ms exceeded"
@@ -54,3 +60,34 @@ def test_non_retryable_step_failure_ignores_transient_message():
         )
         is False
     )
+
+
+def test_runtime_error_transient_text_supported():
+    assert (
+        is_retryable_failure(
+            failure_category="runtime_error",
+            error_message="Connection reset caused a temporary failure in runtime_error",
+        )
+        is True
+    )
+
+
+def test_compute_backoff_ms_doubles_per_attempt():
+    assert compute_backoff_ms(attempt_no=1, base_backoff_ms=1000, jitter_ms=0) == 1000
+    assert compute_backoff_ms(attempt_no=2, base_backoff_ms=1000, jitter_ms=0) == 2000
+    assert compute_backoff_ms(attempt_no=3, base_backoff_ms=500, jitter_ms=100) == 2100
+
+
+def test_build_attempt_entry_includes_required_fields():
+    entry = build_attempt_entry(
+        attempt_no=1,
+        started_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        finished_at=datetime.fromisoformat("2026-01-01T00:00:01"),
+        status="failed",
+        failure_category="navigation_failed",
+        retryable=True,
+        backoff_ms=1000,
+    )
+    assert entry["attempt_no"] == 1
+    assert entry["retryable"] is True
+    assert entry["backoff_ms"] == 1000
