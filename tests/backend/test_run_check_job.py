@@ -1121,14 +1121,15 @@ async def test_run_check_job_precompiled_retryable_failure_uses_exponential_back
         sleep_calls.append(seconds)
 
     monkeypatch.setattr("app.jobs.run_check_job.anyio.sleep", fake_sleep)
-    monkeypatch.setattr("app.jobs.run_check_job._PRECOMPILED_JITTER_MS", 10)
+    monkeypatch.setattr("app.jobs.run_check_job._PRECOMPILED_BASE_BACKOFF_MS", 1000)
+    monkeypatch.setattr("app.jobs.run_check_job._PRECOMPILED_JITTER_MS", 0)
 
     await job_runner_with_retryable_precompiled_failure.run_once()
 
     refreshed = db_session.get(QueuedJob, queued_run_check_job.id)
     assert refreshed is not None
     assert refreshed.result_payload["attempt_count"] == 3
-    assert sleep_calls == [0.11, 0.21]
+    assert sleep_calls == [1.0, 2.0]
 
 
 @pytest.mark.anyio
