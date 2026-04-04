@@ -33,3 +33,141 @@
 - MCP: FastMCP
 - Front: React + Vite
 - Test: pytest
+
+## 本地运行总览
+
+默认本地地址：
+
+- Backend API: `http://127.0.0.1:8000`
+- Front: `http://127.0.0.1:5173`
+
+
+## Backend 启动、停止与配置
+
+### 1) 初始化与迁移
+
+```bash
+cd backend
+
+uv sync --dev
+cp .env.example .env
+uv run alembic upgrade head
+```
+
+### 2) 启动
+
+启动 API：
+
+```bash
+cd backend
+
+source .venv/bin/active
+uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --reload
+```
+
+启动 Worker（可选，但队列任务消费依赖它）：
+
+```bash
+cd backend
+uv run runlet-worker
+```
+
+启动 Scheduler（可选，定时任务依赖它）：
+
+```bash
+cd backend
+uv run runlet-scheduler
+```
+
+### 3) 停止
+
+- 前台运行：在对应终端按 `Ctrl + C`
+- 后台运行（按进程名）：
+
+```bash
+pkill -f "uvicorn app.main:create_app" || true
+pkill -f "runlet-worker" || true
+pkill -f "runlet-scheduler" || true
+```
+
+### 4) 关键配置项（`backend/.env`）
+
+必需项（`backend/.env.example` 已给默认值）：
+
+- `DATABASE_URL`: 后端 API / Worker / Scheduler 共享数据库连接
+- `REDIS_URL`: control plane 队列链路
+
+常用可调项：
+
+- `LOG_LEVEL`: 日志级别
+- `WORKER_POLL_INTERVAL_MS`: worker 轮询间隔（毫秒）
+- `SCHEDULER_RELOAD_INTERVAL_SECONDS`: scheduler 重载数据库调度配置的周期（秒）
+- `CONSOLE_USERNAME` / `CONSOLE_PASSWORD`: Console 登录账号密码（默认 `admin/admin`）
+
+## Front 启动、停止与配置
+
+### 1) 初始化
+
+```bash
+cd front
+npm install
+```
+
+### 2) 启动
+
+```bash
+cd front
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+### 3) 停止
+
+- 前台运行：当前终端 `Ctrl + C`
+- 后台运行：`pkill -f "vite" || true`
+
+### 4) 前端联调配置说明
+
+- 本地开发代理配置在 [front/vite.config.ts](/Users/wangpei/src/singe/Runlet/front/vite.config.ts)
+- `/api` 默认代理到 `http://localhost:8000`
+- 若后端不在 `8000`，请同步修改 `vite.config.ts` 的 `server.proxy["/api"].target`
+
+## CLI 启动、停止与配置
+
+CLI 是命令行工具，不是常驻服务，执行完命令即退出。
+
+### 1) 初始化
+
+```bash
+cd cli
+uv sync --dev
+```
+
+### 2) 运行
+
+基础检查：
+
+```bash
+cd cli
+uv run openweb doctor
+```
+
+接入系统（示例）：
+
+```bash
+cd cli
+set -a; source ../backend/.env; set +a
+uv run openweb web-system add --file ../docs/examples/web-system-manifest.example.yaml
+```
+
+删除系统（示例）：
+
+```bash
+cd cli
+set -a; source ../backend/.env; set +a
+uv run openweb web-system remove --system-code <system-code>
+```
+
+### 3) 停止
+
+- 正常命令会自动结束
+- 若命令阻塞，按 `Ctrl + C` 中断即可
