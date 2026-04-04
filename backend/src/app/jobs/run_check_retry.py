@@ -52,11 +52,17 @@ def compute_backoff_ms(*, attempt_no: int, base_backoff_ms: int, jitter_ms: int)
     return max(0, backoff)
 
 
+def _serialize_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
 def build_attempt_entry(
     *,
     attempt_no: int,
-    started_at: datetime,
-    finished_at: datetime,
+    started_at: datetime | None,
+    finished_at: datetime | None,
     status: str,
     failure_category: str | None,
     retryable: bool,
@@ -64,8 +70,8 @@ def build_attempt_entry(
 ) -> dict[str, Any]:
     return {
         "attempt_no": attempt_no,
-        "started_at": started_at,
-        "finished_at": finished_at,
+        "started_at": _serialize_datetime(started_at),
+        "finished_at": _serialize_datetime(finished_at),
         "status": status,
         "failure_category": failure_category,
         "retryable": retryable,

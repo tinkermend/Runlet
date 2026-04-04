@@ -91,3 +91,8 @@ def test_build_attempt_entry_includes_required_fields():
     assert entry["attempt_no"] == 1
     assert entry["retryable"] is True
     assert entry["backoff_ms"] == 1000
+
+    assert entry["started_at"] == "2026-01-01T00:00:00"
+    assert entry["finished_at"] == "2026-01-01T00:00:01"
+    assert entry["status"] == "failed"
+    assert entry["failure_category"] == "navigation_failed"
