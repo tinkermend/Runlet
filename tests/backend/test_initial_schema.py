@@ -355,6 +355,11 @@ def test_page_elements_table_has_locator_candidates_and_state_context(inspector)
     assert {"state_signature", "state_context", "locator_candidates"} <= columns
 
 
+def test_page_elements_table_has_materialization_metadata(inspector):
+    columns = {column["name"] for column in inspector.get_columns("page_elements")}
+    assert {"materialized_by", "navigation_diagnostics"} <= columns
+
+
 def test_execution_run_created_at_migration_backfills_from_artifacts(tmp_path):
     project_root = Path(__file__).resolve().parents[2]
     backend_root = project_root / "backend"

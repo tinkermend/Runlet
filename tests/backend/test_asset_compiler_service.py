@@ -1,6 +1,8 @@
+import json
 from uuid import uuid4
 
 import pytest
+import sqlalchemy as sa
 from sqlmodel import select
 
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint
@@ -726,6 +728,61 @@ async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_m
     ).first()
     assert default_modal_check is not None
     assert (default_modal_check.input_schema or {}).get("state_signature") == "users:default"
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_keeps_locator_bundle_when_materialized_by_modal(
+    db_session,
+    asset_compiler_service,
+    seeded_modal_stateful_crawl_snapshot,
+):
+    dialog = db_session.exec(
+        select(PageElement)
+        .where(PageElement.snapshot_id == seeded_modal_stateful_crawl_snapshot.id)
+        .where(PageElement.element_type == "dialog")
+        .order_by(PageElement.id.desc())
+    ).one()
+    db_session.execute(
+        sa.text(
+            """
+            UPDATE page_elements
+            SET materialized_by = :materialized_by,
+                navigation_diagnostics = :navigation_diagnostics
+            WHERE id = :element_id
+            """
+        ),
+        {
+            "materialized_by": "modal",
+            "navigation_diagnostics": json.dumps(
+                {
+                    "target_kind": "open_modal",
+                    "materialization_status": "materialized",
+                },
+                ensure_ascii=False,
+            ),
+            "element_id": str(dialog.id),
+        },
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(
+        snapshot_id=seeded_modal_stateful_crawl_snapshot.id
+    )
+
+    assert result.status == "success"
+    assert result.check_ids
+    representative_check = db_session.exec(
+        select(PageCheck)
+        .where(PageCheck.check_code == "open_create_modal_state")
+        .order_by(PageCheck.id.desc())
+    ).one()
+    representative_plan = db_session.exec(
+        select(ModulePlan).where(ModulePlan.id == representative_check.module_plan_id)
+    ).one()
+    assert (
+        representative_plan.steps_json[-1]["params"]["locator_bundle"]["candidates"][0]["selector"]
+        == "role=dialog[name='新增用户']"
+    )
 
 
 @pytest.mark.anyio
