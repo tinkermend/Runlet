@@ -16,6 +16,7 @@ class NavigationTarget:
     safety_level: str = "readonly"
     materialization_status: str = "discovered"
     rejection_reason: str | None = None
+    rejection_detail: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -26,6 +27,7 @@ class NavigationTarget:
         self.safety_level = _normalize_text(self.safety_level) or "readonly"
         self.materialization_status = _normalize_text(self.materialization_status) or "discovered"
         self.rejection_reason = _normalize_text(self.rejection_reason)
+        self.rejection_detail = _normalize_text(self.rejection_detail)
         self.state_context = _normalize_state_context(self.state_context)
         self.locator_candidates = _normalize_locator_candidates(self.locator_candidates)
         self.metadata = _normalize_metadata(self.metadata)
@@ -51,22 +53,32 @@ class NavigationTarget:
     def mark_queued(self) -> None:
         self.materialization_status = "queued"
         self.rejection_reason = None
+        self.rejection_detail = None
 
     def mark_applied(self) -> None:
         self.materialization_status = "applied"
         self.rejection_reason = None
+        self.rejection_detail = None
 
     def mark_duplicate(self, reason: str = "duplicate_target") -> None:
         self.materialization_status = "duplicate"
         self.rejection_reason = reason
+        self.rejection_detail = None
 
     def mark_blocked(self, reason: str) -> None:
         self.materialization_status = "blocked"
         self.rejection_reason = reason
+        self.rejection_detail = None
 
-    def mark_not_applied(self, reason: str = "state_transition_not_applied") -> None:
+    def mark_not_applied(
+        self,
+        reason: str = "state_transition_not_applied",
+        *,
+        detail: str | None = None,
+    ) -> None:
         self.materialization_status = "not_applied"
         self.rejection_reason = reason
+        self.rejection_detail = _normalize_text(detail)
 
     def merge_from(self, other: "NavigationTarget") -> None:
         self.locator_candidates = _merge_locator_candidates(self.locator_candidates, other.locator_candidates)
@@ -86,6 +98,7 @@ class NavigationTarget:
             "safety_level": self.safety_level,
             "materialization_status": self.materialization_status,
             "rejection_reason": self.rejection_reason,
+            "rejection_detail": self.rejection_detail,
             "metadata": dict(self.metadata),
         }
 
@@ -125,6 +138,9 @@ class NavigationTargetRegistry:
     @property
     def rejected_targets(self) -> list[NavigationTarget]:
         return list(self._rejected_targets)
+
+    def get_by_dedupe_key(self, dedupe_key: str) -> NavigationTarget | None:
+        return self._targets_by_key.get(dedupe_key)
 
     def add(self, target: NavigationTarget) -> NavigationTargetDecision:
         dedupe_key = target.dedupe_key()

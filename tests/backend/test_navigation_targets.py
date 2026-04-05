@@ -1,7 +1,11 @@
+import pytest
+from pydantic import ValidationError
+
 from app.domains.crawler_service.navigation_targets import (
     NavigationTarget,
     NavigationTargetRegistry,
 )
+from app.domains.crawler_service.schemas import NavigationTargetResult
 
 
 def test_navigation_target_registry_dedups_by_kind_route_state_and_parent():
@@ -138,3 +142,60 @@ def test_navigation_target_registry_rejects_when_total_budget_is_exhausted():
 
     assert decision.accepted is False
     assert decision.reason == "total_budget_exhausted"
+
+
+def test_navigation_target_result_rejects_unknown_contract_values():
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "typo_kind",
+                "route_hint": "/users",
+                "materialization_status": "queued",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "typo_status",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "blocked",
+                "rejection_reason": "typo_reason",
+            }
+        )
+
+
+def test_navigation_target_result_rejects_impossible_status_and_extra_fields():
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "blocked",
+                "rejection_reason": None,
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "queued",
+                "unexpected_field": "boom",
+            }
+        )

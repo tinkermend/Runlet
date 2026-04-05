@@ -4,6 +4,9 @@
 - 新增通用采集健壮性与采集完整性增强设计文档：`docs/superpowers/specs/2026-04-05-crawler-resilience-and-crawl-completeness-design.md`，明确本轮优先通过通用 `crawler_service` 机制增强解决登录后菜单、页面与元素事实采集不完整问题，并提出“三段式采集引擎 + NavigationTarget + 路由稳定化 + 菜单 materialize + 状态探测”的主方案，以 `HotGo` 作为验证样本但不引入专属分支。
 - 新增通用采集健壮性与采集完整性增强实施计划：`docs/superpowers/plans/2026-04-05-crawler-resilience-and-crawl-completeness-plan.md`，将实现拆分为路由解析与稳定化底座、`NavigationTarget` 去重与预算、菜单 materialize、页面访问与状态探测重构、事实层持久化兼容以及 `HotGo` 样本回归六个可独立提交的任务。
 - 新增 `crawler_service/navigation_targets.py` 与对应测试，统一沉淀 `NavigationTarget`、去重键、预算拒绝原因和 materialization 状态；`page_discovery` 与 `state_probe` 现先产出导航目标，再分别做页面沉淀与状态动作执行，并在提取结果中暴露结构化 `navigation_targets` 诊断上下文。
+- 补充 `NavigationTarget` 诊断细节保留：`state_probe` 在 `probe_applied=False` 时会保留 `probe_apply_reason` 到 target rejection detail，`page_discovery` 改为以 registry 作为导航目标去重与预算的单一收口，且 `NavigationTargetKind` 契约补齐 `expand_panel` 与 `toggle_view`。
+- 收紧 `NavigationTargetResult` 契约并补齐 page discovery 交互种类流转：`page_discovery` 现会保留 `toggle_view / expand_panel` 导航目标，`NavigationTargetResult` 对 `target_kind / materialization_status / rejection_reason` 使用严格枚举校验，并将执行层拒绝细节落到 `rejection_detail`。
+- `page_discovery` 现会把 registry 中因预算被拒绝的目标作为 blocked diagnostics 一并输出到 `navigation_targets`，同时 `NavigationTargetResult` 进一步禁止不可能的状态组合与额外字段。
 
 ## [Unreleased] - 2026-04-04
 

@@ -84,15 +84,6 @@ class ControlledStateProbeExtractor:
 
             entry_type = self._normalize_entry_type(action.get("entry_type") or action.get("interaction_type"))
             if entry_type is None or entry_type not in self.ALLOWED_ACTIONS:
-                navigation_targets.append(
-                    self._build_navigation_target(
-                        action=action,
-                        route_path=route_path,
-                        target_kind=entry_type or "unknown",
-                        status="blocked",
-                        reason="unsafe_action_rejected",
-                    )
-                )
                 self._append_warning(warnings, "unsafe_action_rejected")
                 continue
 
@@ -138,7 +129,10 @@ class ControlledStateProbeExtractor:
                 continue
 
             if not self._action_payload_applied(state_payload):
-                target.mark_not_applied("state_transition_not_applied")
+                target.mark_not_applied(
+                    "state_transition_not_applied",
+                    detail=self._action_payload_rejection_reason(state_payload),
+                )
                 navigation_targets.append(target)
                 self._append_warning(warnings, "state_transition_not_applied")
                 continue
@@ -188,6 +182,13 @@ class ControlledStateProbeExtractor:
         elif status == "not_applied" and reason is not None:
             target.mark_not_applied(reason)
         return target
+
+    def _action_payload_rejection_reason(self, payload: dict[str, object]) -> str:
+        for key in ("probe_apply_reason", "reason"):
+            value = self._clean_text(payload.get(key))
+            if value is not None:
+                return value
+        return "state_transition_not_applied"
 
     def _collect_state_elements(
         self,

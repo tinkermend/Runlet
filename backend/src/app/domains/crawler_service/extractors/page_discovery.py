@@ -10,6 +10,7 @@ from app.domains.crawler_service.extractors.router_runtime import RuntimeRouteHi
 from app.domains.crawler_service.navigation_targets import NavigationTarget, NavigationTargetRegistry
 
 from app.domains.crawler_service.schemas import (
+    ALLOWED_STATE_PROBE_ACTIONS,
     CrawlExtractionResult,
     NavigationTargetResult,
     PageCandidate,
@@ -27,7 +28,7 @@ class PageDiscoveryProtocol(Protocol):
 
 
 class PageDiscoveryExtractor:
-    _ENTRY_TYPES = {"tab_switch", "open_modal", "open_drawer", "filter_expand"}
+    _ENTRY_TYPES = set(ALLOWED_STATE_PROBE_ACTIONS) | {"filter_expand"}
     _SOURCE_PRIORITY = {
         "runtime_route_hints": 0,
         "dom_menu_tree": 1,
@@ -42,9 +43,19 @@ class PageDiscoveryExtractor:
         *,
         runtime_extractor: RuntimeRouteHintExtractor | None = None,
         dom_menu_extractor: DomMenuTraversalExtractor | None = None,
+        max_total_targets: int = 128,
+        max_targets_per_route: int = 16,
+        max_targets_per_kind: int = 64,
+        max_children_per_parent: int = 32,
     ) -> None:
         self.runtime_extractor = runtime_extractor or RuntimeRouteHintExtractor()
         self.dom_menu_extractor = dom_menu_extractor or DomMenuTraversalExtractor()
+        self._registry_kwargs = {
+            "max_total_targets": max_total_targets,
+            "max_targets_per_route": max_targets_per_route,
+            "max_targets_per_kind": max_targets_per_kind,
+            "max_children_per_parent": max_children_per_parent,
+        }
 
     async def extract(
         self,
@@ -91,10 +102,24 @@ class PageDiscoveryExtractor:
         quality_hints: list[float] = []
         framework_hints: list[str] = []
         merged_signals = [*route_signals, *nav_signals, *network_signals]
-        target_registry = NavigationTargetRegistry()
-        grouped_targets = self._group_navigation_targets(merged_signals)
-        for group in grouped_targets.values():
-            target_registry.add(group.target)
+        target_registry = NavigationTargetRegistry(**self._registry_kwargs)
+        grouped_targets: dict[str, _NavigationTargetGroup] = {}
+        for signal in merged_signals:
+            for seed in self._build_target_seeds(signal):
+                decision = target_registry.add(seed.target)
+                accepted_target = (
+                    decision.target if decision.accepted else target_registry.get_by_dedupe_key(seed.target.dedupe_key())
+                )
+                if accepted_target is None:
+                    continue
+                group = grouped_targets.get(accepted_target.dedupe_key())
+                if group is None:
+                    grouped_targets[accepted_target.dedupe_key()] = _NavigationTargetGroup(
+                        target=accepted_target,
+                        seeds=[seed],
+                    )
+                    continue
+                group.seeds.append(seed)
 
         for target in target_registry.targets:
             group = grouped_targets.get(target.dedupe_key())
@@ -169,29 +194,25 @@ class PageDiscoveryExtractor:
             framework_detected=framework_detected,
             quality_score=quality_score,
             pages=pages,
-            navigation_targets=[
-                NavigationTargetResult.model_validate(target.to_record()) for target in target_registry.targets
-            ],
+            navigation_targets=self._serialize_navigation_targets(target_registry=target_registry),
             failure_reason=failure_reason,
             warning_messages=warnings,
             degraded=degraded,
         )
 
-    def _group_navigation_targets(
+    def _serialize_navigation_targets(
         self,
-        signals: list[dict[str, Any]],
-    ) -> dict[str, "_NavigationTargetGroup"]:
-        grouped_targets: dict[str, _NavigationTargetGroup] = {}
-        for signal in signals:
-            for seed in self._build_target_seeds(signal):
-                dedupe_key = seed.target.dedupe_key()
-                group = grouped_targets.get(dedupe_key)
-                if group is None:
-                    grouped_targets[dedupe_key] = _NavigationTargetGroup(target=seed.target, seeds=[seed])
-                    continue
-                group.target.merge_from(seed.target)
-                group.seeds.append(seed)
-        return grouped_targets
+        *,
+        target_registry: NavigationTargetRegistry,
+    ) -> list[NavigationTargetResult]:
+        records: list[NavigationTargetResult] = []
+        for target in target_registry.targets:
+            records.append(NavigationTargetResult.model_validate(target.to_record()))
+        for target in target_registry.rejected_targets:
+            if target.materialization_status != "blocked":
+                continue
+            records.append(NavigationTargetResult.model_validate(target.to_record()))
+        return records
 
     def _build_target_seeds(self, signal: dict[str, Any]) -> list["_NavigationTargetSeed"]:
         entry_candidates = self._to_entry_candidates(signal)
@@ -271,8 +292,14 @@ class PageDiscoveryExtractor:
             state_context["modal_title"] = label
         elif entry_type == "open_drawer" and label is not None:
             state_context["drawer_title"] = label
-        elif entry_type == "filter_expand" and label is not None:
+        elif entry_type in {"filter_expand", "expand_panel"} and label is not None:
             state_context["panel_title"] = label
+        elif entry_type == "toggle_view" and label is not None:
+            state_context["view_mode"] = label
+        elif entry_type == "tree_expand" and label is not None:
+            state_context["tree_node"] = label
+        elif entry_type == "paginate_probe" and label is not None and label.isdigit():
+            state_context["page_number"] = int(label)
 
         target_route = self._extract_route_path(signal)
         page_route = self._normalize_path(signal.get("page_route_path"))

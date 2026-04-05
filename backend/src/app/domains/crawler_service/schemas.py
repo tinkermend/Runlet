@@ -3,17 +3,19 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 NavigationTargetKind = Literal[
     "page_route",
     "menu_expand",
     "tab_switch",
+    "expand_panel",
     "tree_expand",
     "paginate_probe",
     "open_modal",
     "open_drawer",
     "filter_expand",
+    "toggle_view",
 ]
 NavigationMaterializationStatus = Literal[
     "discovered",
@@ -68,17 +70,29 @@ StateProbeReason = Literal[
 
 
 class NavigationTargetResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     target_key: str
-    target_kind: NavigationTargetKind | str
+    target_kind: NavigationTargetKind
     route_hint: str | None = None
     locator_candidates: list[dict[str, object]] = Field(default_factory=list)
     state_context: dict[str, object] | None = None
     parent_target_key: str | None = None
     discovery_source: str | None = None
     safety_level: str = "readonly"
-    materialization_status: NavigationMaterializationStatus | str = "discovered"
-    rejection_reason: NavigationTargetRejectionReason | str | None = None
+    materialization_status: NavigationMaterializationStatus = "discovered"
+    rejection_reason: NavigationTargetRejectionReason | None = None
+    rejection_detail: str | None = None
     metadata: dict[str, object] | None = None
+
+    @model_validator(mode="after")
+    def validate_status_reason_combination(self) -> "NavigationTargetResult":
+        status_requires_reason = {"blocked", "duplicate", "not_applied"}
+        if self.materialization_status in status_requires_reason and self.rejection_reason is None:
+            raise ValueError("rejection_reason is required for blocked, duplicate, and not_applied targets")
+        if self.materialization_status in {"discovered", "queued", "applied"} and self.rejection_reason is not None:
+            raise ValueError("rejection_reason must be empty unless the target was rejected or not applied")
+        return self
 
 
 class PageCandidate(BaseModel):

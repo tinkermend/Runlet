@@ -167,6 +167,7 @@ class NotAppliedStateProbeSession(FakeStateProbeSession):
             "state_context": action.get("state_context"),
             "elements": action.get("elements"),
             "probe_applied": False,
+            "probe_apply_reason": "target_panel_not_materialized",
         }
 
 
@@ -270,6 +271,10 @@ async def test_state_probe_skips_state_when_action_was_not_applied():
     assert result.elements == []
     assert result.failure_reason is None
     assert "state_transition_not_applied" in result.warning_messages
+    target = result.navigation_targets[0]
+    assert target.materialization_status == "not_applied"
+    assert target.rejection_reason == "state_transition_not_applied"
+    assert target.rejection_detail == "target_panel_not_materialized"
 
 
 @pytest.mark.anyio
