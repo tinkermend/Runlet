@@ -14,6 +14,8 @@ from app.domains.crawler_service.extractors.app_readiness import evaluate_app_re
 from app.domains.crawler_service.extractors.dom_menu import (
     DomMenuExtractor,
     DomMenuTraversalExtractor,
+    build_menu_expand_targets,
+    merge_menu_skeleton_and_materialized_nodes,
 )
 from app.domains.crawler_service.extractors.page_discovery import (
     PageDiscoveryExtractor,
@@ -51,7 +53,14 @@ class BrowserSession(Protocol):
     async def collect_route_hints(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
     async def collect_route_snapshot(self, *, crawl_scope: str) -> dict[str, object]: ...
 
+    async def collect_dom_menu_skeleton(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
     async def collect_dom_menu_nodes(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+    async def materialize_navigation_targets(
+        self,
+        *,
+        targets: list[dict[str, object]],
+        crawl_scope: str,
+    ) -> list[dict[str, object]]: ...
 
     async def collect_dom_elements(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
@@ -191,40 +200,310 @@ class PlaywrightBrowserFactory:
     _MENU_NODES_SCRIPT = """
 () => {
   const __RUNLET_MENU_NODES__ = true;
-  const result = [];
-  const selectors = [
+  const normalizeText = (value) => {
+    if (typeof value !== "string") return "";
+    return value.replace(/\\s+/g, " ").trim();
+  };
+  const isVisible = (node) => {
+    if (!(node instanceof Element)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && rect.width > 0
+      && rect.height > 0;
+  };
+  const toLabel = (node) => normalizeText(
+    node?.getAttribute?.("data-menu-label")
+      || node?.getAttribute?.("aria-label")
+      || node?.textContent
+      || ""
+  );
+  const toRoutePath = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return new URL(trimmed, window.location.href).pathname || null;
+    } catch {
+      return trimmed.startsWith("/") ? trimmed : null;
+    }
+  };
+  const itemSelectors = '[role="menuitem"], [role="treeitem"], .ant-menu-submenu, .el-submenu, .tree-node, li';
+  const nodeSelectors = [
     '[role="menuitem"]',
+    '[role="treeitem"]',
     'nav a',
     'aside a',
     '[data-menu-item]',
-    '.menu a'
+    '[data-route-path]',
+    '[data-path]',
+    '.menu a',
+    '.ant-menu-submenu-title',
+    '.el-submenu__title',
+    '.el-menu-item',
+    '.tree-node',
+    '.el-tree-node__content'
   ];
-  const nodes = document.querySelectorAll(selectors.join(','));
-  Array.from(nodes).forEach((node, index) => {
-    const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
-    if (!text) return;
-    const href = node.getAttribute('href');
-    let routePath = null;
-    if (href) {
-      try {
-        routePath = new URL(href, window.location.origin).pathname;
-      } catch {
-        routePath = null;
+  const parentLabelFor = (node) => {
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) {
+        const label = toLabel(
+          current.querySelector?.(
+            '.ant-menu-submenu-title, .el-submenu__title, .tree-node__label, [role="menuitem"], [role="treeitem"], a, span'
+          ) || current
+        );
+        if (label && label !== toLabel(node)) return label;
       }
+      current = current.parentElement;
     }
-    const parentMenu = node.closest('[role="menu"], nav, aside');
-    const depth = parentMenu ? parentMenu.querySelectorAll('[role="menu"], ul, ol').length - 1 : 0;
+    return null;
+  };
+  const depthFor = (node) => {
+    let depth = 0;
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) depth += 1;
+      current = current.parentElement;
+    }
+    return Math.max(0, depth);
+  };
+  const result = [];
+  const seen = new Set();
+  const nodes = document.querySelectorAll(nodeSelectors.join(','));
+  Array.from(nodes).forEach((node, index) => {
+    if (!isVisible(node)) return;
+    const text = toLabel(node);
+    if (!text) return;
+    const href = node.getAttribute('href')
+      || node.getAttribute('data-route-path')
+      || node.getAttribute('data-path');
+    const routePath = toRoutePath(href);
+    const role = node.getAttribute('role') || 'menuitem';
+    const ariaExpanded = node.getAttribute('aria-expanded');
+    const className = normalizeText(node.className);
+    let entryType = normalizeText(
+      node.getAttribute('data-entry-type') || node.getAttribute('data-interaction-type')
+    ).replace(/-/g, '_') || null;
+    if (!entryType && role === 'treeitem' && ariaExpanded === 'false') {
+      entryType = 'tree_expand';
+    }
+    if (!entryType && (
+      ariaExpanded === 'false'
+      || className.includes('submenu')
+      || className.includes('sub-menu')
+      || className.includes('subnav')
+    )) {
+      entryType = 'menu_expand';
+    }
+    const parentLabel = parentLabelFor(node);
+    const depth = depthFor(node);
+    const dedupeKey = JSON.stringify([text, routePath, parentLabel, depth]);
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
     result.push({
       label: text,
       route_path: routePath,
       page_route_path: routePath,
-      depth: depth > 0 ? depth : 0,
+      depth,
       order: index,
-      role: node.getAttribute('role') || 'menuitem',
+      role,
       aria_label: node.getAttribute('aria-label'),
+      parent_label: parentLabel,
+      entry_type: entryType,
+      aria_expanded: ariaExpanded,
     });
   });
   return result;
+}
+"""
+    _MATERIALIZE_NAVIGATION_TARGETS_SCRIPT = """
+async (targets) => {
+  const __RUNLET_MATERIALIZE_NAVIGATION_TARGETS__ = true;
+  const normalizeText = (value) => {
+    if (typeof value !== "string") return "";
+    return value.replace(/\\s+/g, " ").trim();
+  };
+  const isVisible = (node) => {
+    if (!(node instanceof Element)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && rect.width > 0
+      && rect.height > 0;
+  };
+  const toLabel = (node) => normalizeText(
+    node?.getAttribute?.("data-menu-label")
+      || node?.getAttribute?.("aria-label")
+      || node?.textContent
+      || ""
+  );
+  const toRoutePath = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return new URL(trimmed, window.location.href).pathname || null;
+    } catch {
+      return trimmed.startsWith("/") ? trimmed : null;
+    }
+  };
+  const nodeSelectors = [
+    '[role="menuitem"]',
+    '[role="treeitem"]',
+    'nav a',
+    'aside a',
+    '[data-menu-item]',
+    '[data-route-path]',
+    '[data-path]',
+    '.menu a',
+    '.ant-menu-submenu-title',
+    '.el-submenu__title',
+    '.el-menu-item',
+    '.tree-node',
+    '.el-tree-node__content'
+  ];
+  const itemSelectors = '[role="menuitem"], [role="treeitem"], .ant-menu-submenu, .el-submenu, .tree-node, li';
+  const containerSelectors = '[role="menu"], nav, aside, ul, ol, [class*="menu"], [class*="nav"], [class*="tree"]';
+  const parentLabelFor = (node) => {
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) {
+        const label = toLabel(
+          current.querySelector?.(
+            '.ant-menu-submenu-title, .el-submenu__title, .tree-node__label, [role="menuitem"], [role="treeitem"], a, span'
+          ) || current
+        );
+        if (label && label !== toLabel(node)) return label;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+  const depthFor = (node) => {
+    let depth = 0;
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) depth += 1;
+      current = current.parentElement;
+    }
+    return Math.max(0, depth);
+  };
+  const collectMenuNodes = (root) => {
+    const scope = root || document;
+    const result = [];
+    const seen = new Set();
+    const nodes = scope.querySelectorAll(nodeSelectors.join(','));
+    Array.from(nodes).forEach((node, index) => {
+      if (!isVisible(node)) return;
+      const label = toLabel(node);
+      if (!label) return;
+      const href = node.getAttribute('href')
+        || node.getAttribute('data-route-path')
+        || node.getAttribute('data-path');
+      const routePath = toRoutePath(href);
+      const role = node.getAttribute('role') || 'menuitem';
+      const ariaExpanded = node.getAttribute('aria-expanded');
+      const className = normalizeText(node.className);
+      let entryType = normalizeText(
+        node.getAttribute('data-entry-type') || node.getAttribute('data-interaction-type')
+      ).replace(/-/g, '_') || null;
+      if (!entryType && role === 'treeitem' && ariaExpanded === 'false') {
+        entryType = 'tree_expand';
+      }
+      if (!entryType && (
+        ariaExpanded === 'false'
+        || className.includes('submenu')
+        || className.includes('sub-menu')
+        || className.includes('subnav')
+      )) {
+        entryType = 'menu_expand';
+      }
+      const parentLabel = parentLabelFor(node);
+      const depth = depthFor(node);
+      const dedupeKey = JSON.stringify([label, routePath, parentLabel, depth]);
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      result.push({
+        label,
+        route_path: routePath,
+        page_route_path: routePath,
+        depth,
+        order: index,
+        role,
+        aria_label: node.getAttribute('aria-label'),
+        parent_label: parentLabel,
+        entry_type: entryType,
+        aria_expanded: ariaExpanded,
+      });
+    });
+    return result;
+  };
+  const findTargetNode = (target) => {
+    const targetLabel = normalizeText(target?.label);
+    const targetParent = normalizeText(target?.parent_label);
+    const targetRole = normalizeText(target?.role);
+    const candidates = Array.from(document.querySelectorAll(nodeSelectors.join(',')));
+    return candidates.find((node) => {
+      if (!isVisible(node)) return false;
+      const label = toLabel(node);
+      if (!label || (targetLabel && label !== targetLabel)) return false;
+      if (targetRole) {
+        const role = normalizeText(node.getAttribute('role') || 'menuitem');
+        if (role && role !== targetRole) return false;
+      }
+      if (targetParent) {
+        return parentLabelFor(node) === targetParent;
+      }
+      return true;
+    }) || null;
+  };
+  const triggerClick = (node) => {
+    if (!(node instanceof Element)) return false;
+    node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  };
+  const triggerHover = (node) => {
+    if (!(node instanceof Element)) return false;
+    node.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
+    return true;
+  };
+  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const safeTargets = Array.isArray(targets) ? targets.filter((target) => target && typeof target === 'object') : [];
+  const materialized = [];
+  for (const target of safeTargets) {
+    const node = findTargetNode(target);
+    if (!node) continue;
+    const triggerNode = node.querySelector?.('[aria-expanded="false"], .ant-menu-submenu-title, .el-submenu__title, .tree-node__switcher') || node;
+    let applied = false;
+    if (target.target_kind === 'tree_expand') {
+      applied = triggerClick(triggerNode);
+    } else {
+      applied = triggerClick(triggerNode);
+      if (!applied) {
+        applied = triggerHover(node);
+      } else {
+        triggerHover(node);
+      }
+    }
+    if (!applied) continue;
+    await wait(150);
+    const container = node.closest?.(containerSelectors) || document;
+    for (const item of collectMenuNodes(container)) {
+      const nextItem = { ...item };
+      if (!nextItem.parent_label && nextItem.depth > (Number(target.depth) || 0)) {
+        nextItem.parent_label = normalizeText(target.label) || null;
+      }
+      materialized.push(nextItem);
+    }
+  }
+  return materialized;
 }
 """
     _DOM_ELEMENTS_SCRIPT = """
@@ -664,14 +943,46 @@ class PlaywrightBrowserFactory:
                     "history_route": route_snapshot.history_route,
                 }
 
-            async def collect_dom_menu_nodes(
+            async def collect_dom_menu_skeleton(
                 self_nonlocal,
                 *,
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
-                return await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                collected = await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                return self_nonlocal._ensure_dict_list(collected)
+
+            async def materialize_navigation_targets(
+                self_nonlocal,
+                *,
+                targets: list[dict[str, object]],
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                if not targets:
+                    return []
+                collected = await self_nonlocal._evaluate_with_optional_arg(
+                    PlaywrightBrowserFactory._MATERIALIZE_NAVIGATION_TARGETS_SCRIPT,
+                    targets,
+                )
+                return self_nonlocal._ensure_dict_list(collected)
+
+            async def collect_dom_menu_nodes(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                skeleton = await self_nonlocal.collect_dom_menu_skeleton(crawl_scope=crawl_scope)
+                materialized = await self_nonlocal.materialize_navigation_targets(
+                    targets=build_menu_expand_targets(skeleton),
+                    crawl_scope=crawl_scope,
+                )
+                return merge_menu_skeleton_and_materialized_nodes(
+                    skeleton=skeleton,
+                    materialized=materialized,
+                )
 
             async def collect_dom_elements(
                 self_nonlocal,
@@ -966,7 +1277,7 @@ class PlaywrightBrowserFactory:
             async def _evaluate_with_optional_arg(
                 self_nonlocal,
                 script: str,
-                arg: dict[str, object],
+                arg: object,
             ):
                 try:
                     return await page.evaluate(script, arg)
@@ -977,6 +1288,15 @@ class PlaywrightBrowserFactory:
                         return {"applied": False, "reason": "action_execution_not_supported"}
                 except Exception:
                     return {"applied": False, "reason": "action_execution_not_supported"}
+
+            def _ensure_dict_list(self_nonlocal, value: object) -> list[dict[str, object]]:
+                if not isinstance(value, list):
+                    return []
+                result: list[dict[str, object]] = []
+                for item in value:
+                    if isinstance(item, dict):
+                        result.append(item)
+                return result
 
             async def _collect_readiness_sample(self_nonlocal) -> dict[str, object]:
                 route_snapshot = await self_nonlocal._collect_route_snapshot_raw()

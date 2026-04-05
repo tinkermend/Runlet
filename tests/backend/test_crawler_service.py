@@ -385,6 +385,125 @@ def install_state_probe_aware_async_api(
     return page, context, browser, chromium, playwright
 
 
+class MaterializeAwareFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.settled = False
+        self.current_url = "about:blank"
+        self.materialize_calls: list[list[dict[str, object]]] = []
+        self.menu_expanded = False
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+
+    async def evaluate(self, script: str, *args):
+        if "document.readyState" in script and "shell_ready" in script:
+            return {"shell_ready": self.settled}
+        if "visibleSelector" in script:
+            return self.settled
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": None,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [{"path": "/dashboard", "title": "仪表盘"}]
+        if "__RUNLET_MENU_NODES__" in script:
+            nodes = [
+                {
+                    "label": "权限管理",
+                    "route_path": None,
+                    "page_route_path": None,
+                    "depth": 0,
+                    "order": 0,
+                    "role": "menuitem",
+                    "entry_type": "menu_expand",
+                    "aria_expanded": "false" if not self.menu_expanded else "true",
+                }
+            ]
+            if self.menu_expanded:
+                nodes.append(
+                    {
+                        "label": "管理员列表",
+                        "route_path": "/system/admin",
+                        "page_route_path": "/system/admin",
+                        "depth": 1,
+                        "order": 1,
+                        "role": "menuitem",
+                        "parent_label": "权限管理",
+                    }
+                )
+            return nodes
+        if "__RUNLET_MATERIALIZE_NAVIGATION_TARGETS__" in script:
+            targets = args[0] if args else []
+            normalized_targets = [dict(target) for target in targets if isinstance(target, dict)]
+            self.materialize_calls.append(normalized_targets)
+            if any(target.get("label") == "权限管理" for target in normalized_targets):
+                self.menu_expanded = True
+            return [
+                {
+                    "label": "管理员列表",
+                    "route_path": "/system/admin",
+                    "page_route_path": "/system/admin",
+                    "depth": 1,
+                    "order": 1,
+                    "role": "menuitem",
+                    "parent_label": "权限管理",
+                }
+            ]
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            return []
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def install_materialize_aware_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    MaterializeAwareFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = MaterializeAwareFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
 class RouteAwareFakeCrawlerPage:
     def __init__(self) -> None:
         self.goto_calls: list[tuple[str, str]] = []
@@ -967,6 +1086,32 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     assert page.wait_for_timeout_calls.count(2000) >= 2
     assert page.route_snapshot_eval_calls >= 2
     assert page.readiness_shell_eval_calls >= 2
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_collect_dom_menu_nodes_materializes_children_after_expand(monkeypatch):
+    page, context, browser, chromium, playwright = install_materialize_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    menu_nodes = await session.collect_dom_menu_nodes(crawl_scope="full")
+    await session.close()
+
+    assert {node["label"] for node in menu_nodes} >= {"权限管理", "管理员列表"}
+    assert any(
+        node.get("parent_label") == "权限管理" and node.get("label") == "管理员列表"
+        for node in menu_nodes
+    )
+    assert page.materialize_calls
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True
