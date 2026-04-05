@@ -21,19 +21,22 @@ def build_menu_expand_targets(skeleton: list[dict[str, Any]]) -> list[dict[str, 
         target_kind = "tree_expand" if entry_type == "tree_expand" else "menu_expand"
         parent_label = _clean_text_value(item.get("parent_label"))
         depth = _to_int_value(item.get("depth"))
+        sibling_index = _to_optional_int_value(item.get("sibling_index"))
         order = _to_int_value(item.get("order") or item.get("sort_order"))
         route_path = _normalize_path_value(item.get("route_path") or item.get("path"))
         page_route_path = _normalize_path_value(item.get("page_route_path") or item.get("route_path"))
         dedupe_key = (
             target_kind,
-            label,
-            parent_label,
-            depth,
-            order,
+            *_menu_identity_fields(
+                label=label,
+                parent_label=parent_label,
+                depth=depth,
+                role=_clean_text_value(item.get("role")),
+                aria_label=_clean_text_value(item.get("aria_label")),
+                sibling_index=sibling_index,
+            ),
             route_path,
             page_route_path,
-            _clean_text_value(item.get("role")),
-            _clean_text_value(item.get("aria_label")),
         )
         if dedupe_key in seen:
             continue
@@ -44,6 +47,7 @@ def build_menu_expand_targets(skeleton: list[dict[str, Any]]) -> list[dict[str, 
                 "label": label,
                 "parent_label": parent_label,
                 "depth": depth,
+                "sibling_index": sibling_index,
                 "order": order,
                 "role": _clean_text_value(item.get("role")),
                 "aria_label": _clean_text_value(item.get("aria_label")),
@@ -61,17 +65,19 @@ def merge_menu_skeleton_and_materialized_nodes(
     materialized: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
-    index_by_key: dict[tuple[str, str | None, int, int], int] = {}
+    index_by_key: dict[tuple[object, ...], int] = {}
 
     for raw_item in [*skeleton, *materialized]:
         normalized = _normalize_menu_node(raw_item)
         if normalized is None:
             continue
-        key = (
-            normalized["label"],
-            normalized.get("parent_label"),
-            normalized["depth"],
-            normalized["order"],
+        key = _menu_identity_fields(
+            label=normalized["label"],
+            parent_label=normalized.get("parent_label"),
+            depth=normalized["depth"],
+            role=normalized.get("role"),
+            aria_label=normalized.get("aria_label"),
+            sibling_index=_to_optional_int_value(normalized.get("sibling_index")),
         )
         existing_index = index_by_key.get(key)
         if existing_index is None:
@@ -397,6 +403,7 @@ def _normalize_menu_node(item: dict[str, Any]) -> dict[str, Any] | None:
         "order": _to_int_value(item.get("order") or item.get("sort_order")),
         "role": _clean_text_value(item.get("role")),
         "aria_label": _clean_text_value(item.get("aria_label")),
+        "sibling_index": _to_optional_int_value(item.get("sibling_index")),
         "parent_label": _clean_text_value(
             item.get("parent_label") or item.get("materialized_parent_label") or item.get("parent")
         ),
@@ -417,9 +424,31 @@ def _build_menu_locator_candidates(*, item: dict[str, Any], label: str) -> list[
     route_path = _normalize_path_value(item.get("route_path") or item.get("page_route_path"))
     if route_path is not None:
         candidates.append({"strategy_type": "route_path", "selector": route_path})
+    sibling_index = _to_optional_int_value(item.get("sibling_index"))
+    if sibling_index is not None:
+        candidates.append({"strategy_type": "sibling_index", "selector": str(sibling_index)})
     order = _to_int_value(item.get("order") or item.get("sort_order"))
     candidates.append({"strategy_type": "order", "selector": str(order)})
     return candidates
+
+
+def _menu_identity_fields(
+    *,
+    label: str,
+    parent_label: str | None,
+    depth: int,
+    role: str | None,
+    aria_label: str | None,
+    sibling_index: int | None,
+) -> tuple[object, ...]:
+    return (
+        label,
+        parent_label,
+        depth,
+        role,
+        aria_label,
+        sibling_index,
+    )
 
 
 def _prefer_menu_route_fact(*, existing_value: Any, incoming_value: Any) -> str | None:
@@ -478,3 +507,17 @@ def _to_int_value(value: Any) -> int:
         if stripped.isdigit():
             return int(stripped)
     return 0
+
+
+def _to_optional_int_value(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None

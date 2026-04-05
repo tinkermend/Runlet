@@ -271,6 +271,7 @@ class PlaywrightBrowserFactory:
   };
   const result = [];
   const seen = new Set();
+  const siblingCounts = new Map();
   const nodes = document.querySelectorAll(nodeSelectors.join(','));
   Array.from(nodes).forEach((node, index) => {
     if (!isVisible(node)) return;
@@ -299,7 +300,11 @@ class PlaywrightBrowserFactory:
     }
     const parentLabel = parentLabelFor(node);
     const depth = depthFor(node);
-    const dedupeKey = JSON.stringify([text, routePath, parentLabel, depth]);
+    const ariaLabel = node.getAttribute('aria-label');
+    const siblingKey = JSON.stringify([text, parentLabel, depth, role, ariaLabel || null]);
+    const siblingIndex = siblingCounts.get(siblingKey) || 0;
+    siblingCounts.set(siblingKey, siblingIndex + 1);
+    const dedupeKey = JSON.stringify([text, routePath, parentLabel, depth, role, ariaLabel || null, siblingIndex]);
     if (seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
     result.push({
@@ -309,7 +314,8 @@ class PlaywrightBrowserFactory:
       depth,
       order: index,
       role,
-      aria_label: node.getAttribute('aria-label'),
+      aria_label: ariaLabel,
+      sibling_index: siblingIndex,
       parent_label: parentLabel,
       entry_type: entryType,
       aria_expanded: ariaExpanded,
@@ -395,6 +401,7 @@ async (targets) => {
     const scope = root || document;
     const result = [];
     const seen = new Set();
+    const siblingCounts = new Map();
     const nodes = scope.querySelectorAll(nodeSelectors.join(','));
     Array.from(nodes).forEach((node, index) => {
       if (!isVisible(node)) return;
@@ -423,7 +430,11 @@ async (targets) => {
       }
       const parentLabel = parentLabelFor(node);
       const depth = depthFor(node);
-      const dedupeKey = JSON.stringify([label, routePath, parentLabel, depth]);
+      const ariaLabel = node.getAttribute('aria-label');
+      const siblingKey = JSON.stringify([label, parentLabel, depth, role, ariaLabel || null]);
+      const siblingIndex = siblingCounts.get(siblingKey) || 0;
+      siblingCounts.set(siblingKey, siblingIndex + 1);
+      const dedupeKey = JSON.stringify([label, routePath, parentLabel, depth, role, ariaLabel || null, siblingIndex]);
       if (seen.has(dedupeKey)) return;
       seen.add(dedupeKey);
       result.push({
@@ -433,7 +444,8 @@ async (targets) => {
         depth,
         order: index,
         role,
-        aria_label: node.getAttribute('aria-label'),
+        aria_label: ariaLabel,
+        sibling_index: siblingIndex,
         parent_label: parentLabel,
         entry_type: entryType,
         aria_expanded: ariaExpanded,
@@ -447,21 +459,35 @@ async (targets) => {
     const targetRole = normalizeText(target?.role);
     const targetRoute = toRoutePath(target?.route_path || target?.page_route_path);
     const targetOrder = Number.isFinite(Number(target?.order)) ? Number(target.order) : null;
+    const targetSiblingIndex = Number.isFinite(Number(target?.sibling_index)) ? Number(target.sibling_index) : null;
     const targetAriaLabel = normalizeText(target?.aria_label);
     const locatorCandidates = Array.isArray(target?.locator_candidates)
       ? target.locator_candidates.filter((candidate) => candidate && typeof candidate === 'object')
       : [];
-    const indexedCandidates = Array.from(document.querySelectorAll(nodeSelectors.join(','))).map((node, index) => ({
-      node,
-      index,
-      routePath: toRoutePath(
-        node.getAttribute('href') || node.getAttribute('data-route-path') || node.getAttribute('data-path')
-      ),
-      ariaLabel: normalizeText(node.getAttribute('aria-label')),
-      label: toLabel(node),
-      role: normalizeText(node.getAttribute('role') || 'menuitem'),
-      parentLabel: parentLabelFor(node),
-    }));
+    const siblingCounts = new Map();
+    const indexedCandidates = Array.from(document.querySelectorAll(nodeSelectors.join(','))).map((node, index) => {
+      const label = toLabel(node);
+      const role = normalizeText(node.getAttribute('role') || 'menuitem');
+      const parentLabel = parentLabelFor(node);
+      const depth = depthFor(node);
+      const ariaLabel = normalizeText(node.getAttribute('aria-label'));
+      const siblingKey = JSON.stringify([label, parentLabel, depth, role, ariaLabel || null]);
+      const siblingIndex = siblingCounts.get(siblingKey) || 0;
+      siblingCounts.set(siblingKey, siblingIndex + 1);
+      return {
+        node,
+        index,
+        routePath: toRoutePath(
+          node.getAttribute('href') || node.getAttribute('data-route-path') || node.getAttribute('data-path')
+        ),
+        ariaLabel,
+        label,
+        role,
+        parentLabel,
+        depth,
+        siblingIndex,
+      };
+    });
     const baseMatches = indexedCandidates.filter((entry) => {
       const node = entry.node;
       if (!isVisible(node)) return false;
@@ -484,6 +510,10 @@ async (targets) => {
       const ariaMatches = matches.filter((entry) => entry.ariaLabel === targetAriaLabel);
       if (ariaMatches.length > 0) matches = ariaMatches;
     }
+    if (targetSiblingIndex !== null) {
+      const siblingMatches = matches.filter((entry) => entry.siblingIndex === targetSiblingIndex);
+      if (siblingMatches.length > 0) matches = siblingMatches;
+    }
     for (const candidate of locatorCandidates) {
       const strategyType = normalizeText(candidate.strategy_type);
       const selector = normalizeText(candidate.selector);
@@ -493,6 +523,8 @@ async (targets) => {
         locatorMatches = matches.filter((entry) => entry.routePath === toRoutePath(selector));
       } else if (strategyType === 'aria_label') {
         locatorMatches = matches.filter((entry) => entry.ariaLabel === selector);
+      } else if (strategyType === 'sibling_index' && Number.isFinite(Number(selector))) {
+        locatorMatches = matches.filter((entry) => entry.siblingIndex === Number(selector));
       } else if (strategyType === 'order' && Number.isFinite(Number(selector))) {
         locatorMatches = matches.filter((entry) => entry.index === Number(selector));
       }
