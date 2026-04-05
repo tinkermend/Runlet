@@ -520,8 +520,9 @@ flowchart TD
 为避免后续回归把该问题重新放回“只有根页面”的旧状态，本轮还需要固定一条 `HotGo-like` 组件级样本，最少覆盖以下组合时序：
 
 - 登录后首屏通过 `hash route` 进入真实业务页，而不是停留在 `/`
-- 应用壳先稳定，菜单与内容区在后续窗口内懒加载完成
-- 一级菜单展开后才 materialize 出二级菜单入口
+- 初始稳定化窗口内先出现 `pathname='/' + hash='#/dashboard'`，并经历“壳未完全 ready / 内容未 ready / 菜单未 materialize”的过渡阶段
+- 应用壳、内容区与菜单在后续窗口内逐步收敛，而不是首次等待后立即全部 ready
+- 一级菜单展开后才 materialize 出二级菜单入口，且子页面路由不应提前出现在基线 route hints 或菜单 skeleton 中
 
 该样本的最低回归门槛为：
 
@@ -558,6 +559,7 @@ flowchart TD
 测试不能只覆盖理想 happy path。
 
 其中应至少保留一条 `HotGo-like` 回归样本，固定“`hash route + 懒菜单加载 + materialize 子菜单`”组合，以验证在真实 HotGo 类后台中不会再次退化为“只有根页面、无菜单、无元素”。
+该样本还应显式证明：关键子页面只能通过 materialized child 进入最终事实集合，而不是被 route hints 或初始菜单骨架提前泄露。
 
 ### 12.3 真实联调验证
 

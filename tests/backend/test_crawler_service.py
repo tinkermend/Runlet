@@ -414,14 +414,17 @@ class HotgoLikeFakeCrawlerPage:
         self.current_url = "about:blank"
         self.current_route = "/"
         self.current_hash = "#/dashboard"
-        self.shell_ready = False
-        self.content_ready = False
-        self.menu_loaded = False
+        self.settle_phase = 0
         self.materialize_calls: list[list[dict[str, object]]] = []
         self.route_snapshot_eval_calls = 0
         self.readiness_shell_eval_calls = 0
         self.executed_probe_actions: list[str] = []
         self.active_states: dict[str, str] = {}
+        self.route_hints = [
+            {"path": "/dashboard", "title": "工作台"},
+            {"path": "/workbench", "title": "分析页"},
+        ]
+        self.skeleton_menu_routes = ["/dashboard", "/workbench"]
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         del wait_until
@@ -435,9 +438,9 @@ class HotgoLikeFakeCrawlerPage:
     async def evaluate(self, script: str, *args):
         if "document.readyState" in script and "shell_ready" in script:
             self.readiness_shell_eval_calls += 1
-            return {"shell_ready": self.shell_ready}
+            return {"shell_ready": self.settle_phase >= 2}
         if "visibleSelector" in script:
-            return self.content_ready
+            return self.settle_phase >= 3
         if "__RUNLET_ROUTE_SNAPSHOT__" in script:
             self.route_snapshot_eval_calls += 1
             if self.current_route == "/":
@@ -454,25 +457,21 @@ class HotgoLikeFakeCrawlerPage:
                 "history_route": None,
             }
         if "__RUNLET_ROUTE_HINTS__" in script:
-            return [
-                {"path": "/dashboard", "title": "工作台"},
-                {"path": "/workbench", "title": "分析页"},
-                {"path": "/system/users", "title": "用户管理"},
-            ]
+            return self.route_hints
         if "__RUNLET_MENU_NODES__" in script:
             nodes = [
                 {
                     "label": "工作台",
-                    "route_path": "/dashboard",
-                    "page_route_path": "/dashboard",
+                    "route_path": self.skeleton_menu_routes[0],
+                    "page_route_path": self.skeleton_menu_routes[0],
                     "depth": 0,
                     "order": 0,
                     "role": "menuitem",
                 },
                 {
                     "label": "分析页",
-                    "route_path": "/workbench",
-                    "page_route_path": "/workbench",
+                    "route_path": self.skeleton_menu_routes[1],
+                    "page_route_path": self.skeleton_menu_routes[1],
                     "depth": 0,
                     "order": 1,
                     "role": "menuitem",
@@ -485,7 +484,7 @@ class HotgoLikeFakeCrawlerPage:
                     "order": 2,
                     "role": "menuitem",
                     "entry_type": "menu_expand",
-                    "aria_expanded": "true" if self.menu_loaded else "false",
+                    "aria_expanded": "true" if self.settle_phase >= 3 else "false",
                 },
             ]
             return nodes
@@ -493,7 +492,7 @@ class HotgoLikeFakeCrawlerPage:
             targets = args[0] if args else []
             normalized_targets = [dict(target) for target in targets if isinstance(target, dict)]
             self.materialize_calls.append(normalized_targets)
-            if self.menu_loaded and any(target.get("label") == "系统管理" for target in normalized_targets):
+            if self.settle_phase >= 3 and any(target.get("label") == "系统管理" for target in normalized_targets):
                 return [
                     {
                         "label": "用户管理",
@@ -613,12 +612,13 @@ class HotgoLikeFakeCrawlerPage:
     async def wait_for_timeout(self, timeout: int) -> None:
         self.wait_for_timeout_calls.append(timeout)
         if timeout >= 5000:
-            self.shell_ready = True
-        if timeout >= 2000 and self.shell_ready:
-            self.content_ready = True
-            self.menu_loaded = True
-            if self.current_route == "/":
+            self.settle_phase = max(self.settle_phase, 1)
+            return
+        if timeout >= 2000:
+            self.settle_phase += 1
+            if self.current_route == "/" and self.settle_phase >= 4:
                 self.current_route = "/dashboard"
+                self.current_hash = None
 
     async def close(self) -> None:
         self.closed = True
@@ -1746,14 +1746,34 @@ async def test_hotgo_like_session_yields_non_root_pages_and_menu_nodes(
     pages = db_session.exec(select(Page).order_by(Page.route_path, Page.id)).all()
     menus = db_session.exec(select(MenuNode).order_by(MenuNode.sort_order, MenuNode.id)).all()
     elements = db_session.exec(select(PageElement).order_by(PageElement.id)).all()
+    page_routes = [item.route_path for item in pages]
+    root_menu_routes = [item.route_path for item in menus if item.parent_id is None]
+    child_menus = [item for item in menus if item.parent_id is not None]
 
     assert result.status == "success"
     assert result.pages_saved >= 3
     assert result.menus_saved >= 2
     assert result.elements_saved >= 2
-    assert [page.route_path for page in pages] != ["/"]
-    assert any(menu.label == "系统管理" for menu in menus)
+    assert page_routes == ["/dashboard", "/system/users", "/workbench"]
+    assert [hint["path"] for hint in page.route_hints] == ["/dashboard", "/workbench"]
+    assert page.skeleton_menu_routes == ["/dashboard", "/workbench"]
+    assert "/system/users" not in root_menu_routes
+    assert any(menu.label == "系统管理" and menu.route_path is None for menu in menus)
+    assert len(child_menus) == 1
+    assert child_menus[0].label == "用户管理"
+    assert child_menus[0].route_path == "/system/users"
     assert page.materialize_calls
+    assert all(len(call) == 1 for call in page.materialize_calls)
+    assert all(call[0]["target_kind"] == "menu_expand" for call in page.materialize_calls)
+    assert all(call[0]["label"] == "系统管理" for call in page.materialize_calls)
+    assert all(call[0]["route_path"] is None for call in page.materialize_calls)
+    assert all(call[0]["page_route_path"] is None for call in page.materialize_calls)
+    assert page.route_snapshot_eval_calls >= 4
+    assert page.readiness_shell_eval_calls >= 4
+    assert page.wait_for_timeout_calls[0] == 5000
+    assert page.wait_for_timeout_calls.count(2000) >= 3
+    assert page.goto_calls[0] == ("https://erp.example.com", "domcontentloaded")
+    assert ("https://erp.example.com/system/users", "domcontentloaded") in page.goto_calls
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True
