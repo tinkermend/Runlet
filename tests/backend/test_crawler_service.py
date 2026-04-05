@@ -1078,10 +1078,113 @@ class FakeStateProbeExtractor:
         self.result = result
         self.calls = 0
 
-    async def extract(self, *, browser_session, system, crawl_scope: str) -> CrawlExtractionResult:
-        del browser_session, system, crawl_scope
+    async def extract(
+        self,
+        *,
+        browser_session,
+        system,
+        crawl_scope: str,
+        page_candidates=None,
+        navigation_targets=None,
+    ) -> CrawlExtractionResult:
+        del browser_session, system, crawl_scope, page_candidates, navigation_targets
         self.calls += 1
         return self.result
+
+
+class PageVisitFirstBrowserSession:
+    framework_hint = "react"
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.visited_routes: list[str] = []
+        self.performed_targets: list[str] = []
+        self.page_contexts = {
+            "/dashboard": {
+                "route_path": "/dashboard",
+                "resolved_route": "/dashboard",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "page_route_path": "/dashboard",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ],
+            },
+            "/reports": {
+                "route_path": "/reports",
+                "resolved_route": "/reports",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "page_route_path": "/reports",
+                        "element_type": "button",
+                        "role": "tab",
+                        "text": "已归档",
+                    }
+                ],
+            },
+        }
+
+    async def visit_page_target(
+        self,
+        *,
+        page_target: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope
+        route_path = str(page_target.get("route_hint") or page_target.get("route_path") or "")
+        self.visited_routes.append(route_path)
+        context = self.page_contexts[route_path]
+        return {
+            "route_path": context["route_path"],
+            "resolved_route": context["resolved_route"],
+            "state_context": dict(context["state_context"]),
+            "elements": [dict(element) for element in context["elements"]],
+        }
+
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope, page_context
+        self.performed_targets.append(str(target.get("target_kind") or ""))
+        return {
+            "route_path": "/reports",
+            "state_context": {"active_tab": "已归档"},
+            "elements": [
+                {
+                    "page_route_path": "/reports",
+                    "element_type": "table",
+                    "role": "grid",
+                    "text": "归档报表",
+                }
+            ],
+            "probe_applied": True,
+        }
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class PageVisitFirstBrowserFactory:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.session = PageVisitFirstBrowserSession()
+
+    async def open_context(
+        self,
+        *,
+        base_url: str,
+        storage_state: dict[str, object],
+    ) -> PageVisitFirstBrowserSession:
+        self.calls.append({"base_url": base_url, "storage_state": storage_state})
+        return self.session
 
 
 @pytest.mark.anyio
@@ -2440,3 +2543,34 @@ async def test_task6_crawl_baseline_state_signature_elements_keep_locator_candid
     assert [element.state_signature for element in elements] == ["users:default", "users:modal=create"]
     assert all(element.locator_candidates for element in elements)
     assert elements[0].locator_candidates[0]["strategy_type"] == "semantic"
+
+
+@pytest.mark.anyio
+async def test_run_crawl_discovers_page_before_state_probe_targets(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = PageVisitFirstBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[
+                PageCandidate(route_path="/dashboard", page_title="仪表盘", discovery_sources=["runtime_route_hints"]),
+                PageCandidate(route_path="/reports", page_title="报表中心", discovery_sources=["network_route_config"]),
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=FakeDomMenuExtractor(CrawlExtractionResult()),
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    assert result.pages_saved >= 2
+    assert result.elements_saved >= 2
+    assert "route_unresolved" not in result.warning_messages
+    assert browser_factory.session.visited_routes == ["/dashboard", "/reports"]
+    assert browser_factory.session.performed_targets == ["tab_switch"]

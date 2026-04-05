@@ -1,9 +1,11 @@
 import pytest
 
+from app.domains.crawler_service.extractors.page_discovery import build_page_visit_targets
 from app.domains.crawler_service.extractors.state_probe import (
     ControlledStateProbeExtractor,
     build_state_signature,
 )
+from app.domains.crawler_service.schemas import NavigationTargetResult, PageCandidate
 
 
 class FakeStateProbeSession:
@@ -194,6 +196,82 @@ class UnsafeOnlyStateProbeSession(FakeStateProbeSession):
         return []
 
 
+class PageVisitFirstStateProbeSession:
+    framework_hint = "react"
+
+    def __init__(self) -> None:
+        self.visited_routes: list[str] = []
+        self.performed_targets: list[str] = []
+        self.page_contexts = {
+            "/dashboard": {
+                "route_path": "/dashboard",
+                "resolved_route": "/dashboard",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "page_route_path": "/dashboard",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ],
+            },
+            "/reports": {
+                "route_path": "/reports",
+                "resolved_route": "/reports",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "page_route_path": "/reports",
+                        "element_type": "button",
+                        "role": "tab",
+                        "text": "已归档",
+                    }
+                ],
+            },
+        }
+
+    async def visit_page_target(
+        self,
+        *,
+        page_target: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope
+        route_path = str(page_target.get("route_hint") or page_target.get("route_path") or "")
+        self.visited_routes.append(route_path)
+        context = self.page_contexts[route_path]
+        return {
+            "route_path": context["route_path"],
+            "resolved_route": context["resolved_route"],
+            "state_context": dict(context["state_context"]),
+            "elements": [dict(element) for element in context["elements"]],
+        }
+
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope, page_context
+        self.performed_targets.append(str(target.get("target_kind") or ""))
+        return {
+            "route_path": "/reports",
+            "state_context": {"active_tab": "已归档"},
+            "elements": [
+                {
+                    "page_route_path": "/reports",
+                    "element_type": "table",
+                    "role": "grid",
+                    "text": "归档报表",
+                }
+            ],
+            "probe_applied": True,
+        }
+
+
 @pytest.mark.anyio
 async def test_state_probe_collects_representative_states_without_unsafe_actions():
     extractor = ControlledStateProbeExtractor()
@@ -288,3 +366,44 @@ async def test_state_probe_unsupported_action_is_warning_only_and_produces_no_st
     assert result.failure_reason is None
     assert result.elements == []
     assert "unsafe_action_rejected" in result.warning_messages
+
+
+@pytest.mark.anyio
+async def test_state_probe_visits_discovered_pages_before_deriving_state_targets():
+    browser_session = PageVisitFirstStateProbeSession()
+    page_candidates = [
+        PageCandidate(route_path="/dashboard", page_title="仪表盘"),
+        PageCandidate(route_path="/reports", page_title="报表中心"),
+    ]
+    page_targets = build_page_visit_targets(
+        pages=page_candidates,
+        navigation_targets=[
+            NavigationTargetResult(
+                target_key="page:/dashboard",
+                target_kind="page_route",
+                route_hint="/dashboard",
+                materialization_status="queued",
+            ),
+            NavigationTargetResult(
+                target_key="page:/reports",
+                target_kind="page_route",
+                route_hint="/reports",
+                materialization_status="queued",
+            ),
+        ],
+    )
+
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=browser_session,
+        system=None,
+        crawl_scope="full",
+        page_candidates=page_candidates,
+        navigation_targets=[target.to_record() for target in page_targets],
+    )
+
+    assert browser_session.visited_routes == ["/dashboard", "/reports"]
+    assert browser_session.performed_targets == ["tab_switch"]
+    assert {element.state_signature for element in result.elements} >= {
+        "dashboard:default",
+        "reports:tab=已归档",
+    }

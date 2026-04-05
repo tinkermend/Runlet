@@ -1,6 +1,10 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 新增分析文档 `docs/analyze/product_route_recommendation.md`，从“企业级自动化仿真巡检与测试平台”目标出发，明确 `Runlet` 近期应坚持自研的平台能力、适合集成的开源底座能力以及当前不应投入的方向。
+- 新增分析文档 `docs/analyze/duibi_analyze.md`，从产品定位、技术路线、能力星级、适合/不适合场景与平台演进启示五个维度，对 `Runlet` 与 `Midscene`、`Playwright CLI`、`bb-browser`、`browser-use`、`Cypress`、`agent-browser` 做系统对比。
+- 新增分析文档 `docs/analyze/wait_003.md`，整理当前阶段将 `asset_compile` 归入 `crawl` 同池运行的判断依据，明确其更适合作为采集后处理链的一部分，而不应与 `run_check` 共用正式检查执行池。
+- `crawler_service` 页面访问与状态探测主链重构为“先消费 page discovery 的页面访问目标，再从 page context 派生状态目标”，并补齐 `route_unresolved / route_visible_but_unreachable / action_not_applied` 等更细粒度 warning 透传；同时新增对应的 crawler/state probe 回归测试，覆盖 pages-first 访问顺序与状态上下文合并。
 - 新增通用采集健壮性与采集完整性增强设计文档：`docs/superpowers/specs/2026-04-05-crawler-resilience-and-crawl-completeness-design.md`，明确本轮优先通过通用 `crawler_service` 机制增强解决登录后菜单、页面与元素事实采集不完整问题，并提出“三段式采集引擎 + NavigationTarget + 路由稳定化 + 菜单 materialize + 状态探测”的主方案，以 `HotGo` 作为验证样本但不引入专属分支。
 - 新增通用采集健壮性与采集完整性增强实施计划：`docs/superpowers/plans/2026-04-05-crawler-resilience-and-crawl-completeness-plan.md`，将实现拆分为路由解析与稳定化底座、`NavigationTarget` 去重与预算、菜单 materialize、页面访问与状态探测重构、事实层持久化兼容以及 `HotGo` 样本回归六个可独立提交的任务。
 - 新增 `crawler_service/navigation_targets.py` 与对应测试，统一沉淀 `NavigationTarget`、去重键、预算拒绝原因和 materialization 状态；`page_discovery` 与 `state_probe` 现先产出导航目标，再分别做页面沉淀与状态动作执行，并在提取结果中暴露结构化 `navigation_targets` 诊断上下文。

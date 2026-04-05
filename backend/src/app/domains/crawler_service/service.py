@@ -76,6 +76,21 @@ class BrowserSession(Protocol):
 
     async def collect_state_probe_actions(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
+    async def visit_page_target(
+        self,
+        *,
+        page_target: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]: ...
+
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]: ...
+
     async def perform_state_probe_action(
         self,
         *,
@@ -1163,6 +1178,58 @@ async (targets) => {
                     return [item for item in collected if isinstance(item, dict)]
                 return []
 
+            async def visit_page_target(
+                self_nonlocal,
+                *,
+                page_target: dict[str, object],
+                crawl_scope: str,
+            ) -> dict[str, object]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                route_path = self_nonlocal._normalize_path(
+                    page_target.get("route_hint") or page_target.get("route_path")
+                )
+                warning_messages: list[str] = []
+                if route_path is None:
+                    warning_messages.append("route_unresolved")
+                    return {
+                        "route_path": "/",
+                        "resolved_route": "/",
+                        "state_context": {"active_tab": "default"},
+                        "elements": [],
+                        "warning_messages": warning_messages,
+                    }
+
+                await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
+                await self_nonlocal._wait_for_route_render()
+                await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+
+                route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                resolved_route = self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or route_path
+                if resolved_route != route_path:
+                    warning_messages.append("route_unresolved")
+
+                elements = await self_nonlocal._collect_current_page_elements(default_route=resolved_route)
+                metadata = await self_nonlocal.collect_page_metadata(crawl_scope="current")
+                if any(
+                    isinstance(item, dict)
+                    and (
+                        item.get("reachable") is False
+                        or (isinstance(item.get("status_code"), int) and item.get("status_code") >= 400)
+                    )
+                    for item in metadata
+                ):
+                    warning_messages.append("route_visible_but_unreachable")
+
+                return {
+                    "route_path": route_path,
+                    "resolved_route": resolved_route,
+                    "state_context": {"active_tab": "default"},
+                    "elements": elements,
+                    "page_metadata": metadata,
+                    "warning_messages": warning_messages,
+                }
+
             async def collect_state_probe_baseline(
                 self_nonlocal,
                 *,
@@ -1348,6 +1415,70 @@ async (targets) => {
                     "probe_apply_reason": execution_reason,
                 }
 
+            async def perform_navigation_target(
+                self_nonlocal,
+                *,
+                target: dict[str, object],
+                page_context: dict[str, object],
+                crawl_scope: str,
+            ) -> dict[str, object]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                route_path = self_nonlocal._normalize_path(target.get("route_hint") or target.get("route_path"))
+                current_route = self_nonlocal._normalize_path(
+                    page_context.get("resolved_route") or page_context.get("route_path")
+                )
+
+                if route_path is not None and route_path != current_route:
+                    await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
+                    await self_nonlocal._wait_for_route_render()
+                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                    current_route = self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or route_path
+                    if current_route != route_path:
+                        state_context = target.get("state_context")
+                        if not isinstance(state_context, dict):
+                            state_context = {}
+                        return {
+                            "route_path": route_path,
+                            "state_context": state_context,
+                            "elements": [],
+                            "probe_applied": False,
+                            "probe_apply_reason": "route_unresolved",
+                        }
+
+                action = dict(target)
+                if route_path is not None:
+                    action["route_path"] = route_path
+                state_context = action.get("state_context")
+                if not isinstance(state_context, dict):
+                    state_context = {}
+                execution_result = await self_nonlocal._evaluate_with_optional_arg(
+                    PlaywrightBrowserFactory._STATE_PROBE_EXECUTE_ACTION_SCRIPT,
+                    action,
+                )
+                applied = isinstance(execution_result, dict) and execution_result.get("applied") is True
+                execution_reason = (
+                    execution_result.get("reason")
+                    if isinstance(execution_result, dict) and isinstance(execution_result.get("reason"), str)
+                    else None
+                )
+                if applied:
+                    await self_nonlocal._wait_for_route_render()
+                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    elements = await self_nonlocal._collect_current_page_elements(
+                        default_route=current_route or route_path or "/"
+                    )
+                else:
+                    elements = []
+                return {
+                    "route_path": current_route or route_path or "/",
+                    "state_context": state_context,
+                    "elements": elements,
+                    "probe_applied": applied,
+                    "probe_apply_reason": execution_reason,
+                }
+
             async def _evaluate_with_optional_arg(
                 self_nonlocal,
                 script: str,
@@ -1362,6 +1493,24 @@ async (targets) => {
                         return {"applied": False, "reason": "action_execution_not_supported"}
                 except Exception:
                     return {"applied": False, "reason": "action_execution_not_supported"}
+
+            async def _collect_current_page_elements(
+                self_nonlocal,
+                *,
+                default_route: str,
+            ) -> list[dict[str, object]]:
+                collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
+                if not isinstance(collected, list):
+                    return []
+                elements: list[dict[str, object]] = []
+                for item in collected:
+                    if not isinstance(item, dict):
+                        continue
+                    payload = dict(item)
+                    if not payload.get("page_route_path"):
+                        payload["page_route_path"] = default_route
+                    elements.append(payload)
+                return elements
 
             async def _collect_materialized_menu_nodes(
                 self_nonlocal,
@@ -1541,6 +1690,8 @@ class CrawlerService:
                 browser_session=browser_session,
                 system=system,
                 crawl_scope=crawl_scope,
+                page_candidates=page_discovery_result.pages,
+                navigation_targets=page_discovery_result.navigation_targets,
             )
         finally:
             await browser_session.close()

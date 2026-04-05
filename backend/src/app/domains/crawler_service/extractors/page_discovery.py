@@ -687,3 +687,132 @@ class _NavigationTargetSeed:
 class _NavigationTargetGroup:
     target: NavigationTarget
     seeds: list[_NavigationTargetSeed] = field(default_factory=list)
+
+
+def build_page_visit_targets(
+    *,
+    pages: list[PageCandidate],
+    navigation_targets: list[NavigationTargetResult | dict[str, object]],
+) -> list[NavigationTarget]:
+    registry = NavigationTargetRegistry(
+        max_total_targets=max(8, len(pages) + len(navigation_targets) + 4),
+        max_targets_per_route=4,
+        max_targets_per_kind=max(8, len(pages) + 4),
+        max_children_per_parent=max(8, len(pages) + 4),
+    )
+
+    for raw_target in navigation_targets:
+        record = raw_target if isinstance(raw_target, dict) else raw_target.model_dump()
+        if record.get("target_kind") != "page_route":
+            continue
+        route_hint = _normalize_route_path(record.get("route_hint") or record.get("route_path"))
+        if route_hint is None:
+            continue
+        registry.add(
+            NavigationTarget(
+                target_kind="page_route",
+                route_hint=route_hint,
+                locator_candidates=_normalize_locator_candidates(record.get("locator_candidates")),
+                state_context=_normalize_state_context(record.get("state_context")),
+                discovery_source=_normalize_text(record.get("discovery_source")),
+                metadata=_normalize_page_target_metadata(record.get("metadata")),
+            )
+        )
+
+    for page in pages:
+        route_path = _normalize_route_path(page.route_path)
+        if route_path is None:
+            continue
+        registry.add(
+            NavigationTarget(
+                target_kind="page_route",
+                route_hint=route_path,
+                discovery_source=(page.discovery_sources[0] if page.discovery_sources else None),
+                metadata=_normalize_page_target_metadata(
+                    {
+                        "page_title": page.page_title,
+                        "discovery_sources": page.discovery_sources,
+                    }
+                ),
+            )
+        )
+
+    return registry.targets
+
+
+def _normalize_page_target_metadata(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    metadata: dict[str, object] = {}
+    for key, raw_value in value.items():
+        normalized_key = _normalize_text(key)
+        if normalized_key is None:
+            continue
+        if isinstance(raw_value, str):
+            cleaned = raw_value.strip()
+            if cleaned:
+                metadata[normalized_key] = cleaned
+        elif isinstance(raw_value, list):
+            items = [item for item in raw_value if isinstance(item, (str, int, float, bool))]
+            if items:
+                metadata[normalized_key] = items
+        elif isinstance(raw_value, (int, float, bool)):
+            metadata[normalized_key] = raw_value
+    return metadata
+
+
+def _normalize_route_path(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    route_path = value.strip()
+    if not route_path or not route_path.startswith("/"):
+        return None
+    return route_path.rstrip("/") or "/"
+
+
+def _normalize_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _normalize_state_context(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    state_context: dict[str, object] = {}
+    for key, raw_value in value.items():
+        normalized_key = _normalize_text(key)
+        if normalized_key is None:
+            continue
+        if isinstance(raw_value, str):
+            cleaned = raw_value.strip()
+            if cleaned:
+                state_context[normalized_key] = cleaned
+        elif isinstance(raw_value, (int, float, bool)):
+            state_context[normalized_key] = raw_value
+    return state_context
+
+
+def _normalize_locator_candidates(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for candidate in value:
+        if not isinstance(candidate, dict):
+            continue
+        strategy_type = _normalize_text(candidate.get("strategy_type"))
+        selector = _normalize_text(candidate.get("selector"))
+        if strategy_type is None or selector is None:
+            continue
+        serialized = json.dumps(
+            {"strategy_type": strategy_type, "selector": selector},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if serialized in seen:
+            continue
+        seen.add(serialized)
+        normalized.append({"strategy_type": strategy_type, "selector": selector})
+    return normalized
