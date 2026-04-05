@@ -360,6 +360,11 @@ def test_page_elements_table_has_materialization_metadata(inspector):
     assert {"materialized_by", "navigation_diagnostics"} <= columns
 
 
+def test_pages_table_has_navigation_diagnostics(inspector):
+    columns = {column["name"] for column in inspector.get_columns("pages")}
+    assert {"navigation_diagnostics"} <= columns
+
+
 def test_execution_run_created_at_migration_backfills_from_artifacts(tmp_path):
     project_root = Path(__file__).resolve().parents[2]
     backend_root = project_root / "backend"
