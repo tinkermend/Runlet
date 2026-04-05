@@ -47,7 +47,7 @@ def merge_menu_skeleton_and_materialized_nodes(
     materialized: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
-    index_by_key: dict[tuple[str, str | None, int, str | None], int] = {}
+    index_by_key: dict[tuple[str, str | None, int], int] = {}
 
     for raw_item in [*skeleton, *materialized]:
         normalized = _normalize_menu_node(raw_item)
@@ -57,7 +57,6 @@ def merge_menu_skeleton_and_materialized_nodes(
             normalized["label"],
             normalized.get("parent_label"),
             normalized["depth"],
-            normalized.get("route_path") or normalized.get("page_route_path"),
         )
         existing_index = index_by_key.get(key)
         if existing_index is None:
@@ -67,7 +66,14 @@ def merge_menu_skeleton_and_materialized_nodes(
             index_by_key[key] = len(merged) - 1
             continue
         existing = merged[existing_index]
-        for field_name in ("route_path", "page_route_path", "role", "aria_label", "entry_type", "aria_expanded"):
+        for field_name in (
+            "route_path",
+            "page_route_path",
+            "role",
+            "aria_label",
+            "entry_type",
+            "aria_expanded",
+        ):
             if existing.get(field_name) is None and normalized.get(field_name) is not None:
                 existing[field_name] = normalized[field_name]
         if existing.get("parent_label") is None and normalized.get("parent_label") is not None:
@@ -179,6 +185,9 @@ class DomMenuTraversalExtractor:
         return signals
 
     async def _collect_menu_items(self, *, browser_session, crawl_scope: str) -> list[dict[str, Any]]:
+        collector = getattr(browser_session, "collect_dom_menu_nodes", None)
+        if callable(collector):
+            return self._ensure_dict_list(await collector(crawl_scope=crawl_scope))
         skeleton_collector = getattr(browser_session, "collect_dom_menu_skeleton", None)
         if callable(skeleton_collector):
             skeleton = self._ensure_dict_list(await skeleton_collector(crawl_scope=crawl_scope))
@@ -195,9 +204,6 @@ class DomMenuTraversalExtractor:
                     materialized=materialized,
                 )
             return skeleton
-        collector = getattr(browser_session, "collect_dom_menu_nodes", None)
-        if callable(collector):
-            return self._ensure_dict_list(await collector(crawl_scope=crawl_scope))
         return self._ensure_dict_list(getattr(browser_session, "dom_menu_nodes", []))
 
     async def _collect_element_items(self, *, browser_session, crawl_scope: str) -> list[dict[str, Any]]:

@@ -11,7 +11,10 @@ from app.domains.crawler_service.schemas import (
     MenuCandidate,
     PageCandidate,
 )
-from app.domains.crawler_service.extractors.dom_menu import DomMenuTraversalExtractor
+from app.domains.crawler_service.extractors.dom_menu import (
+    DomMenuTraversalExtractor,
+    merge_menu_skeleton_and_materialized_nodes,
+)
 from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowserFactory
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 
@@ -394,6 +397,7 @@ class MaterializeAwareFakeCrawlerPage:
         self.current_url = "about:blank"
         self.materialize_calls: list[list[dict[str, object]]] = []
         self.menu_expanded = False
+        self.route_hints = [{"path": "/dashboard", "title": "仪表盘"}]
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         self.goto_calls.append((url, wait_until))
@@ -413,7 +417,7 @@ class MaterializeAwareFakeCrawlerPage:
                 "history_route": None,
             }
         if "__RUNLET_ROUTE_HINTS__" in script:
-            return [{"path": "/dashboard", "title": "仪表盘"}]
+            return self.route_hints
         if "__RUNLET_MENU_NODES__" in script:
             nodes = [
                 {
@@ -458,6 +462,15 @@ class MaterializeAwareFakeCrawlerPage:
                 }
             ]
         if "__RUNLET_PAGE_ELEMENTS__" in script:
+            if self.current_url.endswith("/system/admin"):
+                return [
+                    {
+                        "page_route_path": "/system/admin",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "新增管理员",
+                    }
+                ]
             return []
         if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
             return []
@@ -1117,6 +1130,66 @@ async def test_collect_dom_menu_nodes_materializes_children_after_expand(monkeyp
     assert context.closed is True
     assert browser.closed is True
     assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_collects_dom_elements_from_materialized_submenu_routes(monkeypatch):
+    page, context, browser, chromium, playwright = install_materialize_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    dom_elements = await session.collect_dom_elements(crawl_scope="full")
+    await session.close()
+
+    assert dom_elements == [
+        {
+            "page_route_path": "/system/admin",
+            "element_type": "button",
+            "role": "button",
+            "text": "新增管理员",
+        }
+    ]
+    assert page.materialize_calls
+    assert ("https://erp.example.com/system/admin", "domcontentloaded") in page.goto_calls
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+def test_merge_menu_skeleton_and_materialized_nodes_merges_route_back_into_placeholder():
+    merged = merge_menu_skeleton_and_materialized_nodes(
+        skeleton=[
+            {
+                "label": "权限管理",
+                "route_path": None,
+                "page_route_path": None,
+                "depth": 0,
+                "order": 0,
+                "role": "menuitem",
+            }
+        ],
+        materialized=[
+            {
+                "label": "权限管理",
+                "route_path": "/system/admin",
+                "page_route_path": "/system/admin",
+                "depth": 0,
+                "order": 0,
+                "role": "menuitem",
+            }
+        ],
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["label"] == "权限管理"
+    assert merged[0]["route_path"] == "/system/admin"
+    assert merged[0]["page_route_path"] == "/system/admin"
 
 
 @pytest.mark.anyio

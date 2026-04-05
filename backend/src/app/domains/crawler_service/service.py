@@ -974,15 +974,7 @@ async (targets) => {
                 *,
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
-                skeleton = await self_nonlocal.collect_dom_menu_skeleton(crawl_scope=crawl_scope)
-                materialized = await self_nonlocal.materialize_navigation_targets(
-                    targets=build_menu_expand_targets(skeleton),
-                    crawl_scope=crawl_scope,
-                )
-                return merge_menu_skeleton_and_materialized_nodes(
-                    skeleton=skeleton,
-                    materialized=materialized,
-                )
+                return await self_nonlocal._collect_materialized_menu_nodes(crawl_scope=crawl_scope)
 
             async def collect_dom_elements(
                 self_nonlocal,
@@ -991,7 +983,7 @@ async (targets) => {
             ) -> list[dict[str, object]]:
                 await self_nonlocal._ensure_settled()
                 route_hints = await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
-                menu_nodes = await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                menu_nodes = await self_nonlocal._collect_materialized_menu_nodes(crawl_scope=crawl_scope)
                 route_paths: list[str] = []
                 seen_routes: set[str] = set()
 
@@ -1288,6 +1280,21 @@ async (targets) => {
                         return {"applied": False, "reason": "action_execution_not_supported"}
                 except Exception:
                     return {"applied": False, "reason": "action_execution_not_supported"}
+
+            async def _collect_materialized_menu_nodes(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                skeleton = await self_nonlocal.collect_dom_menu_skeleton(crawl_scope=crawl_scope)
+                materialized = await self_nonlocal.materialize_navigation_targets(
+                    targets=build_menu_expand_targets(skeleton),
+                    crawl_scope=crawl_scope,
+                )
+                return merge_menu_skeleton_and_materialized_nodes(
+                    skeleton=skeleton,
+                    materialized=materialized,
+                )
 
             def _ensure_dict_list(self_nonlocal, value: object) -> list[dict[str, object]]:
                 if not isinstance(value, list):
