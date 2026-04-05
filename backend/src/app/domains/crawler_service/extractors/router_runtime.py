@@ -34,11 +34,25 @@ class RuntimeRouteHintExtractor:
         browser_session,
         crawl_scope: str,
     ) -> list[dict[str, Any]]:
+        route_snapshot = await self._collect_route_snapshot(
+            browser_session=browser_session,
+            crawl_scope=crawl_scope,
+        )
         route_hints = await self._collect_route_hints(
             browser_session=browser_session,
             crawl_scope=crawl_scope,
         )
         signals: list[dict[str, Any]] = []
+        resolved_route = self._normalize_path(route_snapshot.get("resolved_route"))
+        if resolved_route is not None:
+            route_source = self._to_clean_text(route_snapshot.get("route_source")) or "runtime_snapshot"
+            signals.append(
+                {
+                    "route_path": resolved_route,
+                    "discovery_sources": ["runtime_route_snapshot"],
+                    "context_constraints": {"route_source": route_source},
+                }
+            )
         for hint in route_hints:
             route_path = self._normalize_path(hint.get("path") or hint.get("route_path"))
             if route_path is None:
@@ -109,6 +123,15 @@ class RuntimeRouteHintExtractor:
             collected = await collector(crawl_scope=crawl_scope)
             return self._ensure_dict_list(collected)
         return self._ensure_dict_list(getattr(browser_session, "route_hints", []))
+
+    async def _collect_route_snapshot(self, *, browser_session, crawl_scope: str) -> dict[str, Any]:
+        collector = getattr(browser_session, "collect_route_snapshot", None)
+        if not callable(collector):
+            return {}
+        collected = await collector(crawl_scope=crawl_scope)
+        if isinstance(collected, dict):
+            return collected
+        return {}
 
     def _ensure_dict_list(self, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):

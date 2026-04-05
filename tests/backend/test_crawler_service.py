@@ -938,6 +938,29 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
 
 
 @pytest.mark.anyio
+async def test_playwright_browser_factory_session_collects_resolved_route_snapshot(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    await session.collect_dom_elements(crawl_scope="full")
+    snapshot = await session.collect_route_snapshot(crawl_scope="current")
+    await session.close()
+
+    assert snapshot["resolved_route"] == "/users"
+    assert snapshot["route_source"] in {"pathname", "router", "hash", "history"}
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
 async def test_playwright_browser_factory_session_exposes_controlled_state_probe_hooks(monkeypatch):
     page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
     factory = PlaywrightBrowserFactory()

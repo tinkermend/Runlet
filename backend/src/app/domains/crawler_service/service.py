@@ -4,11 +4,13 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Protocol
+from urllib.parse import urlparse
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
+from app.domains.crawler_service.extractors.app_readiness import evaluate_app_readiness
 from app.domains.crawler_service.extractors.dom_menu import (
     DomMenuExtractor,
     DomMenuTraversalExtractor,
@@ -21,6 +23,7 @@ from app.domains.crawler_service.extractors.router_runtime import (
     RuntimeRouteHintExtractor,
     RouterRuntimeExtractor,
 )
+from app.domains.crawler_service.extractors.route_resolution import resolve_route_snapshot
 from app.domains.crawler_service.extractors.state_probe import (
     ControlledStateProbeExtractor,
     StateProbeExtractor,
@@ -46,6 +49,7 @@ class BrowserSession(Protocol):
     framework_hint: str | None
 
     async def collect_route_hints(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+    async def collect_route_snapshot(self, *, crawl_scope: str) -> dict[str, object]: ...
 
     async def collect_dom_menu_nodes(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
@@ -154,6 +158,32 @@ class PlaywrightBrowserFactory:
   }
 
   return candidates;
+}
+"""
+    _ROUTE_RUNTIME_SNAPSHOT_SCRIPT = """
+() => {
+  const __RUNLET_ROUTE_SNAPSHOT__ = true;
+  const toRoute = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed || null;
+  };
+  const hash = toRoute(window.location.hash);
+  const routerCurrent = toRoute(
+    window.__NEXT_DATA__?.page
+      || window.__INITIAL_STATE__?.router?.location?.pathname
+      || window.__VUE_ROUTER__?.currentRoute?.value?.path
+      || window.__VUE_ROUTER__?.currentRoute?.path
+      || window.$router?.currentRoute?.value?.path
+      || window.$router?.currentRoute?.path
+  );
+  const historyRoute = toRoute(window.history.state?.as || window.history.state?.url || window.history.state?.path);
+  return {
+    pathname: toRoute(window.location.pathname),
+    location_hash: hash,
+    router_route: routerCurrent,
+    history_route: historyRoute,
+  };
 }
 """
     _MENU_NODES_SCRIPT = """
@@ -575,6 +605,19 @@ class PlaywrightBrowserFactory:
                 if self_nonlocal._settled:
                     return
                 await page.wait_for_timeout(PlaywrightBrowserFactory._INITIAL_SETTLE_MS)
+                samples: list[dict[str, object]] = []
+                for _ in range(2):
+                    route_snapshot = await self_nonlocal.collect_route_snapshot(crawl_scope="current")
+                    samples.append(
+                        {
+                            "resolved_route": route_snapshot.get("resolved_route"),
+                            "shell_ready": True,
+                            "content_ready": bool(route_snapshot.get("resolved_route")),
+                        }
+                    )
+                readiness = evaluate_app_readiness(samples=samples)
+                if not (readiness.shell_ready and readiness.route_ready and readiness.content_ready):
+                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
                 self_nonlocal._settled = True
 
             async def collect_route_hints(
@@ -585,6 +628,37 @@ class PlaywrightBrowserFactory:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
                 return await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
+
+            async def collect_route_snapshot(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> dict[str, object]:
+                del crawl_scope
+                runtime_snapshot_raw = await self_nonlocal._evaluate_with_optional_arg(
+                    PlaywrightBrowserFactory._ROUTE_RUNTIME_SNAPSHOT_SCRIPT,
+                    {},
+                )
+                runtime_snapshot = runtime_snapshot_raw if isinstance(runtime_snapshot_raw, dict) else {}
+                current_url = self_nonlocal._clean_text(
+                    getattr(page, "url", None) or getattr(page, "current_url", None)
+                )
+                fallback_pathname, fallback_hash = self_nonlocal._parse_current_location(current_url)
+
+                route_snapshot = resolve_route_snapshot(
+                    pathname=runtime_snapshot.get("pathname") or fallback_pathname,
+                    location_hash=runtime_snapshot.get("location_hash") or fallback_hash,
+                    router_route=runtime_snapshot.get("router_route"),
+                    history_route=runtime_snapshot.get("history_route"),
+                )
+                return {
+                    "resolved_route": route_snapshot.resolved_route,
+                    "route_source": route_snapshot.route_source,
+                    "pathname": route_snapshot.pathname,
+                    "hash_route": route_snapshot.hash_route,
+                    "router_route": route_snapshot.router_route,
+                    "history_route": route_snapshot.history_route,
+                }
 
             async def collect_dom_menu_nodes(
                 self_nonlocal,
@@ -926,6 +1000,18 @@ class PlaywrightBrowserFactory:
                     return None
                 cleaned = value.strip()
                 return cleaned or None
+
+            def _parse_current_location(self_nonlocal, current_url: str | None) -> tuple[str | None, str | None]:
+                if current_url is None:
+                    return None, None
+                try:
+                    parsed = urlparse(current_url)
+                except Exception:
+                    return None, None
+                pathname = parsed.path or "/"
+                location_hash = parsed.fragment
+                normalized_hash = f"#{location_hash}" if location_hash else None
+                return pathname, normalized_hash
 
             async def _wait_for_route_render(self_nonlocal) -> None:
                 waiter = getattr(page, "wait_for_function", None)
