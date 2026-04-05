@@ -4,6 +4,7 @@
 - 新增分析文档 `docs/analyze/product_route_recommendation.md`，从“企业级自动化仿真巡检与测试平台”目标出发，明确 `Runlet` 近期应坚持自研的平台能力、适合集成的开源底座能力以及当前不应投入的方向。
 - 新增分析文档 `docs/analyze/duibi_analyze.md`，从产品定位、技术路线、能力星级、适合/不适合场景与平台演进启示五个维度，对 `Runlet` 与 `Midscene`、`Playwright CLI`、`bb-browser`、`browser-use`、`Cypress`、`agent-browser` 做系统对比。
 - 新增分析文档 `docs/analyze/wait_003.md`，整理当前阶段将 `asset_compile` 归入 `crawl` 同池运行的判断依据，明确其更适合作为采集后处理链的一部分，而不应与 `run_check` 共用正式检查执行池。
+- 新增 `HotGo-like` 采集完整性回归样本：`tests/backend/test_crawler_service.py` 现固定 `hash route + 懒菜单加载 + materialize 子菜单` 时序，要求 crawl 至少产出 `3` 个页面、`2` 个菜单和 `2` 个元素，防止回退到只剩根页面 `/` 的旧行为；同时将该最低门槛补充进采集完整性设计文档。
 - `crawler_service` 页面访问与状态探测主链重构为“先消费 page discovery 的页面访问目标，再从 page context 派生状态目标”，并补齐 `route_unresolved / route_visible_but_unreachable / action_not_applied` 等更细粒度 warning 透传；同时新增对应的 crawler/state probe 回归测试，覆盖 pages-first 访问顺序与状态上下文合并。
 - 修正 page-first 状态探测执行契约：派发到真实浏览器执行层的导航动作现统一补齐 `entry_type / interaction_type`，不再依赖 `target_kind` 偶然命中；同时补充 page-first 失败明细透传回归，确保 `rejection_detail` 与 warning 同步保留。
 - 新增通用采集健壮性与采集完整性增强设计文档：`docs/superpowers/specs/2026-04-05-crawler-resilience-and-crawl-completeness-design.md`，明确本轮优先通过通用 `crawler_service` 机制增强解决登录后菜单、页面与元素事实采集不完整问题，并提出“三段式采集引擎 + NavigationTarget + 路由稳定化 + 菜单 materialize + 状态探测”的主方案，以 `HotGo` 作为验证样本但不引入专属分支。

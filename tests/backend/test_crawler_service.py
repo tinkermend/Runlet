@@ -406,6 +406,259 @@ def install_state_probe_aware_async_api(
     return page, context, browser, chromium, playwright
 
 
+class HotgoLikeFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.current_url = "about:blank"
+        self.current_route = "/"
+        self.current_hash = "#/dashboard"
+        self.shell_ready = False
+        self.content_ready = False
+        self.menu_loaded = False
+        self.materialize_calls: list[list[dict[str, object]]] = []
+        self.route_snapshot_eval_calls = 0
+        self.readiness_shell_eval_calls = 0
+        self.executed_probe_actions: list[str] = []
+        self.active_states: dict[str, str] = {}
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        del wait_until
+        self.goto_calls.append((url, "domcontentloaded"))
+        self.current_url = url
+        parsed = urlparse(url if url.startswith("http") else "https://erp.example.com/")
+        if parsed.path and parsed.path != "/":
+            self.current_route = parsed.path
+            self.current_hash = None
+
+    async def evaluate(self, script: str, *args):
+        if "document.readyState" in script and "shell_ready" in script:
+            self.readiness_shell_eval_calls += 1
+            return {"shell_ready": self.shell_ready}
+        if "visibleSelector" in script:
+            return self.content_ready
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            self.route_snapshot_eval_calls += 1
+            if self.current_route == "/":
+                return {
+                    "pathname": "/",
+                    "location_hash": self.current_hash,
+                    "router_route": None,
+                    "history_route": None,
+                }
+            return {
+                "pathname": self.current_route,
+                "location_hash": None,
+                "router_route": self.current_route,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [
+                {"path": "/dashboard", "title": "工作台"},
+                {"path": "/workbench", "title": "分析页"},
+                {"path": "/system/users", "title": "用户管理"},
+            ]
+        if "__RUNLET_MENU_NODES__" in script:
+            nodes = [
+                {
+                    "label": "工作台",
+                    "route_path": "/dashboard",
+                    "page_route_path": "/dashboard",
+                    "depth": 0,
+                    "order": 0,
+                    "role": "menuitem",
+                },
+                {
+                    "label": "分析页",
+                    "route_path": "/workbench",
+                    "page_route_path": "/workbench",
+                    "depth": 0,
+                    "order": 1,
+                    "role": "menuitem",
+                },
+                {
+                    "label": "系统管理",
+                    "route_path": None,
+                    "page_route_path": None,
+                    "depth": 0,
+                    "order": 2,
+                    "role": "menuitem",
+                    "entry_type": "menu_expand",
+                    "aria_expanded": "true" if self.menu_loaded else "false",
+                },
+            ]
+            return nodes
+        if "__RUNLET_MATERIALIZE_NAVIGATION_TARGETS__" in script:
+            targets = args[0] if args else []
+            normalized_targets = [dict(target) for target in targets if isinstance(target, dict)]
+            self.materialize_calls.append(normalized_targets)
+            if self.menu_loaded and any(target.get("label") == "系统管理" for target in normalized_targets):
+                return [
+                    {
+                        "label": "用户管理",
+                        "route_path": "/system/users",
+                        "page_route_path": "/system/users",
+                        "depth": 1,
+                        "order": 3,
+                        "role": "menuitem",
+                        "parent_label": "系统管理",
+                    }
+                ]
+            return []
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            if self.current_route == "/dashboard":
+                return [
+                    {
+                        "page_route_path": "/dashboard",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ]
+            if self.current_route == "/workbench":
+                return [
+                    {
+                        "page_route_path": "/workbench",
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "访问统计",
+                    }
+                ]
+            if self.current_route == "/system/users":
+                state = self.active_states.get("/system/users", "default")
+                if state == "tab=disabled":
+                    return [
+                        {
+                            "page_route_path": "/system/users",
+                            "element_type": "table",
+                            "role": "grid",
+                            "text": "禁用用户列表",
+                        }
+                    ]
+                if state == "page=2":
+                    return [
+                        {
+                            "page_route_path": "/system/users",
+                            "element_type": "table",
+                            "role": "grid",
+                            "text": "第2页用户列表",
+                        }
+                    ]
+                return [
+                    {
+                        "page_route_path": "/system/users",
+                        "element_type": "table",
+                        "role": "grid",
+                        "text": "用户列表",
+                    },
+                    {
+                        "page_route_path": "/system/users",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "新增用户",
+                    },
+                    {
+                        "page_route_path": "/system/users",
+                        "element_type": "tab",
+                        "role": "tab",
+                        "text": "禁用",
+                    },
+                    {
+                        "page_route_path": "/system/users",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "2",
+                    },
+                ]
+            return []
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_STATE_PROBE_EXECUTE__" in script:
+            action = args[0] if args else {}
+            if not isinstance(action, dict):
+                action = {}
+            entry_type = str(action.get("entry_type") or "")
+            self.executed_probe_actions.append(entry_type)
+            context = action.get("state_context")
+            if not isinstance(context, dict):
+                context = {}
+            if self.current_route == "/system/users" and entry_type == "tab_switch":
+                self.active_states["/system/users"] = f"tab={context.get('active_tab', 'default')}"
+                return {"applied": True}
+            if self.current_route == "/system/users" and entry_type == "paginate_probe":
+                self.active_states["/system/users"] = f"page={context.get('page_number', 1)}"
+                return {"applied": True}
+            return {"applied": False, "reason": "action_not_applied"}
+        if "__RUNLET_PAGE_METADATA__" in script:
+            titles = {
+                "/dashboard": "工作台",
+                "/workbench": "分析页",
+                "/system/users": "用户管理",
+            }
+            return [
+                {
+                    "route_path": self.current_route,
+                    "page_title": titles.get(self.current_route, "HotGo"),
+                    "reachable": True,
+                    "status_code": 200,
+                }
+            ]
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.shell_ready = True
+        if timeout >= 2000 and self.shell_ready:
+            self.content_ready = True
+            self.menu_loaded = True
+            if self.current_route == "/":
+                self.current_route = "/dashboard"
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class HotgoLikeFakeCrawlerBrowser(FakeCrawlerBrowser):
+    async def new_context(
+        self, *, base_url: str, storage_state: dict[str, object]
+    ) -> FakeCrawlerContext:
+        assert base_url == "https://erp.example.com"
+        assert storage_state.get("cookies") == [{"name": "sid", "value": "abc123"}]
+        return self.context
+
+
+def install_hotgo_like_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    HotgoLikeFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = HotgoLikeFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = HotgoLikeFakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
 class MaterializeAwareFakeCrawlerPage:
     def __init__(self) -> None:
         self.goto_calls: list[tuple[str, str]] = []
@@ -1473,6 +1726,40 @@ async def test_run_crawl_uses_default_real_extractors(
     assert all((menu.playwright_locator or "").startswith("role=menuitem") for menu in menus)
     assert len(elements) == 1
     assert elements[0].playwright_locator == "role=button[name='新增用户']"
+
+
+@pytest.mark.anyio
+async def test_hotgo_like_session_yields_non_root_pages_and_menu_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    page, context, browser, chromium, playwright = install_hotgo_like_async_api(monkeypatch)
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=PlaywrightBrowserFactory(),
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    pages = db_session.exec(select(Page).order_by(Page.route_path, Page.id)).all()
+    menus = db_session.exec(select(MenuNode).order_by(MenuNode.sort_order, MenuNode.id)).all()
+    elements = db_session.exec(select(PageElement).order_by(PageElement.id)).all()
+
+    assert result.status == "success"
+    assert result.pages_saved >= 3
+    assert result.menus_saved >= 2
+    assert result.elements_saved >= 2
+    assert [page.route_path for page in pages] != ["/"]
+    assert any(menu.label == "系统管理" for menu in menus)
+    assert page.materialize_calls
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+    assert len(elements) == result.elements_saved
 
 
 @pytest.mark.anyio
