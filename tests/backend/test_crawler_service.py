@@ -72,6 +72,7 @@ class FakeCrawlerPage:
         self.current_url = "about:blank"
         self.route_snapshot_eval_calls = 0
         self.readiness_shell_eval_calls = 0
+        self.fail_content_probe = False
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         self.goto_calls.append((url, wait_until))
@@ -82,6 +83,8 @@ class FakeCrawlerPage:
             self.readiness_shell_eval_calls += 1
             return {"shell_ready": self.settled}
         if "visibleSelector" in script:
+            if self.fail_content_probe:
+                raise RuntimeError("content probe failed")
             return self.settled
         if not self.settled:
             if "__RUNLET_ROUTE_SNAPSHOT__" in script:
@@ -1015,6 +1018,31 @@ async def test_playwright_browser_factory_readiness_polling_is_used_once_and_cac
     assert first_shell_samples >= 2
     assert page.route_snapshot_eval_calls == first_snapshot_samples
     assert page.readiness_shell_eval_calls == first_shell_samples
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_readiness_degrades_when_content_probe_fails(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    page.fail_content_probe = True
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    route_hints = await session.collect_route_hints(crawl_scope="full")
+    await session.close()
+
+    assert route_hints
+    assert route_hints[0]["path"] == "/dashboard"
+    assert page.route_snapshot_eval_calls >= 2
+    assert page.readiness_shell_eval_calls >= 2
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True

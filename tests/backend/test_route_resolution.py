@@ -41,6 +41,19 @@ def test_resolve_route_uses_history_when_router_and_hash_missing() -> None:
     assert snapshot.route_source == "history"
 
 
+def test_resolve_route_normalizes_query_and_fragment() -> None:
+    snapshot = resolve_route_snapshot(
+        pathname="/users/?tab=all#section",
+        location_hash="#/ignored?x=1",
+        router_route="/users/?from=router#detail",
+        history_route=None,
+    )
+
+    assert snapshot.resolved_route == "/users"
+    assert snapshot.pathname == "/users"
+    assert snapshot.router_route == "/users"
+
+
 def test_app_readiness_requires_route_and_content_to_stabilize() -> None:
     readiness = evaluate_app_readiness(
         samples=[
@@ -151,6 +164,25 @@ async def test_collect_route_signals_normalizes_trailing_slash_for_merging() -> 
         async def collect_route_snapshot(self, *, crawl_scope: str):
             del crawl_scope
             return {"resolved_route": "/users", "route_source": "router"}
+
+    extractor = RuntimeRouteHintExtractor()
+    signals = await extractor.collect_route_signals(browser_session=FakeSession(), crawl_scope="full")
+
+    assert len(signals) == 1
+    assert signals[0]["route_path"] == "/users"
+    assert signals[0]["discovery_sources"] == ["runtime_route_hints", "runtime_route_snapshot"]
+
+
+@pytest.mark.anyio
+async def test_collect_route_signals_normalizes_query_fragment_for_merging() -> None:
+    class FakeSession:
+        async def collect_route_hints(self, *, crawl_scope: str):
+            del crawl_scope
+            return [{"path": "/users/?tab=all#x", "title": "用户管理"}]
+
+        async def collect_route_snapshot(self, *, crawl_scope: str):
+            del crawl_scope
+            return {"resolved_route": "/users?source=snapshot#y", "route_source": "router"}
 
     extractor = RuntimeRouteHintExtractor()
     signals = await extractor.collect_route_signals(browser_session=FakeSession(), crawl_scope="full")

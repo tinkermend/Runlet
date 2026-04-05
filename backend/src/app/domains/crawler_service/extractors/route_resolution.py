@@ -19,6 +19,9 @@ def normalize_route(value: object) -> str | None:
     route = value.strip()
     if not route or not route.startswith("/"):
         return None
+    route = route.split("#", 1)[0].split("?", 1)[0].strip()
+    if not route or not route.startswith("/"):
+        return None
     return route.rstrip("/") or "/"
 
 

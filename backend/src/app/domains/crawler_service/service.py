@@ -998,7 +998,10 @@ class PlaywrightBrowserFactory:
                 shell_ready = (
                     isinstance(shell_ready_raw, dict) and shell_ready_raw.get("shell_ready") is True
                 )
-                content_ready = bool(await page.evaluate(PlaywrightBrowserFactory._ROUTE_RENDER_READY_SCRIPT))
+                try:
+                    content_ready = bool(await page.evaluate(PlaywrightBrowserFactory._ROUTE_RENDER_READY_SCRIPT))
+                except Exception:
+                    content_ready = False
                 return {
                     "resolved_route": route_snapshot.get("resolved_route"),
                     "shell_ready": shell_ready,

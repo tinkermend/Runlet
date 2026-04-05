@@ -169,6 +169,9 @@ class RuntimeRouteHintExtractor:
         path = value.strip()
         if not path or not path.startswith("/"):
             return None
+        path = path.split("#", 1)[0].split("?", 1)[0].strip()
+        if not path or not path.startswith("/"):
+            return None
         return path.rstrip("/") or "/"
 
     def _to_clean_text(self, value: Any) -> str | None:
