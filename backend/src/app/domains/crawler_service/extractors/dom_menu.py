@@ -7,7 +7,7 @@ from app.domains.crawler_service.schemas import CrawlExtractionResult, ElementCa
 
 def build_menu_expand_targets(skeleton: list[dict[str, Any]]) -> list[dict[str, object]]:
     targets: list[dict[str, object]] = []
-    seen: set[tuple[str, str, str | None, int]] = set()
+    seen: set[tuple[object, ...]] = set()
     for item in skeleton:
         if not isinstance(item, dict):
             continue
@@ -21,7 +21,20 @@ def build_menu_expand_targets(skeleton: list[dict[str, Any]]) -> list[dict[str, 
         target_kind = "tree_expand" if entry_type == "tree_expand" else "menu_expand"
         parent_label = _clean_text_value(item.get("parent_label"))
         depth = _to_int_value(item.get("depth"))
-        dedupe_key = (target_kind, label, parent_label, depth)
+        order = _to_int_value(item.get("order") or item.get("sort_order"))
+        route_path = _normalize_path_value(item.get("route_path") or item.get("path"))
+        page_route_path = _normalize_path_value(item.get("page_route_path") or item.get("route_path"))
+        dedupe_key = (
+            target_kind,
+            label,
+            parent_label,
+            depth,
+            order,
+            route_path,
+            page_route_path,
+            _clean_text_value(item.get("role")),
+            _clean_text_value(item.get("aria_label")),
+        )
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -31,10 +44,11 @@ def build_menu_expand_targets(skeleton: list[dict[str, Any]]) -> list[dict[str, 
                 "label": label,
                 "parent_label": parent_label,
                 "depth": depth,
+                "order": order,
                 "role": _clean_text_value(item.get("role")),
                 "aria_label": _clean_text_value(item.get("aria_label")),
-                "route_path": _normalize_path_value(item.get("route_path") or item.get("path")),
-                "page_route_path": _normalize_path_value(item.get("page_route_path") or item.get("route_path")),
+                "route_path": route_path,
+                "page_route_path": page_route_path,
                 "locator_candidates": _build_menu_locator_candidates(item=item, label=label),
             }
         )
@@ -47,7 +61,7 @@ def merge_menu_skeleton_and_materialized_nodes(
     materialized: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
-    index_by_key: dict[tuple[str, str | None, int], int] = {}
+    index_by_key: dict[tuple[str, str | None, int, int], int] = {}
 
     for raw_item in [*skeleton, *materialized]:
         normalized = _normalize_menu_node(raw_item)
@@ -57,6 +71,7 @@ def merge_menu_skeleton_and_materialized_nodes(
             normalized["label"],
             normalized.get("parent_label"),
             normalized["depth"],
+            normalized["order"],
         )
         existing_index = index_by_key.get(key)
         if existing_index is None:
@@ -66,16 +81,14 @@ def merge_menu_skeleton_and_materialized_nodes(
             index_by_key[key] = len(merged) - 1
             continue
         existing = merged[existing_index]
-        for field_name in (
-            "route_path",
-            "page_route_path",
-            "role",
-            "aria_label",
-            "entry_type",
-            "aria_expanded",
-        ):
+        for field_name in ("role", "aria_label", "entry_type", "aria_expanded"):
             if existing.get(field_name) is None and normalized.get(field_name) is not None:
                 existing[field_name] = normalized[field_name]
+        for field_name in ("route_path", "page_route_path"):
+            existing[field_name] = _prefer_menu_route_fact(
+                existing_value=existing.get(field_name),
+                incoming_value=normalized.get(field_name),
+            )
         if existing.get("parent_label") is None and normalized.get("parent_label") is not None:
             existing["parent_label"] = normalized["parent_label"]
 
@@ -404,7 +417,21 @@ def _build_menu_locator_candidates(*, item: dict[str, Any], label: str) -> list[
     route_path = _normalize_path_value(item.get("route_path") or item.get("page_route_path"))
     if route_path is not None:
         candidates.append({"strategy_type": "route_path", "selector": route_path})
+    order = _to_int_value(item.get("order") or item.get("sort_order"))
+    candidates.append({"strategy_type": "order", "selector": str(order)})
     return candidates
+
+
+def _prefer_menu_route_fact(*, existing_value: Any, incoming_value: Any) -> str | None:
+    existing = _normalize_path_value(existing_value)
+    incoming = _normalize_path_value(incoming_value)
+    if incoming is None:
+        return existing
+    if existing is None:
+        return incoming
+    if existing != incoming:
+        return incoming
+    return existing
 
 
 def _normalize_entry_type_value(value: Any) -> str | None:

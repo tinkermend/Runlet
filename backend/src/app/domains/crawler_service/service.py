@@ -445,20 +445,66 @@ async (targets) => {
     const targetLabel = normalizeText(target?.label);
     const targetParent = normalizeText(target?.parent_label);
     const targetRole = normalizeText(target?.role);
-    const candidates = Array.from(document.querySelectorAll(nodeSelectors.join(',')));
-    return candidates.find((node) => {
+    const targetRoute = toRoutePath(target?.route_path || target?.page_route_path);
+    const targetOrder = Number.isFinite(Number(target?.order)) ? Number(target.order) : null;
+    const targetAriaLabel = normalizeText(target?.aria_label);
+    const locatorCandidates = Array.isArray(target?.locator_candidates)
+      ? target.locator_candidates.filter((candidate) => candidate && typeof candidate === 'object')
+      : [];
+    const indexedCandidates = Array.from(document.querySelectorAll(nodeSelectors.join(','))).map((node, index) => ({
+      node,
+      index,
+      routePath: toRoutePath(
+        node.getAttribute('href') || node.getAttribute('data-route-path') || node.getAttribute('data-path')
+      ),
+      ariaLabel: normalizeText(node.getAttribute('aria-label')),
+      label: toLabel(node),
+      role: normalizeText(node.getAttribute('role') || 'menuitem'),
+      parentLabel: parentLabelFor(node),
+    }));
+    const baseMatches = indexedCandidates.filter((entry) => {
+      const node = entry.node;
       if (!isVisible(node)) return false;
-      const label = toLabel(node);
-      if (!label || (targetLabel && label !== targetLabel)) return false;
+      if (!entry.label || (targetLabel && entry.label !== targetLabel)) return false;
       if (targetRole) {
-        const role = normalizeText(node.getAttribute('role') || 'menuitem');
-        if (role && role !== targetRole) return false;
+        if (entry.role && entry.role !== targetRole) return false;
       }
       if (targetParent) {
-        return parentLabelFor(node) === targetParent;
+        return entry.parentLabel === targetParent;
       }
       return true;
-    }) || null;
+    });
+    if (baseMatches.length === 0) return null;
+    let matches = baseMatches;
+    if (targetRoute) {
+      const routeMatches = matches.filter((entry) => entry.routePath === targetRoute);
+      if (routeMatches.length > 0) matches = routeMatches;
+    }
+    if (targetAriaLabel) {
+      const ariaMatches = matches.filter((entry) => entry.ariaLabel === targetAriaLabel);
+      if (ariaMatches.length > 0) matches = ariaMatches;
+    }
+    for (const candidate of locatorCandidates) {
+      const strategyType = normalizeText(candidate.strategy_type);
+      const selector = normalizeText(candidate.selector);
+      if (!strategyType || !selector) continue;
+      let locatorMatches = [];
+      if (strategyType === 'route_path') {
+        locatorMatches = matches.filter((entry) => entry.routePath === toRoutePath(selector));
+      } else if (strategyType === 'aria_label') {
+        locatorMatches = matches.filter((entry) => entry.ariaLabel === selector);
+      } else if (strategyType === 'order' && Number.isFinite(Number(selector))) {
+        locatorMatches = matches.filter((entry) => entry.index === Number(selector));
+      }
+      if (locatorMatches.length > 0) {
+        matches = locatorMatches;
+      }
+    }
+    if (targetOrder !== null) {
+      const orderMatch = matches.find((entry) => entry.index === targetOrder);
+      if (orderMatch) return orderMatch.node;
+    }
+    return matches[0]?.node || null;
   };
   const triggerClick = (node) => {
     if (!(node instanceof Element)) return false;

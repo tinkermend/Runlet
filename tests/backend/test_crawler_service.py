@@ -517,6 +517,128 @@ def install_materialize_aware_async_api(
     return page, context, browser, chromium, playwright
 
 
+class RepeatedLabelMaterializeFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.settled = False
+        self.current_url = "about:blank"
+        self.materialize_calls: list[list[dict[str, object]]] = []
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+
+    async def evaluate(self, script: str, *args):
+        if "document.readyState" in script and "shell_ready" in script:
+            return {"shell_ready": self.settled}
+        if "visibleSelector" in script:
+            return self.settled
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": None,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [{"path": "/dashboard", "title": "仪表盘"}]
+        if "__RUNLET_MENU_NODES__" in script:
+            return [
+                {
+                    "label": "设置",
+                    "route_path": "/system/roles",
+                    "page_route_path": "/system/roles",
+                    "depth": 0,
+                    "order": 0,
+                    "role": "menuitem",
+                    "aria_label": "角色设置",
+                    "entry_type": "menu_expand",
+                    "aria_expanded": "false",
+                },
+                {
+                    "label": "设置",
+                    "route_path": "/system/admin",
+                    "page_route_path": "/system/admin",
+                    "depth": 0,
+                    "order": 1,
+                    "role": "menuitem",
+                    "aria_label": "管理员设置",
+                    "entry_type": "menu_expand",
+                    "aria_expanded": "false",
+                },
+            ]
+        if "__RUNLET_MATERIALIZE_NAVIGATION_TARGETS__" in script:
+            targets = args[0] if args else []
+            normalized_targets = [dict(target) for target in targets if isinstance(target, dict)]
+            self.materialize_calls.append(normalized_targets)
+            if any(
+                target.get("route_path") == "/system/admin"
+                and target.get("order") == 1
+                and target.get("aria_label") == "管理员设置"
+                for target in normalized_targets
+            ):
+                return [
+                    {
+                        "label": "管理员列表",
+                        "route_path": "/system/admin/list",
+                        "page_route_path": "/system/admin/list",
+                        "depth": 1,
+                        "order": 2,
+                        "role": "menuitem",
+                        "parent_label": "设置",
+                    }
+                ]
+            return []
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            return []
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def install_repeated_label_materialize_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    RepeatedLabelMaterializeFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = RepeatedLabelMaterializeFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
 class RouteAwareFakeCrawlerPage:
     def __init__(self) -> None:
         self.goto_calls: list[tuple[str, str]] = []
@@ -1190,6 +1312,115 @@ def test_merge_menu_skeleton_and_materialized_nodes_merges_route_back_into_place
     assert merged[0]["label"] == "权限管理"
     assert merged[0]["route_path"] == "/system/admin"
     assert merged[0]["page_route_path"] == "/system/admin"
+
+
+def test_merge_menu_skeleton_and_materialized_nodes_preserves_repeated_label_siblings():
+    merged = merge_menu_skeleton_and_materialized_nodes(
+        skeleton=[
+            {
+                "label": "设置",
+                "route_path": None,
+                "page_route_path": None,
+                "depth": 0,
+                "order": 0,
+                "role": "menuitem",
+                "aria_label": "角色设置",
+            },
+            {
+                "label": "设置",
+                "route_path": None,
+                "page_route_path": None,
+                "depth": 0,
+                "order": 1,
+                "role": "menuitem",
+                "aria_label": "管理员设置",
+            },
+        ],
+        materialized=[
+            {
+                "label": "设置",
+                "route_path": "/system/roles",
+                "page_route_path": "/system/roles",
+                "depth": 0,
+                "order": 0,
+                "role": "menuitem",
+                "aria_label": "角色设置",
+            },
+            {
+                "label": "设置",
+                "route_path": "/system/admin",
+                "page_route_path": "/system/admin",
+                "depth": 0,
+                "order": 1,
+                "role": "menuitem",
+                "aria_label": "管理员设置",
+            },
+        ],
+    )
+
+    assert len(merged) == 2
+    assert [(item["order"], item["route_path"], item["aria_label"]) for item in merged] == [
+        (0, "/system/roles", "角色设置"),
+        (1, "/system/admin", "管理员设置"),
+    ]
+
+
+def test_merge_menu_skeleton_and_materialized_nodes_replaces_stale_route_with_better_fact():
+    merged = merge_menu_skeleton_and_materialized_nodes(
+        skeleton=[
+            {
+                "label": "设置",
+                "route_path": "/system/stale",
+                "page_route_path": "/system/stale",
+                "depth": 0,
+                "order": 1,
+                "role": "menuitem",
+                "aria_label": "管理员设置",
+            }
+        ],
+        materialized=[
+            {
+                "label": "设置",
+                "route_path": "/system/admin",
+                "page_route_path": "/system/admin",
+                "depth": 0,
+                "order": 1,
+                "role": "menuitem",
+                "aria_label": "管理员设置",
+            }
+        ],
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["route_path"] == "/system/admin"
+    assert merged[0]["page_route_path"] == "/system/admin"
+
+
+@pytest.mark.anyio
+async def test_collect_dom_menu_nodes_materializes_repeated_label_target_using_route_and_order_hints(monkeypatch):
+    page, context, browser, chromium, playwright = install_repeated_label_materialize_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    menu_nodes = await session.collect_dom_menu_nodes(crawl_scope="full")
+    await session.close()
+
+    assert {node["label"] for node in menu_nodes} >= {"设置", "管理员列表"}
+    assert any(node.get("route_path") == "/system/admin/list" for node in menu_nodes)
+    assert len(page.materialize_calls) == 1
+    assert [(target.get("order"), target.get("route_path"), target.get("aria_label")) for target in page.materialize_calls[0]] == [
+        (0, "/system/roles", "角色设置"),
+        (1, "/system/admin", "管理员设置"),
+    ]
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
 
 
 @pytest.mark.anyio
