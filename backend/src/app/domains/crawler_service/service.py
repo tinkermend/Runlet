@@ -90,6 +90,8 @@ class PlaywrightBrowserFactory:
     _INITIAL_SETTLE_MS = 5000
     _ROUTE_SETTLE_MS = 2000
     _ROUTE_RENDER_TIMEOUT_MS = 10000
+    _APP_READINESS_WINDOW = 2
+    _APP_READINESS_MAX_SAMPLES = 4
     _ROUTE_HINTS_SCRIPT = """
 () => {
   const __RUNLET_ROUTE_HINTS__ = true;
@@ -606,18 +608,16 @@ class PlaywrightBrowserFactory:
                     return
                 await page.wait_for_timeout(PlaywrightBrowserFactory._INITIAL_SETTLE_MS)
                 samples: list[dict[str, object]] = []
-                for _ in range(2):
-                    route_snapshot = await self_nonlocal.collect_route_snapshot(crawl_scope="current")
-                    samples.append(
-                        {
-                            "resolved_route": route_snapshot.get("resolved_route"),
-                            "shell_ready": True,
-                            "content_ready": bool(route_snapshot.get("resolved_route")),
-                        }
+                for sample_index in range(PlaywrightBrowserFactory._APP_READINESS_MAX_SAMPLES):
+                    samples.append(await self_nonlocal._collect_readiness_sample())
+                    readiness = evaluate_app_readiness(
+                        samples=samples,
+                        stabilization_window=PlaywrightBrowserFactory._APP_READINESS_WINDOW,
                     )
-                readiness = evaluate_app_readiness(samples=samples)
-                if not (readiness.shell_ready and readiness.route_ready and readiness.content_ready):
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    if readiness.shell_ready and readiness.route_ready and readiness.content_ready:
+                        break
+                    if sample_index < PlaywrightBrowserFactory._APP_READINESS_MAX_SAMPLES - 1:
+                        await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
                 self_nonlocal._settled = True
 
             async def collect_route_hints(
@@ -973,6 +973,33 @@ class PlaywrightBrowserFactory:
                         return {"applied": False, "reason": "action_execution_not_supported"}
                 except Exception:
                     return {"applied": False, "reason": "action_execution_not_supported"}
+
+            async def _collect_readiness_sample(self_nonlocal) -> dict[str, object]:
+                route_snapshot = await self_nonlocal.collect_route_snapshot(crawl_scope="current")
+                shell_ready_raw = await self_nonlocal._evaluate_with_optional_arg(
+                    """
+() => {
+  const readyState = document.readyState;
+  const hasShell = Boolean(
+    document.querySelector("#app, #root, main, [role='main'], [data-app-root]")
+      || document.body?.children?.length
+  );
+  return {
+    shell_ready: (readyState === "interactive" || readyState === "complete") && hasShell,
+  };
+}
+""",
+                    {},
+                )
+                shell_ready = (
+                    isinstance(shell_ready_raw, dict) and shell_ready_raw.get("shell_ready") is True
+                )
+                content_ready = bool(await page.evaluate(PlaywrightBrowserFactory._ROUTE_RENDER_READY_SCRIPT))
+                return {
+                    "resolved_route": route_snapshot.get("resolved_route"),
+                    "shell_ready": shell_ready,
+                    "content_ready": content_ready,
+                }
 
             def _append_unique_action(
                 self_nonlocal,

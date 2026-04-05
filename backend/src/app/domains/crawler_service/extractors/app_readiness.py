@@ -19,6 +19,9 @@ def evaluate_app_readiness(
         return AppReadiness(shell_ready=False, route_ready=False, content_ready=False)
 
     window = max(1, stabilization_window)
+    if len(samples) < window:
+        return AppReadiness(shell_ready=False, route_ready=False, content_ready=False)
+
     tail = samples[-window:]
 
     shell_ready = bool(tail) and all(sample.get("shell_ready") is True for sample in tail)

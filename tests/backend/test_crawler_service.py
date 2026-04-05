@@ -1,5 +1,6 @@
 import sys
 from types import ModuleType
+from urllib.parse import urlparse
 
 import pytest
 from sqlmodel import select
@@ -75,7 +76,17 @@ class FakeCrawlerPage:
         self.current_url = url
 
     async def evaluate(self, script: str):
+        if "visibleSelector" in script:
+            return self.settled
         if not self.settled:
+            if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+                parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+                return {
+                    "pathname": parsed.path or "/",
+                    "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                    "router_route": None,
+                    "history_route": None,
+                }
             if "__RUNLET_ROUTE_HINTS__" in script:
                 return [{"path": "/", "title": "加载中"}]
             if "__RUNLET_MENU_NODES__" in script:
@@ -98,6 +109,14 @@ class FakeCrawlerPage:
                 {"path": "/dashboard", "title": "仪表盘"},
                 {"path": "/users", "title": "用户管理"},
             ]
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": "/users" if parsed.path == "/users" else None,
+                "history_route": None,
+            }
         if "__RUNLET_MENU_NODES__" in script:
             return [
                 {"label": "仪表盘", "route_path": "/dashboard", "role": "menuitem"},
@@ -205,6 +224,8 @@ class StateProbeAwareFakeCrawlerPage:
             self.current_route = path
 
     async def evaluate(self, script: str, *args):
+        if "visibleSelector" in script:
+            return self.settled
         if "__RUNLET_ROUTE_HINTS__" in script:
             return [
                 {"path": "/dashboard", "title": "仪表盘"},
@@ -371,6 +392,8 @@ class RouteAwareFakeCrawlerPage:
         self.current_url = url
 
     async def evaluate(self, script: str):
+        if "visibleSelector" in script:
+            return True
         if "__RUNLET_ROUTE_HINTS__" in script:
             return self.route_hints
         if "__RUNLET_MENU_NODES__" in script:
@@ -842,7 +865,8 @@ async def test_playwright_browser_factory_collects_dom_elements_across_discovere
         ("https://erp.example.com/front/database/allInstance", "domcontentloaded"),
         ("https://erp.example.com/front/database/dbInstance", "domcontentloaded"),
     ]
-    assert page.wait_for_timeout_calls == [5000, 2000, 2000]
+    assert page.wait_for_timeout_calls[0] == 5000
+    assert page.wait_for_timeout_calls.count(2000) >= 2
     assert page.closed is True
     assert context.closed is True
     assert browser.closed is True
@@ -929,7 +953,8 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
         ("https://erp.example.com/dashboard", "domcontentloaded"),
         ("https://erp.example.com/users", "domcontentloaded"),
     ]
-    assert page.wait_for_timeout_calls == [5000, 2000, 2000]
+    assert page.wait_for_timeout_calls[0] == 5000
+    assert page.wait_for_timeout_calls.count(2000) >= 2
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True

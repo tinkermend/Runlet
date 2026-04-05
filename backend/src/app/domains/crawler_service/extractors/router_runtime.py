@@ -42,17 +42,7 @@ class RuntimeRouteHintExtractor:
             browser_session=browser_session,
             crawl_scope=crawl_scope,
         )
-        signals: list[dict[str, Any]] = []
-        resolved_route = self._normalize_path(route_snapshot.get("resolved_route"))
-        if resolved_route is not None:
-            route_source = self._to_clean_text(route_snapshot.get("route_source")) or "runtime_snapshot"
-            signals.append(
-                {
-                    "route_path": resolved_route,
-                    "discovery_sources": ["runtime_route_snapshot"],
-                    "context_constraints": {"route_source": route_source},
-                }
-            )
+        merged_by_route: dict[str, dict[str, Any]] = {}
         for hint in route_hints:
             route_path = self._normalize_path(hint.get("path") or hint.get("route_path"))
             if route_path is None:
@@ -67,8 +57,34 @@ class RuntimeRouteHintExtractor:
             context_constraints = hint.get("context_constraints")
             if isinstance(context_constraints, dict):
                 signal["context_constraints"] = context_constraints
-            signals.append(signal)
-        return signals
+            merged_by_route[route_path] = signal
+
+        resolved_route = self._normalize_path(route_snapshot.get("resolved_route"))
+        if resolved_route is not None:
+            route_source = self._to_clean_text(route_snapshot.get("route_source")) or "runtime_snapshot"
+            snapshot_signal: dict[str, Any] = {
+                "route_path": resolved_route,
+                "discovery_sources": ["runtime_route_snapshot"],
+                "context_constraints": {"route_source": route_source},
+            }
+            existing = merged_by_route.get(resolved_route)
+            if existing is None:
+                merged_by_route[resolved_route] = snapshot_signal
+            else:
+                existing_sources = existing.get("discovery_sources")
+                if not isinstance(existing_sources, list):
+                    existing_sources = []
+                for source in snapshot_signal["discovery_sources"]:
+                    if source not in existing_sources:
+                        existing_sources.append(source)
+                existing["discovery_sources"] = existing_sources
+
+                existing_context = existing.get("context_constraints")
+                if not isinstance(existing_context, dict):
+                    existing_context = {}
+                snapshot_context = snapshot_signal["context_constraints"]
+                existing["context_constraints"] = {**snapshot_context, **existing_context}
+        return list(merged_by_route.values())
 
     async def extract(
         self,
