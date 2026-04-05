@@ -769,6 +769,234 @@ def install_repeated_label_no_route_script_aware_async_api(
     return page, context, browser, chromium, playwright
 
 
+class HiddenDuplicateFindTargetFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.settled = False
+        self.current_url = "about:blank"
+        self.materialize_calls: list[list[dict[str, object]]] = []
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+
+    async def evaluate(self, script: str, *args):
+        if "document.readyState" in script and "shell_ready" in script:
+            return {"shell_ready": self.settled}
+        if "visibleSelector" in script:
+            return self.settled
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": None,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [{"path": "/dashboard", "title": "仪表盘"}]
+        if "__RUNLET_MENU_NODES__" in script:
+            return [
+                {
+                    "label": "设置",
+                    "route_path": "/system/admin",
+                    "page_route_path": "/system/admin",
+                    "depth": 0,
+                    "order": 0,
+                    "role": "menuitem",
+                    "entry_type": "menu_expand",
+                    "sibling_index": 0,
+                }
+            ]
+        if "__RUNLET_MATERIALIZE_NAVIGATION_TARGETS__" in script:
+            targets = args[0] if args else []
+            normalized_targets = [dict(target) for target in targets if isinstance(target, dict)]
+            self.materialize_calls.append(normalized_targets)
+            if (
+                'if (!isVisible(node)) return null;' in script
+                and any(target.get("sibling_index") == 0 for target in normalized_targets)
+            ):
+                return [
+                    {
+                        "label": "管理员列表",
+                        "route_path": "/system/admin/list",
+                        "page_route_path": "/system/admin/list",
+                        "depth": 1,
+                        "order": 0,
+                        "role": "menuitem",
+                        "parent_label": "设置",
+                    }
+                ]
+            return []
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            return []
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def install_hidden_duplicate_find_target_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    HiddenDuplicateFindTargetFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = HiddenDuplicateFindTargetFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
+class DepthAwareFindTargetFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.settled = False
+        self.current_url = "about:blank"
+        self.materialize_calls: list[list[dict[str, object]]] = []
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+
+    async def evaluate(self, script: str, *args):
+        if "document.readyState" in script and "shell_ready" in script:
+            return {"shell_ready": self.settled}
+        if "visibleSelector" in script:
+            return self.settled
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": None,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [{"path": "/dashboard", "title": "仪表盘"}]
+        if "__RUNLET_MENU_NODES__" in script:
+            return [
+                {
+                    "label": "设置",
+                    "route_path": "/system/root",
+                    "page_route_path": "/system/root",
+                    "depth": 0,
+                    "order": 0,
+                    "role": "menuitem",
+                    "parent_label": "系统",
+                    "entry_type": "menu_expand",
+                    "sibling_index": 0,
+                },
+                {
+                    "label": "设置",
+                    "route_path": "/system/nested",
+                    "page_route_path": "/system/nested",
+                    "depth": 1,
+                    "order": 1,
+                    "role": "menuitem",
+                    "parent_label": "系统",
+                    "entry_type": "menu_expand",
+                    "sibling_index": 0,
+                },
+            ]
+        if "__RUNLET_MATERIALIZE_NAVIGATION_TARGETS__" in script:
+            targets = args[0] if args else []
+            normalized_targets = [dict(target) for target in targets if isinstance(target, dict)]
+            self.materialize_calls.append(normalized_targets)
+            if (
+                "const targetDepth" in script
+                and any(target.get("route_path") == "/system/nested" and target.get("depth") == 1 for target in normalized_targets)
+            ):
+                return [
+                    {
+                        "label": "深层设置",
+                        "route_path": "/system/nested/detail",
+                        "page_route_path": "/system/nested/detail",
+                        "depth": 2,
+                        "order": 0,
+                        "role": "menuitem",
+                        "parent_label": "设置",
+                    }
+                ]
+            return []
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            return []
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 5000:
+            self.settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def install_depth_aware_find_target_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    DepthAwareFindTargetFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = DepthAwareFindTargetFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
 class RouteAwareFakeCrawlerPage:
     def __init__(self) -> None:
         self.goto_calls: list[tuple[str, str]] = []
@@ -1602,6 +1830,52 @@ async def test_collect_dom_menu_nodes_preserves_repeated_label_siblings_without_
     assert any(node.get("route_path") == "/system/admin/list" for node in menu_nodes)
     assert len(page.materialize_calls) == 1
     assert {target.get("sibling_index") for target in page.materialize_calls[0]} == {0, 1}
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_collect_dom_menu_nodes_materialize_matches_visible_sibling_index_when_hidden_duplicate_exists(monkeypatch):
+    page, context, browser, chromium, playwright = install_hidden_duplicate_find_target_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    menu_nodes = await session.collect_dom_menu_nodes(crawl_scope="full")
+    await session.close()
+
+    assert any(node.get("route_path") == "/system/admin/list" for node in menu_nodes)
+    assert len(page.materialize_calls) == 1
+    assert page.materialize_calls[0][0].get("sibling_index") == 0
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_collect_dom_menu_nodes_materialize_matches_target_depth(monkeypatch):
+    page, context, browser, chromium, playwright = install_depth_aware_find_target_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    menu_nodes = await session.collect_dom_menu_nodes(crawl_scope="full")
+    await session.close()
+
+    assert any(node.get("route_path") == "/system/nested/detail" for node in menu_nodes)
+    assert len(page.materialize_calls) == 1
+    assert any(target.get("route_path") == "/system/nested" and target.get("depth") == 1 for target in page.materialize_calls[0])
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True

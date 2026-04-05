@@ -458,6 +458,7 @@ async (targets) => {
     const targetParent = normalizeText(target?.parent_label);
     const targetRole = normalizeText(target?.role);
     const targetRoute = toRoutePath(target?.route_path || target?.page_route_path);
+    const targetDepth = Number.isFinite(Number(target?.depth)) ? Number(target.depth) : null;
     const targetOrder = Number.isFinite(Number(target?.order)) ? Number(target.order) : null;
     const targetSiblingIndex = Number.isFinite(Number(target?.sibling_index)) ? Number(target.sibling_index) : null;
     const targetAriaLabel = normalizeText(target?.aria_label);
@@ -465,7 +466,8 @@ async (targets) => {
       ? target.locator_candidates.filter((candidate) => candidate && typeof candidate === 'object')
       : [];
     const siblingCounts = new Map();
-    const indexedCandidates = Array.from(document.querySelectorAll(nodeSelectors.join(','))).map((node, index) => {
+    const toCandidateEntry = (node, index) => {
+      if (!isVisible(node)) return null;
       const label = toLabel(node);
       const role = normalizeText(node.getAttribute('role') || 'menuitem');
       const parentLabel = parentLabelFor(node);
@@ -487,17 +489,19 @@ async (targets) => {
         depth,
         siblingIndex,
       };
-    });
+    };
+    const indexedCandidates = Array.from(document.querySelectorAll(nodeSelectors.join(',')))
+      .map((node, index) => toCandidateEntry(node, index))
+      .filter((entry) => entry !== null);
     const baseMatches = indexedCandidates.filter((entry) => {
-      const node = entry.node;
-      if (!isVisible(node)) return false;
       if (!entry.label || (targetLabel && entry.label !== targetLabel)) return false;
       if (targetRole) {
         if (entry.role && entry.role !== targetRole) return false;
       }
       if (targetParent) {
-        return entry.parentLabel === targetParent;
+        if (entry.parentLabel !== targetParent) return false;
       }
+      if (targetDepth !== null && entry.depth !== targetDepth) return false;
       return true;
     });
     if (baseMatches.length === 0) return null;
