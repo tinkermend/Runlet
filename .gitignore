@@ -101,3 +101,8 @@ output/
 worktrees/
 
 # 暂不上传到仓库的目录
+
+
+# database data
+
+docker/db_data/
