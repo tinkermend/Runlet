@@ -70,16 +70,22 @@ class FakeCrawlerPage:
         self.closed = False
         self.settled = False
         self.current_url = "about:blank"
+        self.route_snapshot_eval_calls = 0
+        self.readiness_shell_eval_calls = 0
 
     async def goto(self, url: str, *, wait_until: str) -> None:
         self.goto_calls.append((url, wait_until))
         self.current_url = url
 
     async def evaluate(self, script: str):
+        if "document.readyState" in script and "shell_ready" in script:
+            self.readiness_shell_eval_calls += 1
+            return {"shell_ready": self.settled}
         if "visibleSelector" in script:
             return self.settled
         if not self.settled:
             if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+                self.route_snapshot_eval_calls += 1
                 parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
                 return {
                     "pathname": parsed.path or "/",
@@ -110,6 +116,7 @@ class FakeCrawlerPage:
                 {"path": "/users", "title": "用户管理"},
             ]
         if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            self.route_snapshot_eval_calls += 1
             parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
             return {
                 "pathname": parsed.path or "/",
@@ -955,6 +962,8 @@ async def test_playwright_browser_factory_session_collects_runtime_facts(monkeyp
     ]
     assert page.wait_for_timeout_calls[0] == 5000
     assert page.wait_for_timeout_calls.count(2000) >= 2
+    assert page.route_snapshot_eval_calls >= 2
+    assert page.readiness_shell_eval_calls >= 2
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True
@@ -978,6 +987,34 @@ async def test_playwright_browser_factory_session_collects_resolved_route_snapsh
 
     assert snapshot["resolved_route"] == "/users"
     assert snapshot["route_source"] in {"pathname", "router", "hash", "history"}
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_readiness_polling_is_used_once_and_cached(monkeypatch):
+    page, context, browser, chromium, playwright = install_fake_crawler_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    await session.collect_route_hints(crawl_scope="full")
+    first_snapshot_samples = page.route_snapshot_eval_calls
+    first_shell_samples = page.readiness_shell_eval_calls
+
+    await session.collect_route_hints(crawl_scope="full")
+    await session.close()
+
+    assert first_snapshot_samples >= 2
+    assert first_shell_samples >= 2
+    assert page.route_snapshot_eval_calls == first_snapshot_samples
+    assert page.readiness_shell_eval_calls == first_shell_samples
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True

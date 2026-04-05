@@ -635,6 +635,10 @@ class PlaywrightBrowserFactory:
                 crawl_scope: str,
             ) -> dict[str, object]:
                 del crawl_scope
+                await self_nonlocal._ensure_settled()
+                return await self_nonlocal._collect_route_snapshot_raw()
+
+            async def _collect_route_snapshot_raw(self_nonlocal) -> dict[str, object]:
                 runtime_snapshot_raw = await self_nonlocal._evaluate_with_optional_arg(
                     PlaywrightBrowserFactory._ROUTE_RUNTIME_SNAPSHOT_SCRIPT,
                     {},
@@ -975,7 +979,7 @@ class PlaywrightBrowserFactory:
                     return {"applied": False, "reason": "action_execution_not_supported"}
 
             async def _collect_readiness_sample(self_nonlocal) -> dict[str, object]:
-                route_snapshot = await self_nonlocal.collect_route_snapshot(crawl_scope="current")
+                route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
                 shell_ready_raw = await self_nonlocal._evaluate_with_optional_arg(
                     """
 () => {

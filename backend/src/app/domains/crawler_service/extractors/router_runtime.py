@@ -34,11 +34,11 @@ class RuntimeRouteHintExtractor:
         browser_session,
         crawl_scope: str,
     ) -> list[dict[str, Any]]:
-        route_snapshot = await self._collect_route_snapshot(
+        route_hints = await self._collect_route_hints(
             browser_session=browser_session,
             crawl_scope=crawl_scope,
         )
-        route_hints = await self._collect_route_hints(
+        route_snapshot = await self._collect_route_snapshot(
             browser_session=browser_session,
             crawl_scope=crawl_scope,
         )
@@ -60,6 +60,8 @@ class RuntimeRouteHintExtractor:
             merged_by_route[route_path] = signal
 
         resolved_route = self._normalize_path(route_snapshot.get("resolved_route"))
+        if resolved_route == "/" and any(route != "/" for route in merged_by_route):
+            resolved_route = None
         if resolved_route is not None:
             route_source = self._to_clean_text(route_snapshot.get("route_source")) or "runtime_snapshot"
             snapshot_signal: dict[str, Any] = {
@@ -144,7 +146,10 @@ class RuntimeRouteHintExtractor:
         collector = getattr(browser_session, "collect_route_snapshot", None)
         if not callable(collector):
             return {}
-        collected = await collector(crawl_scope=crawl_scope)
+        try:
+            collected = await collector(crawl_scope=crawl_scope)
+        except Exception:
+            return {}
         if isinstance(collected, dict):
             return collected
         return {}
@@ -164,7 +169,7 @@ class RuntimeRouteHintExtractor:
         path = value.strip()
         if not path or not path.startswith("/"):
             return None
-        return path
+        return path.rstrip("/") or "/"
 
     def _to_clean_text(self, value: Any) -> str | None:
         if not isinstance(value, str):

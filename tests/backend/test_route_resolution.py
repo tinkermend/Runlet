@@ -94,3 +94,67 @@ async def test_collect_route_signals_merges_snapshot_into_richer_route_hints() -
     assert signals[0]["page_title"] == "用户管理"
     assert signals[0]["discovery_sources"] == ["runtime_route_hints", "runtime_route_snapshot"]
     assert signals[0]["context_constraints"] == {"auth_scope": "admin", "route_source": "router"}
+
+
+@pytest.mark.anyio
+async def test_collect_route_signals_uses_settled_snapshot_after_hints() -> None:
+    class FakeSession:
+        def __init__(self) -> None:
+            self.hints_collected = False
+
+        async def collect_route_hints(self, *, crawl_scope: str):
+            del crawl_scope
+            self.hints_collected = True
+            return [{"path": "/dashboard", "title": "仪表盘"}]
+
+        async def collect_route_snapshot(self, *, crawl_scope: str):
+            del crawl_scope
+            if self.hints_collected:
+                return {"resolved_route": "/dashboard", "route_source": "router"}
+            return {"resolved_route": "/", "route_source": "pathname"}
+
+    extractor = RuntimeRouteHintExtractor()
+    signals = await extractor.collect_route_signals(browser_session=FakeSession(), crawl_scope="full")
+
+    assert len(signals) == 1
+    assert signals[0]["route_path"] == "/dashboard"
+    assert signals[0]["discovery_sources"] == ["runtime_route_hints", "runtime_route_snapshot"]
+
+
+@pytest.mark.anyio
+async def test_collect_route_signals_degrades_snapshot_failure_and_preserves_hints() -> None:
+    class FakeSession:
+        async def collect_route_hints(self, *, crawl_scope: str):
+            del crawl_scope
+            return [{"path": "/users", "title": "用户管理"}]
+
+        async def collect_route_snapshot(self, *, crawl_scope: str):
+            del crawl_scope
+            raise RuntimeError("snapshot unavailable")
+
+    extractor = RuntimeRouteHintExtractor()
+    signals = await extractor.collect_route_signals(browser_session=FakeSession(), crawl_scope="full")
+
+    assert len(signals) == 1
+    assert signals[0]["route_path"] == "/users"
+    assert signals[0]["page_title"] == "用户管理"
+    assert signals[0]["discovery_sources"] == ["runtime_route_hints"]
+
+
+@pytest.mark.anyio
+async def test_collect_route_signals_normalizes_trailing_slash_for_merging() -> None:
+    class FakeSession:
+        async def collect_route_hints(self, *, crawl_scope: str):
+            del crawl_scope
+            return [{"path": "/users/", "title": "用户管理"}]
+
+        async def collect_route_snapshot(self, *, crawl_scope: str):
+            del crawl_scope
+            return {"resolved_route": "/users", "route_source": "router"}
+
+    extractor = RuntimeRouteHintExtractor()
+    signals = await extractor.collect_route_signals(browser_session=FakeSession(), crawl_scope="full")
+
+    assert len(signals) == 1
+    assert signals[0]["route_path"] == "/users"
+    assert signals[0]["discovery_sources"] == ["runtime_route_hints", "runtime_route_snapshot"]
