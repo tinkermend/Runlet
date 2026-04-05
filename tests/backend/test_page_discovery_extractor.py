@@ -3,6 +3,15 @@ import pytest
 from app.domains.crawler_service.extractors.page_discovery import PageDiscoveryExtractor
 
 
+class FakeDomMenuExtractor:
+    def __init__(self, signals: list[dict[str, object]]) -> None:
+        self._signals = signals
+
+    async def collect_navigation_signals(self, *, browser_session, crawl_scope: str) -> list[dict[str, object]]:
+        del browser_session, crawl_scope
+        return [dict(signal) for signal in self._signals]
+
+
 class FakeDiscoverySession:
     framework_hint = "react"
 
@@ -130,6 +139,90 @@ class MetadataEnrichmentDiscoverySession(FakeDiscoverySession):
         ]
 
 
+class DuplicateInteractionDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dom_menu_nodes.extend(
+            [
+                {
+                    "label": "用户标签页",
+                    "route_path": "/users/tab/security",
+                    "page_route_path": "/users",
+                    "entry_type": "tab_switch",
+                    "role": "tab",
+                    "source": "secondary-dom-scan",
+                },
+                {
+                    "label": "用户标签页",
+                    "route_path": "/users/tab/security",
+                    "page_route_path": "/users",
+                    "entry_type": "tab_switch",
+                    "role": "tab",
+                    "source": "tertiary-dom-scan",
+                },
+            ]
+        )
+
+
+class RichInteractionDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dom_menu_nodes.extend(
+            [
+                {
+                    "label": "切换为卡片视图",
+                    "page_route_path": "/users",
+                    "entry_type": "toggle_view",
+                    "role": "button",
+                },
+                {
+                    "label": "展开高级筛选",
+                    "page_route_path": "/users",
+                    "entry_type": "expand_panel",
+                    "role": "button",
+                },
+            ]
+        )
+
+
+class RouteBudgetDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dom_menu_nodes = [
+            {
+                "label": "启用用户",
+                "page_route_path": "/users",
+                "entry_type": "toggle_view",
+                "role": "button",
+            },
+            {
+                "label": "展开高级筛选",
+                "page_route_path": "/users",
+                "entry_type": "expand_panel",
+                "role": "button",
+            },
+        ]
+        self.route_hints = [{"path": "/users", "title": "用户管理"}]
+        self.network_route_configs = []
+
+
+class PrioritySourceDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.route_hints = []
+        self.network_route_configs = []
+        self.dom_menu_nodes = [
+            {
+                "label": "用户标签页",
+                "route_path": "/users/tab/security",
+                "page_route_path": "/users",
+                "entry_type": "tab_switch",
+                "role": "tab",
+                "discovery_sources": ["network_request", "runtime_route_hints"],
+            }
+        ]
+
+
 @pytest.mark.anyio
 async def test_page_discovery_merges_route_nav_and_network_signals():
     extractor = PageDiscoveryExtractor()
@@ -154,6 +247,101 @@ async def test_page_discovery_marks_tabs_and_modal_triggers_as_entry_candidates(
 
 
 @pytest.mark.anyio
+async def test_page_discovery_emits_navigation_targets_before_materializing_pages():
+    result = await PageDiscoveryExtractor().extract(
+        browser_session=FakeDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert {"page_route", "tab_switch", "open_modal"} <= {
+        target.target_kind for target in result.navigation_targets
+    }
+    users_tab = next(
+        target
+        for target in result.navigation_targets
+        if target.target_kind == "tab_switch" and target.parent_target_key == "page:/users"
+    )
+    create_modal = next(
+        target
+        for target in result.navigation_targets
+        if target.target_kind == "open_modal" and target.parent_target_key == "page:/users"
+    )
+
+    assert users_tab.route_hint == "/users"
+    assert users_tab.state_context is not None
+    assert users_tab.state_context["active_tab"] == "用户标签页"
+    assert create_modal.state_context is not None
+    assert create_modal.state_context["modal_title"] == "新增用户"
+    assert all(target.materialization_status == "queued" for target in result.navigation_targets)
+
+
+@pytest.mark.anyio
+async def test_page_discovery_preserves_toggle_view_and_expand_panel_targets():
+    result = await PageDiscoveryExtractor().extract(
+        browser_session=RichInteractionDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    users_targets = {
+        target.target_kind: target
+        for target in result.navigation_targets
+        if target.parent_target_key == "page:/users"
+    }
+
+    assert "toggle_view" in users_targets
+    assert "expand_panel" in users_targets
+    assert users_targets["toggle_view"].state_context == {"view_mode": "切换为卡片视图"}
+    assert users_targets["expand_panel"].state_context == {"panel_title": "展开高级筛选"}
+
+
+@pytest.mark.anyio
+async def test_page_discovery_prefers_source_priority_for_navigation_target_primary_source():
+    extractor = PageDiscoveryExtractor(
+        dom_menu_extractor=FakeDomMenuExtractor(
+            [
+                {
+                    "label": "用户标签页",
+                    "route_path": "/users/tab/security",
+                    "page_route_path": "/users",
+                    "entry_type": "tab_switch",
+                    "discovery_sources": ["network_request", "runtime_route_hints", "dom_menu_tree"],
+                }
+            ]
+        )
+    )
+    result = await extractor.extract(
+        browser_session=PrioritySourceDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    target = next(
+        target for target in result.navigation_targets if target.target_kind == "tab_switch"
+    )
+    assert target.discovery_source == "runtime_route_hints"
+
+
+@pytest.mark.anyio
+async def test_page_discovery_surfaces_budget_rejected_targets_in_navigation_diagnostics():
+    result = await PageDiscoveryExtractor(max_targets_per_route=1).extract(
+        browser_session=RouteBudgetDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    blocked_targets = [
+        target
+        for target in result.navigation_targets
+        if target.materialization_status == "blocked" and target.rejection_reason == "route_budget_exhausted"
+    ]
+
+    assert blocked_targets
+    assert blocked_targets[0].parent_target_key == "page:/users"
+
+
+@pytest.mark.anyio
 async def test_page_discovery_merges_duplicate_page_sources():
     result = await PageDiscoveryExtractor().extract(
         browser_session=FakeDiscoverySession(),
@@ -163,6 +351,24 @@ async def test_page_discovery_merges_duplicate_page_sources():
 
     users_page = next(page for page in result.pages if page.route_path == "/users")
     assert set(users_page.discovery_sources) >= {"runtime_route_hints", "dom_menu_tree", "network_route_config"}
+
+
+@pytest.mark.anyio
+async def test_page_discovery_registry_is_single_source_of_truth_for_duplicate_targets():
+    result = await PageDiscoveryExtractor().extract(
+        browser_session=DuplicateInteractionDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    tab_targets = [
+        target
+        for target in result.navigation_targets
+        if target.target_kind == "tab_switch" and target.parent_target_key == "page:/users"
+    ]
+    assert len(tab_targets) == 1
+    users_page = next(page for page in result.pages if page.route_path == "/users")
+    assert [entry["entry_type"] for entry in users_page.entry_candidates].count("tab_switch") == 1
 
 
 @pytest.mark.anyio

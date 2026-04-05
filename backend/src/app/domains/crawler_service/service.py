@@ -4,14 +4,18 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Protocol
+from urllib.parse import urlparse
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
+from app.domains.crawler_service.extractors.app_readiness import evaluate_app_readiness
 from app.domains.crawler_service.extractors.dom_menu import (
     DomMenuExtractor,
     DomMenuTraversalExtractor,
+    build_menu_expand_targets,
+    merge_menu_skeleton_and_materialized_nodes,
 )
 from app.domains.crawler_service.extractors.page_discovery import (
     PageDiscoveryExtractor,
@@ -21,9 +25,11 @@ from app.domains.crawler_service.extractors.router_runtime import (
     RuntimeRouteHintExtractor,
     RouterRuntimeExtractor,
 )
+from app.domains.crawler_service.extractors.route_resolution import resolve_route_snapshot
 from app.domains.crawler_service.extractors.state_probe import (
     ControlledStateProbeExtractor,
     StateProbeExtractor,
+    build_navigation_action_payload,
 )
 from app.domains.crawler_service.schemas import (
     ALLOWED_STATE_PROBE_ACTIONS,
@@ -46,8 +52,16 @@ class BrowserSession(Protocol):
     framework_hint: str | None
 
     async def collect_route_hints(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+    async def collect_route_snapshot(self, *, crawl_scope: str) -> dict[str, object]: ...
 
+    async def collect_dom_menu_skeleton(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
     async def collect_dom_menu_nodes(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+    async def materialize_navigation_targets(
+        self,
+        *,
+        targets: list[dict[str, object]],
+        crawl_scope: str,
+    ) -> list[dict[str, object]]: ...
 
     async def collect_dom_elements(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
@@ -62,6 +76,21 @@ class BrowserSession(Protocol):
     async def collect_state_probe_baseline(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
 
     async def collect_state_probe_actions(self, *, crawl_scope: str) -> list[dict[str, object]]: ...
+
+    async def visit_page_target(
+        self,
+        *,
+        page_target: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]: ...
+
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]: ...
 
     async def perform_state_probe_action(
         self,
@@ -86,6 +115,8 @@ class PlaywrightBrowserFactory:
     _INITIAL_SETTLE_MS = 5000
     _ROUTE_SETTLE_MS = 2000
     _ROUTE_RENDER_TIMEOUT_MS = 10000
+    _APP_READINESS_WINDOW = 2
+    _APP_READINESS_MAX_SAMPLES = 4
     _ROUTE_HINTS_SCRIPT = """
 () => {
   const __RUNLET_ROUTE_HINTS__ = true;
@@ -156,43 +187,434 @@ class PlaywrightBrowserFactory:
   return candidates;
 }
 """
+    _ROUTE_RUNTIME_SNAPSHOT_SCRIPT = """
+() => {
+  const __RUNLET_ROUTE_SNAPSHOT__ = true;
+  const toRoute = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed || null;
+  };
+  const hash = toRoute(window.location.hash);
+  const routerCurrent = toRoute(
+    window.__NEXT_DATA__?.page
+      || window.__INITIAL_STATE__?.router?.location?.pathname
+      || window.__VUE_ROUTER__?.currentRoute?.value?.path
+      || window.__VUE_ROUTER__?.currentRoute?.path
+      || window.$router?.currentRoute?.value?.path
+      || window.$router?.currentRoute?.path
+  );
+  const historyRoute = toRoute(window.history.state?.as || window.history.state?.url || window.history.state?.path);
+  return {
+    pathname: toRoute(window.location.pathname),
+    location_hash: hash,
+    router_route: routerCurrent,
+    history_route: historyRoute,
+  };
+}
+"""
     _MENU_NODES_SCRIPT = """
 () => {
   const __RUNLET_MENU_NODES__ = true;
-  const result = [];
-  const selectors = [
+  const normalizeText = (value) => {
+    if (typeof value !== "string") return "";
+    return value.replace(/\\s+/g, " ").trim();
+  };
+  const isVisible = (node) => {
+    if (!(node instanceof Element)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && rect.width > 0
+      && rect.height > 0;
+  };
+  const toLabel = (node) => normalizeText(
+    node?.getAttribute?.("data-menu-label")
+      || node?.getAttribute?.("aria-label")
+      || node?.textContent
+      || ""
+  );
+  const toRoutePath = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return new URL(trimmed, window.location.href).pathname || null;
+    } catch {
+      return trimmed.startsWith("/") ? trimmed : null;
+    }
+  };
+  const itemSelectors = '[role="menuitem"], [role="treeitem"], .ant-menu-submenu, .el-submenu, .tree-node, li';
+  const nodeSelectors = [
     '[role="menuitem"]',
+    '[role="treeitem"]',
     'nav a',
     'aside a',
     '[data-menu-item]',
-    '.menu a'
+    '[data-route-path]',
+    '[data-path]',
+    '.menu a',
+    '.ant-menu-submenu-title',
+    '.el-submenu__title',
+    '.el-menu-item',
+    '.tree-node',
+    '.el-tree-node__content'
   ];
-  const nodes = document.querySelectorAll(selectors.join(','));
-  Array.from(nodes).forEach((node, index) => {
-    const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
-    if (!text) return;
-    const href = node.getAttribute('href');
-    let routePath = null;
-    if (href) {
-      try {
-        routePath = new URL(href, window.location.origin).pathname;
-      } catch {
-        routePath = null;
+  const parentLabelFor = (node) => {
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) {
+        const label = toLabel(
+          current.querySelector?.(
+            '.ant-menu-submenu-title, .el-submenu__title, .tree-node__label, [role="menuitem"], [role="treeitem"], a, span'
+          ) || current
+        );
+        if (label && label !== toLabel(node)) return label;
       }
+      current = current.parentElement;
     }
-    const parentMenu = node.closest('[role="menu"], nav, aside');
-    const depth = parentMenu ? parentMenu.querySelectorAll('[role="menu"], ul, ol').length - 1 : 0;
+    return null;
+  };
+  const depthFor = (node) => {
+    let depth = 0;
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) depth += 1;
+      current = current.parentElement;
+    }
+    return Math.max(0, depth);
+  };
+  const result = [];
+  const seen = new Set();
+  const siblingCounts = new Map();
+  const nodes = document.querySelectorAll(nodeSelectors.join(','));
+  Array.from(nodes).forEach((node, index) => {
+    if (!isVisible(node)) return;
+    const text = toLabel(node);
+    if (!text) return;
+    const href = node.getAttribute('href')
+      || node.getAttribute('data-route-path')
+      || node.getAttribute('data-path');
+    const routePath = toRoutePath(href);
+    const role = node.getAttribute('role') || 'menuitem';
+    const ariaExpanded = node.getAttribute('aria-expanded');
+    const className = normalizeText(node.className);
+    let entryType = normalizeText(
+      node.getAttribute('data-entry-type') || node.getAttribute('data-interaction-type')
+    ).replace(/-/g, '_') || null;
+    if (!entryType && role === 'treeitem' && ariaExpanded === 'false') {
+      entryType = 'tree_expand';
+    }
+    if (!entryType && (
+      ariaExpanded === 'false'
+      || className.includes('submenu')
+      || className.includes('sub-menu')
+      || className.includes('subnav')
+    )) {
+      entryType = 'menu_expand';
+    }
+    const parentLabel = parentLabelFor(node);
+    const depth = depthFor(node);
+    const ariaLabel = node.getAttribute('aria-label');
+    const siblingKey = JSON.stringify([text, parentLabel, depth, role, ariaLabel || null]);
+    const siblingIndex = siblingCounts.get(siblingKey) || 0;
+    siblingCounts.set(siblingKey, siblingIndex + 1);
+    const dedupeKey = JSON.stringify([text, routePath, parentLabel, depth, role, ariaLabel || null, siblingIndex]);
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
     result.push({
       label: text,
       route_path: routePath,
       page_route_path: routePath,
-      depth: depth > 0 ? depth : 0,
+      depth,
       order: index,
-      role: node.getAttribute('role') || 'menuitem',
-      aria_label: node.getAttribute('aria-label'),
+      role,
+      aria_label: ariaLabel,
+      sibling_index: siblingIndex,
+      parent_label: parentLabel,
+      entry_type: entryType,
+      aria_expanded: ariaExpanded,
     });
   });
   return result;
+}
+"""
+    _MATERIALIZE_NAVIGATION_TARGETS_SCRIPT = """
+async (targets) => {
+  const __RUNLET_MATERIALIZE_NAVIGATION_TARGETS__ = true;
+  const normalizeText = (value) => {
+    if (typeof value !== "string") return "";
+    return value.replace(/\\s+/g, " ").trim();
+  };
+  const isVisible = (node) => {
+    if (!(node instanceof Element)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && rect.width > 0
+      && rect.height > 0;
+  };
+  const toLabel = (node) => normalizeText(
+    node?.getAttribute?.("data-menu-label")
+      || node?.getAttribute?.("aria-label")
+      || node?.textContent
+      || ""
+  );
+  const toRoutePath = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return new URL(trimmed, window.location.href).pathname || null;
+    } catch {
+      return trimmed.startsWith("/") ? trimmed : null;
+    }
+  };
+  const nodeSelectors = [
+    '[role="menuitem"]',
+    '[role="treeitem"]',
+    'nav a',
+    'aside a',
+    '[data-menu-item]',
+    '[data-route-path]',
+    '[data-path]',
+    '.menu a',
+    '.ant-menu-submenu-title',
+    '.el-submenu__title',
+    '.el-menu-item',
+    '.tree-node',
+    '.el-tree-node__content'
+  ];
+  const itemSelectors = '[role="menuitem"], [role="treeitem"], .ant-menu-submenu, .el-submenu, .tree-node, li';
+  const containerSelectors = '[role="menu"], nav, aside, ul, ol, [class*="menu"], [class*="nav"], [class*="tree"]';
+  const parentLabelFor = (node) => {
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) {
+        const label = toLabel(
+          current.querySelector?.(
+            '.ant-menu-submenu-title, .el-submenu__title, .tree-node__label, [role="menuitem"], [role="treeitem"], a, span'
+          ) || current
+        );
+        if (label && label !== toLabel(node)) return label;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+  const depthFor = (node) => {
+    let depth = 0;
+    let current = node?.parentElement || null;
+    while (current) {
+      if (current.matches?.(itemSelectors)) depth += 1;
+      current = current.parentElement;
+    }
+    return Math.max(0, depth);
+  };
+  const collectMenuNodes = (root) => {
+    const scope = root || document;
+    const result = [];
+    const seen = new Set();
+    const siblingCounts = new Map();
+    const nodes = scope.querySelectorAll(nodeSelectors.join(','));
+    Array.from(nodes).forEach((node, index) => {
+      if (!isVisible(node)) return;
+      const label = toLabel(node);
+      if (!label) return;
+      const href = node.getAttribute('href')
+        || node.getAttribute('data-route-path')
+        || node.getAttribute('data-path');
+      const routePath = toRoutePath(href);
+      const role = node.getAttribute('role') || 'menuitem';
+      const ariaExpanded = node.getAttribute('aria-expanded');
+      const className = normalizeText(node.className);
+      let entryType = normalizeText(
+        node.getAttribute('data-entry-type') || node.getAttribute('data-interaction-type')
+      ).replace(/-/g, '_') || null;
+      if (!entryType && role === 'treeitem' && ariaExpanded === 'false') {
+        entryType = 'tree_expand';
+      }
+      if (!entryType && (
+        ariaExpanded === 'false'
+        || className.includes('submenu')
+        || className.includes('sub-menu')
+        || className.includes('subnav')
+      )) {
+        entryType = 'menu_expand';
+      }
+      const parentLabel = parentLabelFor(node);
+      const depth = depthFor(node);
+      const ariaLabel = node.getAttribute('aria-label');
+      const siblingKey = JSON.stringify([label, parentLabel, depth, role, ariaLabel || null]);
+      const siblingIndex = siblingCounts.get(siblingKey) || 0;
+      siblingCounts.set(siblingKey, siblingIndex + 1);
+      const dedupeKey = JSON.stringify([label, routePath, parentLabel, depth, role, ariaLabel || null, siblingIndex]);
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      result.push({
+        label,
+        route_path: routePath,
+        page_route_path: routePath,
+        depth,
+        order: index,
+        role,
+        aria_label: ariaLabel,
+        sibling_index: siblingIndex,
+        parent_label: parentLabel,
+        entry_type: entryType,
+        aria_expanded: ariaExpanded,
+      });
+    });
+    return result;
+  };
+  const findTargetNode = (target) => {
+    const targetLabel = normalizeText(target?.label);
+    const targetParent = normalizeText(target?.parent_label);
+    const targetRole = normalizeText(target?.role);
+    const targetRoute = toRoutePath(target?.route_path || target?.page_route_path);
+    const targetDepth = Number.isFinite(Number(target?.depth)) ? Number(target.depth) : null;
+    const targetOrder = Number.isFinite(Number(target?.order)) ? Number(target.order) : null;
+    const targetSiblingIndex = Number.isFinite(Number(target?.sibling_index)) ? Number(target.sibling_index) : null;
+    const targetAriaLabel = normalizeText(target?.aria_label);
+    const locatorCandidates = Array.isArray(target?.locator_candidates)
+      ? target.locator_candidates.filter((candidate) => candidate && typeof candidate === 'object')
+      : [];
+    const siblingCounts = new Map();
+    const toCandidateEntry = (node, index) => {
+      if (!isVisible(node)) return null;
+      const label = toLabel(node);
+      const role = normalizeText(node.getAttribute('role') || 'menuitem');
+      const parentLabel = parentLabelFor(node);
+      const depth = depthFor(node);
+      const ariaLabel = normalizeText(node.getAttribute('aria-label'));
+      const siblingKey = JSON.stringify([label, parentLabel, depth, role, ariaLabel || null]);
+      const siblingIndex = siblingCounts.get(siblingKey) || 0;
+      siblingCounts.set(siblingKey, siblingIndex + 1);
+      return {
+        node,
+        index,
+        routePath: toRoutePath(
+          node.getAttribute('href') || node.getAttribute('data-route-path') || node.getAttribute('data-path')
+        ),
+        ariaLabel,
+        label,
+        role,
+        parentLabel,
+        depth,
+        siblingIndex,
+      };
+    };
+    const indexedCandidates = Array.from(document.querySelectorAll(nodeSelectors.join(',')))
+      .map((node, index) => toCandidateEntry(node, index))
+      .filter((entry) => entry !== null);
+    const baseMatches = indexedCandidates.filter((entry) => {
+      if (!entry.label || (targetLabel && entry.label !== targetLabel)) return false;
+      if (targetRole) {
+        if (entry.role && entry.role !== targetRole) return false;
+      }
+      if (targetParent) {
+        if (entry.parentLabel !== targetParent) return false;
+      }
+      if (targetDepth !== null && entry.depth !== targetDepth) return false;
+      return true;
+    });
+    if (baseMatches.length === 0) return null;
+    let matches = baseMatches;
+    if (targetRoute) {
+      const routeMatches = matches.filter((entry) => entry.routePath === targetRoute);
+      if (routeMatches.length > 0) matches = routeMatches;
+    }
+    if (targetAriaLabel) {
+      const ariaMatches = matches.filter((entry) => entry.ariaLabel === targetAriaLabel);
+      if (ariaMatches.length > 0) matches = ariaMatches;
+    }
+    if (targetSiblingIndex !== null) {
+      const siblingMatches = matches.filter((entry) => entry.siblingIndex === targetSiblingIndex);
+      if (siblingMatches.length > 0) matches = siblingMatches;
+    }
+    for (const candidate of locatorCandidates) {
+      const strategyType = normalizeText(candidate.strategy_type);
+      const selector = normalizeText(candidate.selector);
+      if (!strategyType || !selector) continue;
+      let locatorMatches = [];
+      if (strategyType === 'route_path') {
+        locatorMatches = matches.filter((entry) => entry.routePath === toRoutePath(selector));
+      } else if (strategyType === 'aria_label') {
+        locatorMatches = matches.filter((entry) => entry.ariaLabel === selector);
+      } else if (strategyType === 'sibling_index' && Number.isFinite(Number(selector))) {
+        locatorMatches = matches.filter((entry) => entry.siblingIndex === Number(selector));
+      } else if (strategyType === 'order' && Number.isFinite(Number(selector))) {
+        locatorMatches = matches.filter((entry) => entry.index === Number(selector));
+      }
+      if (locatorMatches.length > 0) {
+        matches = locatorMatches;
+      }
+    }
+    if (targetOrder !== null) {
+      const orderMatch = matches.find((entry) => entry.index === targetOrder);
+      if (orderMatch) return orderMatch.node;
+    }
+    return matches[0]?.node || null;
+  };
+  const triggerClick = (node) => {
+    if (!(node instanceof Element)) return false;
+    node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  };
+  const triggerHover = (node) => {
+    if (!(node instanceof Element)) return false;
+    node.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+    node.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
+    return true;
+  };
+  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const safeTargets = Array.isArray(targets) ? targets.filter((target) => target && typeof target === 'object') : [];
+  const materialized = [];
+  for (const target of safeTargets) {
+    const node = findTargetNode(target);
+    if (!node) continue;
+    const targetDepth = Number.isFinite(Number(target?.depth)) ? Number(target.depth) : 0;
+    const targetIdentity = {
+      label: normalizeText(target?.label) || null,
+      depth: targetDepth,
+      role: normalizeText(target?.role) || null,
+      aria_label: normalizeText(target?.aria_label) || null,
+    };
+    if (Number.isFinite(Number(target?.sibling_index))) {
+      targetIdentity.sibling_index = Number(target.sibling_index);
+    }
+    const triggerNode = node.querySelector?.('[aria-expanded="false"], .ant-menu-submenu-title, .el-submenu__title, .tree-node__switcher') || node;
+    let applied = false;
+    if (target.target_kind === 'tree_expand') {
+      applied = triggerClick(triggerNode);
+    } else {
+      applied = triggerClick(triggerNode);
+      if (!applied) {
+        applied = triggerHover(node);
+      } else {
+        triggerHover(node);
+      }
+    }
+    if (!applied) continue;
+    await wait(150);
+    const container = node.closest?.(containerSelectors) || document;
+    for (const item of collectMenuNodes(container)) {
+      const nextItem = { ...item };
+      if (!nextItem.parent_label && nextItem.depth > targetDepth) {
+        nextItem.parent_label = normalizeText(target.label) || null;
+      }
+      if (!nextItem.materialized_parent_identity && nextItem.depth > targetDepth) {
+        nextItem.materialized_parent_identity = targetIdentity.label ? targetIdentity : null;
+      }
+      materialized.push(nextItem);
+    }
+  }
+  return materialized;
 }
 """
     _DOM_ELEMENTS_SCRIPT = """
@@ -570,12 +992,35 @@ class PlaywrightBrowserFactory:
         class _Session:
             framework_hint = None
             _settled = False
+            _last_ready_location: str | None = None
 
             async def _ensure_settled(self_nonlocal) -> None:
-                if self_nonlocal._settled:
+                current_location = self_nonlocal._current_page_location()
+                if (
+                    self_nonlocal._settled
+                    and current_location is not None
+                    and current_location == self_nonlocal._last_ready_location
+                ):
                     return
-                await page.wait_for_timeout(PlaywrightBrowserFactory._INITIAL_SETTLE_MS)
+                initial_wait_ms = (
+                    PlaywrightBrowserFactory._INITIAL_SETTLE_MS
+                    if not self_nonlocal._settled
+                    else PlaywrightBrowserFactory._ROUTE_SETTLE_MS
+                )
+                await page.wait_for_timeout(initial_wait_ms)
+                samples: list[dict[str, object]] = []
+                for sample_index in range(PlaywrightBrowserFactory._APP_READINESS_MAX_SAMPLES):
+                    samples.append(await self_nonlocal._collect_readiness_sample())
+                    readiness = evaluate_app_readiness(
+                        samples=samples,
+                        stabilization_window=PlaywrightBrowserFactory._APP_READINESS_WINDOW,
+                    )
+                    if readiness.shell_ready and readiness.route_ready and readiness.content_ready:
+                        break
+                    if sample_index < PlaywrightBrowserFactory._APP_READINESS_MAX_SAMPLES - 1:
+                        await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
                 self_nonlocal._settled = True
+                self_nonlocal._last_ready_location = self_nonlocal._current_page_location() or current_location
 
             async def collect_route_hints(
                 self_nonlocal,
@@ -586,14 +1031,73 @@ class PlaywrightBrowserFactory:
                 await self_nonlocal._ensure_settled()
                 return await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
 
-            async def collect_dom_menu_nodes(
+            async def collect_route_snapshot(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> dict[str, object]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                return await self_nonlocal._collect_route_snapshot_raw()
+
+            async def _collect_route_snapshot_raw(self_nonlocal) -> dict[str, object]:
+                runtime_snapshot_raw = await self_nonlocal._evaluate_with_optional_arg(
+                    PlaywrightBrowserFactory._ROUTE_RUNTIME_SNAPSHOT_SCRIPT,
+                    {},
+                )
+                runtime_snapshot = runtime_snapshot_raw if isinstance(runtime_snapshot_raw, dict) else {}
+                current_url = self_nonlocal._clean_text(
+                    getattr(page, "url", None) or getattr(page, "current_url", None)
+                )
+                fallback_pathname, fallback_hash = self_nonlocal._parse_current_location(current_url)
+
+                route_snapshot = resolve_route_snapshot(
+                    pathname=runtime_snapshot.get("pathname") or fallback_pathname,
+                    location_hash=runtime_snapshot.get("location_hash") or fallback_hash,
+                    router_route=runtime_snapshot.get("router_route"),
+                    history_route=runtime_snapshot.get("history_route"),
+                )
+                return {
+                    "resolved_route": route_snapshot.resolved_route,
+                    "route_source": route_snapshot.route_source,
+                    "pathname": route_snapshot.pathname,
+                    "hash_route": route_snapshot.hash_route,
+                    "router_route": route_snapshot.router_route,
+                    "history_route": route_snapshot.history_route,
+                }
+
+            async def collect_dom_menu_skeleton(
                 self_nonlocal,
                 *,
                 crawl_scope: str,
             ) -> list[dict[str, object]]:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
-                return await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                collected = await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                return self_nonlocal._ensure_dict_list(collected)
+
+            async def materialize_navigation_targets(
+                self_nonlocal,
+                *,
+                targets: list[dict[str, object]],
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                if not targets:
+                    return []
+                collected = await self_nonlocal._evaluate_with_optional_arg(
+                    PlaywrightBrowserFactory._MATERIALIZE_NAVIGATION_TARGETS_SCRIPT,
+                    targets,
+                )
+                return self_nonlocal._ensure_dict_list(collected)
+
+            async def collect_dom_menu_nodes(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                return await self_nonlocal._collect_materialized_menu_nodes(crawl_scope=crawl_scope)
 
             async def collect_dom_elements(
                 self_nonlocal,
@@ -602,7 +1106,7 @@ class PlaywrightBrowserFactory:
             ) -> list[dict[str, object]]:
                 await self_nonlocal._ensure_settled()
                 route_hints = await page.evaluate(PlaywrightBrowserFactory._ROUTE_HINTS_SCRIPT)
-                menu_nodes = await page.evaluate(PlaywrightBrowserFactory._MENU_NODES_SCRIPT)
+                menu_nodes = await self_nonlocal._collect_materialized_menu_nodes(crawl_scope=crawl_scope)
                 route_paths: list[str] = []
                 seen_routes: set[str] = set()
 
@@ -623,28 +1127,19 @@ class PlaywrightBrowserFactory:
                         if isinstance(node, dict):
                             add_route(node.get("route_path") or node.get("page_route_path"))
                 else:
-                    current_path = await page.evaluate("() => window.location.pathname")
-                    add_route(current_path)
+                    add_route(await self_nonlocal._resolve_current_route_path())
 
                 if not route_paths:
-                    current_path = await page.evaluate("() => window.location.pathname")
-                    add_route(current_path)
+                    add_route(await self_nonlocal._resolve_current_route_path())
 
                 elements: list[dict[str, object]] = []
                 seen_payloads: set[str] = set()
                 for route_path in route_paths:
                     await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
-                    await self_nonlocal._wait_for_route_render()
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
-                    collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
-                    if not isinstance(collected, list):
-                        continue
-                    for item in collected:
-                        if not isinstance(item, dict):
-                            continue
-                        payload = dict(item)
-                        if not payload.get("page_route_path"):
-                            payload["page_route_path"] = route_path
+                    await self_nonlocal._stabilize_after_navigation()
+                    resolved_route = await self_nonlocal._resolve_current_route_path(default_route=route_path)
+                    collected = await self_nonlocal._collect_current_page_elements(default_route=resolved_route)
+                    for payload in collected:
                         dedupe_key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
                         if dedupe_key in seen_payloads:
                             continue
@@ -699,6 +1194,57 @@ class PlaywrightBrowserFactory:
                 if isinstance(collected, list):
                     return [item for item in collected if isinstance(item, dict)]
                 return []
+
+            async def visit_page_target(
+                self_nonlocal,
+                *,
+                page_target: dict[str, object],
+                crawl_scope: str,
+            ) -> dict[str, object]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                route_path = self_nonlocal._normalize_path(
+                    page_target.get("route_hint") or page_target.get("route_path")
+                )
+                warning_messages: list[str] = []
+                if route_path is None:
+                    warning_messages.append("route_unresolved")
+                    return {
+                        "route_path": "/",
+                        "resolved_route": "/",
+                        "state_context": {"active_tab": "default"},
+                        "elements": [],
+                        "warning_messages": warning_messages,
+                    }
+
+                await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
+                await self_nonlocal._stabilize_after_navigation()
+
+                route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                resolved_route = self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or route_path
+                if resolved_route != route_path:
+                    warning_messages.append("route_unresolved")
+
+                elements = await self_nonlocal._collect_current_page_elements(default_route=resolved_route)
+                metadata = await self_nonlocal.collect_page_metadata(crawl_scope="current")
+                if any(
+                    isinstance(item, dict)
+                    and (
+                        item.get("reachable") is False
+                        or (isinstance(item.get("status_code"), int) and item.get("status_code") >= 400)
+                    )
+                    for item in metadata
+                ):
+                    warning_messages.append("route_visible_but_unreachable")
+
+                return {
+                    "route_path": route_path,
+                    "resolved_route": resolved_route,
+                    "state_context": {"active_tab": "default"},
+                    "elements": elements,
+                    "page_metadata": metadata,
+                    "warning_messages": warning_messages,
+                }
 
             async def collect_state_probe_baseline(
                 self_nonlocal,
@@ -833,6 +1379,11 @@ class PlaywrightBrowserFactory:
             ) -> dict[str, object]:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
+                action = build_navigation_action_payload(
+                    target=action,
+                    route_path=action.get("route_path") or action.get("page_route_path") or action.get("route_hint"),
+                    base_state_context=action.get("state_context"),
+                )
                 entry_type = self_nonlocal._clean_text(action.get("entry_type") or action.get("interaction_type"))
                 if entry_type is None or entry_type.lower().replace("-", "_") not in ALLOWED_STATE_PROBE_ACTIONS:
                     raise ValueError("unsafe state probe action")
@@ -840,8 +1391,7 @@ class PlaywrightBrowserFactory:
                 route_path = self_nonlocal._normalize_path(action.get("route_path") or action.get("page_route_path"))
                 if route_path is not None:
                     await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
-                    await self_nonlocal._wait_for_route_render()
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    await self_nonlocal._stabilize_after_navigation()
                 else:
                     route_hints = await self_nonlocal.collect_route_hints(crawl_scope="current")
                     route_path = "/"
@@ -885,10 +1435,50 @@ class PlaywrightBrowserFactory:
                     "probe_apply_reason": execution_reason,
                 }
 
+            async def perform_navigation_target(
+                self_nonlocal,
+                *,
+                target: dict[str, object],
+                page_context: dict[str, object],
+                crawl_scope: str,
+            ) -> dict[str, object]:
+                del crawl_scope
+                await self_nonlocal._ensure_settled()
+                action = build_navigation_action_payload(
+                    target=target,
+                    route_path=target.get("route_hint") or target.get("route_path"),
+                    base_state_context=target.get("state_context"),
+                )
+                route_path = self_nonlocal._normalize_path(action.get("route_path") or action.get("route_hint"))
+                current_route = self_nonlocal._normalize_path(
+                    page_context.get("resolved_route") or page_context.get("route_path")
+                )
+
+                if route_path is not None and route_path != current_route:
+                    await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
+                    await self_nonlocal._stabilize_after_navigation()
+                    route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                    current_route = self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or route_path
+                    if current_route != route_path:
+                        state_context = target.get("state_context")
+                        if not isinstance(state_context, dict):
+                            state_context = {}
+                        return {
+                            "route_path": route_path,
+                            "state_context": state_context,
+                            "elements": [],
+                            "probe_applied": False,
+                            "probe_apply_reason": "route_unresolved",
+                        }
+                return await self_nonlocal.perform_state_probe_action(
+                    action=action,
+                    crawl_scope="current",
+                )
+
             async def _evaluate_with_optional_arg(
                 self_nonlocal,
                 script: str,
-                arg: dict[str, object],
+                arg: object,
             ):
                 try:
                     return await page.evaluate(script, arg)
@@ -899,6 +1489,81 @@ class PlaywrightBrowserFactory:
                         return {"applied": False, "reason": "action_execution_not_supported"}
                 except Exception:
                     return {"applied": False, "reason": "action_execution_not_supported"}
+
+            async def _collect_current_page_elements(
+                self_nonlocal,
+                *,
+                default_route: str,
+            ) -> list[dict[str, object]]:
+                collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
+                if not isinstance(collected, list):
+                    return []
+                elements: list[dict[str, object]] = []
+                for item in collected:
+                    if not isinstance(item, dict):
+                        continue
+                    payload = dict(item)
+                    normalized_route = self_nonlocal._normalize_path(
+                        payload.get("page_route_path") or payload.get("route_path")
+                    )
+                    if normalized_route is None or (normalized_route == "/" and default_route != "/"):
+                        payload["page_route_path"] = default_route
+                    elements.append(payload)
+                return elements
+
+            async def _collect_materialized_menu_nodes(
+                self_nonlocal,
+                *,
+                crawl_scope: str,
+            ) -> list[dict[str, object]]:
+                skeleton = await self_nonlocal.collect_dom_menu_skeleton(crawl_scope=crawl_scope)
+                materialized = await self_nonlocal.materialize_navigation_targets(
+                    targets=build_menu_expand_targets(skeleton),
+                    crawl_scope=crawl_scope,
+                )
+                return merge_menu_skeleton_and_materialized_nodes(
+                    skeleton=skeleton,
+                    materialized=materialized,
+                )
+
+            def _ensure_dict_list(self_nonlocal, value: object) -> list[dict[str, object]]:
+                if not isinstance(value, list):
+                    return []
+                result: list[dict[str, object]] = []
+                for item in value:
+                    if isinstance(item, dict):
+                        result.append(item)
+                return result
+
+            async def _collect_readiness_sample(self_nonlocal) -> dict[str, object]:
+                route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                shell_ready_raw = await self_nonlocal._evaluate_with_optional_arg(
+                    """
+() => {
+  const readyState = document.readyState;
+  const hasShell = Boolean(
+    document.querySelector("#app, #root, main, [role='main'], [data-app-root]")
+      || document.body?.children?.length
+  );
+  return {
+    shell_ready: (readyState === "interactive" || readyState === "complete") && hasShell,
+  };
+}
+""",
+                    {},
+                )
+                shell_ready = (
+                    isinstance(shell_ready_raw, dict) and shell_ready_raw.get("shell_ready") is True
+                )
+                try:
+                    content_ready = bool(await page.evaluate(PlaywrightBrowserFactory._ROUTE_RENDER_READY_SCRIPT))
+                except Exception:
+                    content_ready = False
+                return {
+                    "resolved_route": route_snapshot.get("resolved_route"),
+                    "shell_ready": shell_ready,
+                    "content_ready": content_ready,
+                }
 
             def _append_unique_action(
                 self_nonlocal,
@@ -927,6 +1592,18 @@ class PlaywrightBrowserFactory:
                 cleaned = value.strip()
                 return cleaned or None
 
+            def _parse_current_location(self_nonlocal, current_url: str | None) -> tuple[str | None, str | None]:
+                if current_url is None:
+                    return None, None
+                try:
+                    parsed = urlparse(current_url)
+                except Exception:
+                    return None, None
+                pathname = parsed.path or "/"
+                location_hash = parsed.fragment
+                normalized_hash = f"#{location_hash}" if location_hash else None
+                return pathname, normalized_hash
+
             async def _wait_for_route_render(self_nonlocal) -> None:
                 waiter = getattr(page, "wait_for_function", None)
                 if not callable(waiter):
@@ -940,6 +1617,17 @@ class PlaywrightBrowserFactory:
                     )
                 except Exception:
                     return
+
+            def _current_page_location(self_nonlocal) -> str | None:
+                return self_nonlocal._clean_text(getattr(page, "url", None) or getattr(page, "current_url", None))
+
+            async def _resolve_current_route_path(self_nonlocal, default_route: str = "/") -> str:
+                route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                return self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or default_route
+
+            async def _stabilize_after_navigation(self_nonlocal) -> None:
+                await self_nonlocal._wait_for_route_render()
+                await self_nonlocal._ensure_settled()
 
             async def close(self_nonlocal) -> None:
                 await page.close()
@@ -1012,6 +1700,8 @@ class CrawlerService:
                 browser_session=browser_session,
                 system=system,
                 crawl_scope=crawl_scope,
+                page_candidates=page_discovery_result.pages,
+                navigation_targets=page_discovery_result.navigation_targets,
             )
         finally:
             await browser_session.close()
@@ -1078,7 +1768,10 @@ class CrawlerService:
         )
         page_candidates: dict[str, PageCandidate] = {}
         for candidate in discovery.pages + dom.pages + probe.pages:
-            page_candidates[candidate.route_path] = candidate
+            existing = page_candidates.get(candidate.route_path)
+            page_candidates[candidate.route_path] = (
+                candidate if existing is None else self._merge_page_candidate(existing=existing, incoming=candidate)
+            )
 
         title_route_map = self._build_title_route_map(page_candidates.values())
 
@@ -1167,9 +1860,36 @@ class CrawlerService:
                     if candidate.stability_score is not None
                     else existing.stability_score,
                     "usage_description": candidate.usage_description or existing.usage_description,
+                    "materialized_by": candidate.materialized_by or existing.materialized_by,
+                    "navigation_diagnostics": self._merge_dict(
+                        existing.navigation_diagnostics,
+                        candidate.navigation_diagnostics,
+                    ),
                 }
             )
         return [merged[key] for key in ordered_keys]
+
+    def _merge_page_candidate(self, *, existing: PageCandidate, incoming: PageCandidate) -> PageCandidate:
+        return existing.model_copy(
+            update={
+                "page_title": existing.page_title or incoming.page_title,
+                "page_summary": existing.page_summary or incoming.page_summary,
+                "keywords": self._merge_dict(existing.keywords, incoming.keywords),
+                "discovery_sources": sorted({*existing.discovery_sources, *incoming.discovery_sources}),
+                "entry_candidates": self._merge_entry_candidates(
+                    existing.entry_candidates,
+                    incoming.entry_candidates,
+                ),
+                "context_constraints": self._merge_dict(
+                    existing.context_constraints,
+                    incoming.context_constraints,
+                ),
+                "navigation_diagnostics": self._merge_dict(
+                    existing.navigation_diagnostics,
+                    incoming.navigation_diagnostics,
+                ),
+            }
+        )
 
     def _build_representative_element_key(self, candidate: ElementCandidate) -> str:
         payload = {
@@ -1225,6 +1945,23 @@ class CrawlerService:
                 continue
             seen.add(serialized)
             merged.append(normalized)
+        return merged
+
+    def _merge_entry_candidates(
+        self,
+        base: list[dict[str, object]],
+        incoming: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        merged: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for candidate in [*base, *incoming]:
+            if not isinstance(candidate, dict):
+                continue
+            serialized = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
+            if serialized in seen:
+                continue
+            seen.add(serialized)
+            merged.append(dict(candidate))
         return merged
 
     def _build_title_route_map(self, pages: list[PageCandidate] | object) -> dict[str, str]:
@@ -1292,6 +2029,7 @@ class CrawlerService:
                 discovery_sources=candidate.discovery_sources,
                 entry_candidates=candidate.entry_candidates,
                 context_constraints=candidate.context_constraints,
+                navigation_diagnostics=candidate.navigation_diagnostics,
             )
             self.session.add(page)
             await self._flush()
@@ -1306,10 +2044,16 @@ class CrawlerService:
         menus: list[MenuCandidate],
         page_map: dict[str, Page],
     ) -> None:
+        identity_map: dict[str, MenuNode] = {}
         label_map: dict[str, MenuNode] = {}
         for candidate in menus:
             page = page_map.get(candidate.page_route_path or candidate.route_path or "")
-            parent = label_map.get(candidate.parent_label or "")
+            parent = None
+            parent_identity_key = self._serialize_navigation_identity(candidate.parent_navigation_identity)
+            if parent_identity_key is not None:
+                parent = identity_map.get(parent_identity_key)
+            if parent is None:
+                parent = label_map.get(candidate.parent_label or "")
             menu = MenuNode(
                 system_id=system_id,
                 snapshot_id=snapshot_id,
@@ -1327,6 +2071,9 @@ class CrawlerService:
             self.session.add(menu)
             await self._flush()
             label_map[candidate.label] = menu
+            identity_key = self._serialize_navigation_identity(candidate.navigation_identity)
+            if identity_key is not None:
+                identity_map[identity_key] = menu
 
     async def _persist_elements(
         self,
@@ -1352,11 +2099,48 @@ class CrawlerService:
                 state_signature=candidate.state_signature,
                 state_context=candidate.state_context,
                 locator_candidates=candidate.locator_candidates,
+                materialized_by=candidate.materialized_by,
+                navigation_diagnostics=candidate.navigation_diagnostics,
                 stability_score=candidate.stability_score,
                 usage_description=candidate.usage_description,
             )
             self.session.add(element)
             await self._flush()
+
+    def _serialize_navigation_identity(self, value: dict[str, object] | None) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        label = value.get("label")
+        depth = value.get("depth")
+        if not isinstance(label, str) or not label.strip():
+            return None
+        if isinstance(depth, bool):
+            return None
+        if not isinstance(depth, int):
+            if isinstance(depth, float):
+                depth = int(depth)
+            elif isinstance(depth, str) and depth.strip().isdigit():
+                depth = int(depth.strip())
+            else:
+                depth = 0
+        normalized: dict[str, object] = {
+            "label": label.strip(),
+            "depth": depth,
+        }
+        for key in ("role", "aria_label"):
+            raw = value.get(key)
+            if isinstance(raw, str) and raw.strip():
+                normalized[key] = raw.strip()
+        sibling_index = value.get("sibling_index")
+        if isinstance(sibling_index, bool):
+            sibling_index = None
+        elif isinstance(sibling_index, float):
+            sibling_index = int(sibling_index)
+        elif isinstance(sibling_index, str) and sibling_index.strip().isdigit():
+            sibling_index = int(sibling_index.strip())
+        if isinstance(sibling_index, int):
+            normalized["sibling_index"] = sibling_index
+        return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
 
     async def _load_latest_valid_auth_state(self, *, system_id: UUID) -> AuthState | None:
         statement = (

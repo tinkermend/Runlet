@@ -1,9 +1,11 @@
 import pytest
 
+from app.domains.crawler_service.extractors.page_discovery import build_page_visit_targets
 from app.domains.crawler_service.extractors.state_probe import (
     ControlledStateProbeExtractor,
     build_state_signature,
 )
+from app.domains.crawler_service.schemas import NavigationTargetResult, PageCandidate
 
 
 class FakeStateProbeSession:
@@ -167,6 +169,7 @@ class NotAppliedStateProbeSession(FakeStateProbeSession):
             "state_context": action.get("state_context"),
             "elements": action.get("elements"),
             "probe_applied": False,
+            "probe_apply_reason": "target_panel_not_materialized",
         }
 
 
@@ -193,6 +196,106 @@ class UnsafeOnlyStateProbeSession(FakeStateProbeSession):
         return []
 
 
+class PageVisitFirstStateProbeSession:
+    framework_hint = "react"
+
+    def __init__(self) -> None:
+        self.visited_routes: list[str] = []
+        self.performed_targets: list[str] = []
+        self.performed_payloads: list[dict[str, object]] = []
+        self.page_contexts = {
+            "/dashboard": {
+                "route_path": "/dashboard",
+                "resolved_route": "/dashboard",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "page_route_path": "/dashboard",
+                        "element_type": "button",
+                        "role": "button",
+                        "text": "刷新",
+                    }
+                ],
+            },
+            "/reports": {
+                "route_path": "/reports",
+                "resolved_route": "/reports",
+                "state_context": {"active_tab": "default"},
+                "elements": [
+                    {
+                        "page_route_path": "/reports",
+                        "element_type": "button",
+                        "role": "tab",
+                        "text": "已归档",
+                    }
+                ],
+            },
+        }
+
+    async def visit_page_target(
+        self,
+        *,
+        page_target: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope
+        route_path = str(page_target.get("route_hint") or page_target.get("route_path") or "")
+        self.visited_routes.append(route_path)
+        context = self.page_contexts[route_path]
+        return {
+            "route_path": context["route_path"],
+            "resolved_route": context["resolved_route"],
+            "state_context": dict(context["state_context"]),
+            "elements": [dict(element) for element in context["elements"]],
+        }
+
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del crawl_scope, page_context
+        self.performed_payloads.append(dict(target))
+        entry_type = str(target.get("entry_type") or target.get("interaction_type") or "")
+        self.performed_targets.append(entry_type)
+        return {
+            "route_path": "/reports",
+            "state_context": {"active_tab": "已归档"},
+            "elements": [
+                {
+                    "page_route_path": "/reports",
+                    "element_type": "table",
+                    "role": "grid",
+                    "text": "归档报表",
+                }
+            ],
+            "probe_applied": True,
+        }
+
+
+class PageVisitFirstNotAppliedSession(PageVisitFirstStateProbeSession):
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del page_context, crawl_scope
+        self.performed_payloads.append(dict(target))
+        entry_type = str(target.get("entry_type") or target.get("interaction_type") or "")
+        self.performed_targets.append(entry_type)
+        return {
+            "route_path": "/reports",
+            "state_context": {"active_tab": "已归档"},
+            "elements": [],
+            "probe_applied": False,
+            "probe_apply_reason": "target_panel_not_materialized",
+        }
+
+
 @pytest.mark.anyio
 async def test_state_probe_collects_representative_states_without_unsafe_actions():
     extractor = ControlledStateProbeExtractor()
@@ -215,6 +318,12 @@ async def test_state_probe_stops_when_interaction_budget_is_exhausted():
     )
 
     assert "interaction_budget_exhausted" in result.warning_messages
+    budget_blocked_targets = [
+        target
+        for target in result.navigation_targets
+        if target.materialization_status == "blocked" and target.rejection_reason == "route_budget_exhausted"
+    ]
+    assert budget_blocked_targets
 
 
 @pytest.mark.anyio
@@ -227,7 +336,7 @@ async def test_state_probe_dedups_elements_by_state_signature():
 
     signatures = [element.state_signature for element in result.elements]
     assert signatures.count("users:modal=create") == 1
-    assert "state_signature_duplicate" in result.warning_messages
+    assert "navigation_target_duplicate" in result.warning_messages
 
 
 def test_build_state_signature_includes_numeric_pagination_context():
@@ -264,6 +373,10 @@ async def test_state_probe_skips_state_when_action_was_not_applied():
     assert result.elements == []
     assert result.failure_reason is None
     assert "state_transition_not_applied" in result.warning_messages
+    target = result.navigation_targets[0]
+    assert target.materialization_status == "not_applied"
+    assert target.rejection_reason == "state_transition_not_applied"
+    assert target.rejection_detail == "target_panel_not_materialized"
 
 
 @pytest.mark.anyio
@@ -277,3 +390,79 @@ async def test_state_probe_unsupported_action_is_warning_only_and_produces_no_st
     assert result.failure_reason is None
     assert result.elements == []
     assert "unsafe_action_rejected" in result.warning_messages
+
+
+@pytest.mark.anyio
+async def test_state_probe_visits_discovered_pages_before_deriving_state_targets():
+    browser_session = PageVisitFirstStateProbeSession()
+    page_candidates = [
+        PageCandidate(route_path="/dashboard", page_title="仪表盘"),
+        PageCandidate(route_path="/reports", page_title="报表中心"),
+    ]
+    page_targets = build_page_visit_targets(
+        pages=page_candidates,
+        navigation_targets=[
+            NavigationTargetResult(
+                target_key="page:/dashboard",
+                target_kind="page_route",
+                route_hint="/dashboard",
+                materialization_status="queued",
+            ),
+            NavigationTargetResult(
+                target_key="page:/reports",
+                target_kind="page_route",
+                route_hint="/reports",
+                materialization_status="queued",
+            ),
+        ],
+    )
+
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=browser_session,
+        system=None,
+        crawl_scope="full",
+        page_candidates=page_candidates,
+        navigation_targets=[target.to_record() for target in page_targets],
+    )
+
+    assert browser_session.visited_routes == ["/dashboard", "/reports"]
+    assert browser_session.performed_targets == ["tab_switch"]
+    assert browser_session.performed_payloads[0]["entry_type"] == "tab_switch"
+    assert browser_session.performed_payloads[0]["interaction_type"] == "tab_switch"
+    assert {element.state_signature for element in result.elements} >= {
+        "dashboard:default",
+        "reports:tab=已归档",
+    }
+
+
+@pytest.mark.anyio
+async def test_state_probe_page_first_propagates_failure_detail_and_warning():
+    browser_session = PageVisitFirstNotAppliedSession()
+    page_candidates = [
+        PageCandidate(route_path="/reports", page_title="报表中心"),
+    ]
+
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=browser_session,
+        system=None,
+        crawl_scope="full",
+        page_candidates=page_candidates,
+        navigation_targets=[
+            NavigationTargetResult(
+                target_key="tab:/reports/archived",
+                target_kind="tab_switch",
+                route_hint="/reports",
+                parent_target_key="page:/reports",
+                state_context={"active_tab": "已归档"},
+                materialization_status="queued",
+            )
+        ],
+    )
+
+    assert browser_session.performed_targets == ["tab_switch"]
+    assert "state_transition_not_applied" in result.warning_messages
+    assert "target_panel_not_materialized" in result.warning_messages
+    target = next(target for target in result.navigation_targets if target.target_kind == "tab_switch")
+    assert target.materialization_status == "not_applied"
+    assert target.rejection_reason == "state_transition_not_applied"
+    assert target.rejection_detail == "target_panel_not_materialized"

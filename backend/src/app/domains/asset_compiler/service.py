@@ -746,6 +746,13 @@ def _build_normalized_element(
         "usage_description": _normalize_text(element.usage_description),
         "state_signature": state_signature,
         "state_context": state_context,
+        "locator_candidates": raw_candidates,
+        "materialized_by": _normalize_text(element.materialized_by),
+        "navigation_diagnostics": (
+            dict(element.navigation_diagnostics)
+            if isinstance(element.navigation_diagnostics, dict)
+            else {}
+        ),
         "locator_bundle": {"candidates": locator_bundle.candidates},
     }
 

@@ -99,6 +99,10 @@ class Page(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
     )
+    navigation_diagnostics: dict[str, object] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
     crawled_at: datetime = Field(
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
@@ -192,6 +196,14 @@ class PageElement(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=True),
     )
     locator_candidates: list[dict[str, object]] | None = Field(
+        default=None,
+        sa_column=sa.Column(json_type, nullable=True),
+    )
+    materialized_by: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
+    )
+    navigation_diagnostics: dict[str, object] | None = Field(
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
     )

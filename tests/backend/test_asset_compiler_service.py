@@ -729,6 +729,175 @@ async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_m
 
 
 @pytest.mark.anyio
+async def test_compile_snapshot_carries_materialization_metadata_through_normalized_element_payload(
+    db_session,
+    asset_compiler_service,
+    seeded_modal_stateful_crawl_snapshot,
+    monkeypatch,
+):
+    from app.domains.asset_compiler import service as asset_compiler_service_module
+
+    captured_page_payloads: list[dict[str, object]] = []
+    original_build_page_fingerprint = asset_compiler_service_module.build_page_fingerprint
+
+    def capture_build_page_fingerprint(page_payload: dict[str, object]) -> dict[str, str]:
+        captured_page_payloads.append(page_payload)
+        return original_build_page_fingerprint(page_payload)
+
+    monkeypatch.setattr(
+        asset_compiler_service_module,
+        "build_page_fingerprint",
+        capture_build_page_fingerprint,
+    )
+
+    dialog = db_session.exec(
+        select(PageElement)
+        .where(PageElement.snapshot_id == seeded_modal_stateful_crawl_snapshot.id)
+        .where(PageElement.element_type == "dialog")
+        .order_by(PageElement.id.desc())
+    ).one()
+    dialog.materialized_by = "modal"
+    dialog.navigation_diagnostics = {
+        "target_kind": "open_modal",
+        "materialization_status": "materialized",
+    }
+    db_session.add(dialog)
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(
+        snapshot_id=seeded_modal_stateful_crawl_snapshot.id
+    )
+
+    assert result.status == "success"
+    assert result.check_ids
+    assert captured_page_payloads
+
+    dialog_payload = next(
+        element
+        for page_payload in captured_page_payloads
+        for element in page_payload["elements"]
+        if element["element_type"] == "dialog"
+    )
+    assert dialog_payload["materialized_by"] == "modal"
+    assert dialog_payload["navigation_diagnostics"] == {
+        "target_kind": "open_modal",
+        "materialization_status": "materialized",
+    }
+    assert dialog_payload["locator_bundle"]["candidates"][0]["selector"] == "role=dialog[name='新增用户']"
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_preserves_navigation_metadata_from_real_crawl_result(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+    seeded_auth_state,
+    monkeypatch,
+):
+    from app.domains.asset_compiler import service as asset_compiler_service_module
+    from app.domains.crawler_service.schemas import CrawlExtractionResult, ElementCandidate, MenuCandidate, PageCandidate
+    from app.domains.crawler_service.service import CrawlerService
+
+    class DummyBrowserSession:
+        async def close(self) -> None:
+            return None
+
+    class DummyBrowserFactory:
+        async def open_context(self, *, base_url: str, storage_state: dict[str, object]) -> DummyBrowserSession:
+            del base_url, storage_state
+            return DummyBrowserSession()
+
+    class StaticExtractor:
+        def __init__(self, result: CrawlExtractionResult) -> None:
+            self.result = result
+
+        async def extract(self, **kwargs) -> CrawlExtractionResult:
+            del kwargs
+            return self.result
+
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=DummyBrowserFactory(),
+        page_discovery_extractor=StaticExtractor(
+            CrawlExtractionResult(
+                pages=[
+                    PageCandidate(
+                        route_path="/users",
+                        page_title="用户管理",
+                        discovery_sources=["runtime_route_hints"],
+                        navigation_diagnostics={
+                            "resolved_route": "/users",
+                            "route_source": "hash",
+                        },
+                    )
+                ]
+            )
+        ),
+        dom_menu_extractor=StaticExtractor(
+            CrawlExtractionResult(
+                menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")]
+            )
+        ),
+        state_probe_extractor=StaticExtractor(
+            CrawlExtractionResult(
+                elements=[
+                    ElementCandidate(
+                        page_route_path="/users",
+                        element_type="dialog",
+                        state_signature="users:modal=create",
+                        state_context={"entry_type": "open_modal", "modal_title": "新增用户"},
+                        element_role="dialog",
+                        element_text="新增用户",
+                        playwright_locator="role=dialog[name='新增用户']",
+                        locator_candidates=[
+                            {"strategy_type": "semantic", "selector": "role=dialog[name='新增用户']"},
+                        ],
+                        materialized_by="open_modal",
+                        navigation_diagnostics={
+                            "target_kind": "open_modal",
+                            "materialization_status": "applied",
+                        },
+                    )
+                ]
+            )
+        ),
+    )
+
+    crawl_result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+    assert crawl_result.status == "success"
+    assert crawl_result.snapshot_id is not None
+
+    captured_page_payloads: list[dict[str, object]] = []
+    original_build_page_fingerprint = asset_compiler_service_module.build_page_fingerprint
+
+    def capture_build_page_fingerprint(page_payload: dict[str, object]) -> dict[str, str]:
+        captured_page_payloads.append(page_payload)
+        return original_build_page_fingerprint(page_payload)
+
+    monkeypatch.setattr(
+        asset_compiler_service_module,
+        "build_page_fingerprint",
+        capture_build_page_fingerprint,
+    )
+
+    compile_result = await asset_compiler_service.compile_snapshot(snapshot_id=crawl_result.snapshot_id)
+
+    assert compile_result.status == "success"
+    assert captured_page_payloads
+    dialog_payload = next(
+        element
+        for page_payload in captured_page_payloads
+        for element in page_payload["elements"]
+        if element["element_type"] == "dialog"
+    )
+    assert dialog_payload["materialized_by"] == "open_modal"
+    assert dialog_payload["navigation_diagnostics"] == {
+        "target_kind": "open_modal",
+        "materialization_status": "applied",
+    }
+
+
+@pytest.mark.anyio
 async def test_compile_snapshot_keeps_default_open_create_modal_active_without_modal_state(
     db_session,
     asset_compiler_service,

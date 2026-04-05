@@ -5,6 +5,105 @@ from typing import Any, Protocol
 from app.domains.crawler_service.schemas import CrawlExtractionResult, ElementCandidate, MenuCandidate
 
 
+def build_menu_expand_targets(skeleton: list[dict[str, Any]]) -> list[dict[str, object]]:
+    targets: list[dict[str, object]] = []
+    seen: set[tuple[object, ...]] = set()
+    for item in skeleton:
+        if not isinstance(item, dict):
+            continue
+        label = _clean_text_value(item.get("label") or item.get("text") or item.get("name"))
+        if label is None:
+            continue
+        entry_type = _normalize_entry_type_value(item.get("entry_type") or item.get("interaction_type"))
+        aria_expanded = _clean_text_value(item.get("aria_expanded"))
+        if entry_type not in {"menu_expand", "tree_expand", "expand_panel"} and aria_expanded != "false":
+            continue
+        target_kind = "tree_expand" if entry_type == "tree_expand" else "menu_expand"
+        parent_label = _clean_text_value(item.get("parent_label"))
+        depth = _to_int_value(item.get("depth"))
+        sibling_index = _to_optional_int_value(item.get("sibling_index"))
+        order = _to_int_value(item.get("order") or item.get("sort_order"))
+        route_path = _normalize_path_value(item.get("route_path") or item.get("path"))
+        page_route_path = _normalize_path_value(item.get("page_route_path") or item.get("route_path"))
+        dedupe_key = (
+            target_kind,
+            *_menu_identity_fields(
+                label=label,
+                parent_label=parent_label,
+                depth=depth,
+                role=_clean_text_value(item.get("role")),
+                aria_label=_clean_text_value(item.get("aria_label")),
+                sibling_index=sibling_index,
+            ),
+            route_path,
+            page_route_path,
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        targets.append(
+            {
+                "target_kind": target_kind,
+                "label": label,
+                "parent_label": parent_label,
+                "depth": depth,
+                "sibling_index": sibling_index,
+                "order": order,
+                "role": _clean_text_value(item.get("role")),
+                "aria_label": _clean_text_value(item.get("aria_label")),
+                "route_path": route_path,
+                "page_route_path": page_route_path,
+                "locator_candidates": _build_menu_locator_candidates(item=item, label=label),
+            }
+        )
+    return targets
+
+
+def merge_menu_skeleton_and_materialized_nodes(
+    *,
+    skeleton: list[dict[str, Any]],
+    materialized: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    index_by_key: dict[tuple[object, ...], int] = {}
+
+    for raw_item in [*skeleton, *materialized]:
+        normalized = _normalize_menu_node(raw_item)
+        if normalized is None:
+            continue
+        key = _menu_identity_fields(
+            label=normalized["label"],
+            parent_label=normalized.get("parent_label"),
+            depth=normalized["depth"],
+            role=normalized.get("role"),
+            aria_label=normalized.get("aria_label"),
+            sibling_index=_to_optional_int_value(normalized.get("sibling_index")),
+        )
+        existing_index = index_by_key.get(key)
+        if existing_index is None:
+            if "order" not in normalized:
+                normalized["order"] = len(merged)
+            merged.append(normalized)
+            index_by_key[key] = len(merged) - 1
+            continue
+        existing = merged[existing_index]
+        for field_name in ("role", "aria_label", "entry_type", "aria_expanded"):
+            if existing.get(field_name) is None and normalized.get(field_name) is not None:
+                existing[field_name] = normalized[field_name]
+        for field_name in ("route_path", "page_route_path"):
+            existing[field_name] = _prefer_menu_route_fact(
+                existing_value=existing.get(field_name),
+                incoming_value=normalized.get(field_name),
+            )
+        if existing.get("parent_label") is None and normalized.get("parent_label") is not None:
+            existing["parent_label"] = normalized["parent_label"]
+        for field_name in ("navigation_identity", "parent_navigation_identity"):
+            if existing.get(field_name) is None and normalized.get(field_name) is not None:
+                existing[field_name] = normalized[field_name]
+
+    return merged
+
+
 class DomMenuExtractor(Protocol):
     async def extract(
         self,
@@ -111,6 +210,22 @@ class DomMenuTraversalExtractor:
         collector = getattr(browser_session, "collect_dom_menu_nodes", None)
         if callable(collector):
             return self._ensure_dict_list(await collector(crawl_scope=crawl_scope))
+        skeleton_collector = getattr(browser_session, "collect_dom_menu_skeleton", None)
+        if callable(skeleton_collector):
+            skeleton = self._ensure_dict_list(await skeleton_collector(crawl_scope=crawl_scope))
+            materializer = getattr(browser_session, "materialize_navigation_targets", None)
+            if callable(materializer):
+                materialized = self._ensure_dict_list(
+                    await materializer(
+                        targets=build_menu_expand_targets(skeleton),
+                        crawl_scope=crawl_scope,
+                    )
+                )
+                return merge_menu_skeleton_and_materialized_nodes(
+                    skeleton=skeleton,
+                    materialized=materialized,
+                )
+            return skeleton
         return self._ensure_dict_list(getattr(browser_session, "dom_menu_nodes", []))
 
     async def _collect_element_items(self, *, browser_session, crawl_scope: str) -> list[dict[str, Any]]:
@@ -151,6 +266,8 @@ class DomMenuTraversalExtractor:
             page_route_path=self._normalize_path(item.get("page_route_path") or route_path),
             discovery_sources=["dom_menu_tree"],
             entry_candidates=entry_candidates,
+            navigation_identity=_normalize_navigation_identity_value(item.get("navigation_identity")),
+            parent_navigation_identity=_normalize_navigation_identity_value(item.get("parent_navigation_identity")),
         )
 
     def _to_element_candidate(self, item: dict[str, Any]) -> ElementCandidate | None:
@@ -276,16 +393,180 @@ class DomMenuTraversalExtractor:
         return cleaned or None
 
     def _normalize_entry_type(self, value: Any) -> str | None:
-        clean_value = self._clean_text(value)
-        if clean_value is None:
-            return None
-        normalized = clean_value.strip().lower().replace("-", "_")
-        if normalized in {"tab", "switch_tab"}:
-            return "tab_switch"
-        if normalized in {"modal", "show_modal"}:
-            return "open_modal"
-        if normalized in {"drawer", "show_drawer"}:
-            return "open_drawer"
-        if normalized in {"expand_filter", "open_filter", "toggle_filter"}:
-            return "filter_expand"
-        return normalized
+        return _normalize_entry_type_value(value)
+
+
+def _normalize_menu_node(item: dict[str, Any]) -> dict[str, Any] | None:
+    label = _clean_text_value(item.get("label") or item.get("text") or item.get("name"))
+    if label is None:
+        return None
+    role = _clean_text_value(item.get("role"))
+    aria_label = _clean_text_value(item.get("aria_label"))
+    sibling_index = _to_optional_int_value(item.get("sibling_index"))
+    parent_label = _clean_text_value(
+        item.get("parent_label") or item.get("materialized_parent_label") or item.get("parent")
+    )
+    depth = _to_int_value(item.get("depth"))
+    normalized: dict[str, Any] = {
+        "label": label,
+        "route_path": _normalize_path_value(item.get("route_path") or item.get("path")),
+        "page_route_path": _normalize_path_value(item.get("page_route_path") or item.get("route_path")),
+        "depth": depth,
+        "order": _to_int_value(item.get("order") or item.get("sort_order")),
+        "role": role,
+        "aria_label": aria_label,
+        "sibling_index": sibling_index,
+        "parent_label": parent_label,
+        "entry_type": _normalize_entry_type_value(item.get("entry_type") or item.get("interaction_type")),
+        "aria_expanded": _clean_text_value(item.get("aria_expanded")),
+        "navigation_identity": _normalize_navigation_identity_value(
+            item.get("navigation_identity"),
+            fallback={
+                "label": label,
+                "depth": depth,
+                "role": role,
+                "aria_label": aria_label,
+                "sibling_index": sibling_index,
+            },
+        ),
+        "parent_navigation_identity": _normalize_navigation_identity_value(
+            item.get("parent_navigation_identity") or item.get("materialized_parent_identity"),
+        ),
+    }
+    return normalized
+
+
+def _build_menu_locator_candidates(*, item: dict[str, Any], label: str) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = [{"strategy_type": "text", "selector": label}]
+    role = _clean_text_value(item.get("role"))
+    if role is not None:
+        candidates.append({"strategy_type": "role", "selector": role, "label": label})
+    aria_label = _clean_text_value(item.get("aria_label"))
+    if aria_label is not None:
+        candidates.append({"strategy_type": "aria_label", "selector": aria_label})
+    route_path = _normalize_path_value(item.get("route_path") or item.get("page_route_path"))
+    if route_path is not None:
+        candidates.append({"strategy_type": "route_path", "selector": route_path})
+    sibling_index = _to_optional_int_value(item.get("sibling_index"))
+    if sibling_index is not None:
+        candidates.append({"strategy_type": "sibling_index", "selector": str(sibling_index)})
+    order = _to_int_value(item.get("order") or item.get("sort_order"))
+    candidates.append({"strategy_type": "order", "selector": str(order)})
+    return candidates
+
+
+def _menu_identity_fields(
+    *,
+    label: str,
+    parent_label: str | None,
+    depth: int,
+    role: str | None,
+    aria_label: str | None,
+    sibling_index: int | None,
+) -> tuple[object, ...]:
+    return (
+        label,
+        parent_label,
+        depth,
+        role,
+        aria_label,
+        sibling_index,
+    )
+
+
+def _prefer_menu_route_fact(*, existing_value: Any, incoming_value: Any) -> str | None:
+    existing = _normalize_path_value(existing_value)
+    incoming = _normalize_path_value(incoming_value)
+    if incoming is None:
+        return existing
+    if existing is None:
+        return incoming
+    if existing != incoming:
+        return incoming
+    return existing
+
+
+def _normalize_entry_type_value(value: Any) -> str | None:
+    clean_value = _clean_text_value(value)
+    if clean_value is None:
+        return None
+    normalized = clean_value.strip().lower().replace("-", "_")
+    if normalized in {"tab", "switch_tab"}:
+        return "tab_switch"
+    if normalized in {"modal", "show_modal"}:
+        return "open_modal"
+    if normalized in {"drawer", "show_drawer"}:
+        return "open_drawer"
+    if normalized in {"expand_filter", "open_filter", "toggle_filter"}:
+        return "filter_expand"
+    return normalized
+
+
+def _normalize_path_value(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    path = value.strip()
+    if not path or not path.startswith("/"):
+        return None
+    return path
+
+
+def _normalize_navigation_identity_value(
+    value: Any,
+    fallback: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    raw = value if isinstance(value, dict) else fallback
+    if not isinstance(raw, dict):
+        return None
+    label = _clean_text_value(raw.get("label"))
+    if label is None:
+        return None
+    normalized: dict[str, object] = {
+        "label": label,
+        "depth": _to_int_value(raw.get("depth")),
+    }
+    role = _clean_text_value(raw.get("role"))
+    aria_label = _clean_text_value(raw.get("aria_label"))
+    sibling_index = _to_optional_int_value(raw.get("sibling_index"))
+    if role is not None:
+        normalized["role"] = role
+    if aria_label is not None:
+        normalized["aria_label"] = aria_label
+    if sibling_index is not None:
+        normalized["sibling_index"] = sibling_index
+    return normalized
+
+
+def _clean_text_value(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _to_int_value(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return 0
+
+
+def _to_optional_int_value(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None

@@ -1,8 +1,21 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 收口采集健壮性分支的集成修补：`crawler_service` 候选 schema 现补齐 `navigation_diagnostics/materialized_by/navigation_identity` 等字段，真实落库与 `asset_compiler` 读取链路不再丢失导航诊断；二次 `goto` 页面访问改为按当前 URL 重新执行 readiness 采样，`crawl_scope=current` 优先消费 `resolved_route` 以兼容 hash 路由 SPA；同时菜单 materialize 结果补充稳定父导航身份并按 identity 建立父子关系，避免重复 label 菜单串联。
+- 新增分析文档 `docs/analyze/product_route_recommendation.md`，从“企业级自动化仿真巡检与测试平台”目标出发，明确 `Runlet` 近期应坚持自研的平台能力、适合集成的开源底座能力以及当前不应投入的方向。
+- 新增分析文档 `docs/analyze/duibi_analyze.md`，从产品定位、技术路线、能力星级、适合/不适合场景与平台演进启示五个维度，对 `Runlet` 与 `Midscene`、`Playwright CLI`、`bb-browser`、`browser-use`、`Cypress`、`agent-browser` 做系统对比。
+- 新增分析文档 `docs/analyze/wait_003.md`，整理当前阶段将 `asset_compile` 归入 `crawl` 同池运行的判断依据，明确其更适合作为采集后处理链的一部分，而不应与 `run_check` 共用正式检查执行池。
+- 新增强化版 `HotGo-like` 采集完整性回归样本：`tests/backend/test_crawler_service.py` 现固定 `pathname='/' + hash route` 起步、readiness 分阶段收敛、以及“子页面不在基线 route hints / 菜单 skeleton 中、只能经由 materialize 子菜单进入”的时序，要求 crawl 至少产出 `3` 个页面、`2` 个菜单和 `2` 个元素，防止回退到只剩根页面 `/` 的旧行为；同时将该最低门槛与回归约束补充进采集完整性设计文档。
+- `crawler_service` 页面访问与状态探测主链重构为“先消费 page discovery 的页面访问目标，再从 page context 派生状态目标”，并补齐 `route_unresolved / route_visible_but_unreachable / action_not_applied` 等更细粒度 warning 透传；同时新增对应的 crawler/state probe 回归测试，覆盖 pages-first 访问顺序与状态上下文合并。
+- 修正 page-first 状态探测执行契约：派发到真实浏览器执行层的导航动作现统一补齐 `entry_type / interaction_type`，不再依赖 `target_kind` 偶然命中；同时补充 page-first 失败明细透传回归，确保 `rejection_detail` 与 warning 同步保留。
 - 新增通用采集健壮性与采集完整性增强设计文档：`docs/superpowers/specs/2026-04-05-crawler-resilience-and-crawl-completeness-design.md`，明确本轮优先通过通用 `crawler_service` 机制增强解决登录后菜单、页面与元素事实采集不完整问题，并提出“三段式采集引擎 + NavigationTarget + 路由稳定化 + 菜单 materialize + 状态探测”的主方案，以 `HotGo` 作为验证样本但不引入专属分支。
 - 新增通用采集健壮性与采集完整性增强实施计划：`docs/superpowers/plans/2026-04-05-crawler-resilience-and-crawl-completeness-plan.md`，将实现拆分为路由解析与稳定化底座、`NavigationTarget` 去重与预算、菜单 materialize、页面访问与状态探测重构、事实层持久化兼容以及 `HotGo` 样本回归六个可独立提交的任务。
+- 新增 `crawler_service/navigation_targets.py` 与对应测试，统一沉淀 `NavigationTarget`、去重键、预算拒绝原因和 materialization 状态；`page_discovery` 与 `state_probe` 现先产出导航目标，再分别做页面沉淀与状态动作执行，并在提取结果中暴露结构化 `navigation_targets` 诊断上下文。
+- 补充 `NavigationTarget` 诊断细节保留：`state_probe` 在 `probe_applied=False` 时会保留 `probe_apply_reason` 到 target rejection detail，`page_discovery` 改为以 registry 作为导航目标去重与预算的单一收口，且 `NavigationTargetKind` 契约补齐 `expand_panel` 与 `toggle_view`。
+- 收紧 `NavigationTargetResult` 契约并补齐 page discovery 交互种类流转：`page_discovery` 现会保留 `toggle_view / expand_panel` 导航目标，`NavigationTargetResult` 对 `target_kind / materialization_status / rejection_reason` 使用严格枚举校验，并将执行层拒绝细节落到 `rejection_detail`。
+- `page_discovery` 现会把 registry 中因预算被拒绝的目标作为 blocked diagnostics 一并输出到 `navigation_targets`，同时 `NavigationTargetResult` 进一步禁止不可能的状态组合与额外字段。
+- 进一步收紧 `NavigationTargetResult` 语义校验：状态与拒绝原因需匹配，成功态禁止携带 `rejection_detail`；同时 `page_discovery` 选择 `discovery_source` 时改为遵循 `_SOURCE_PRIORITY`，不再退化为字母序。
+- 修正 `NavigationTarget` 重复目标合并时的 `discovery_source` 选择：相同 dedupe key 在后续合并中会按统一优先级提升为更高质量来源，不再被先到的低优先级来源锁定。
 
 ## [Unreleased] - 2026-04-04
 
