@@ -15,6 +15,7 @@ from app.domains.crawler_service.extractors.dom_menu import (
     DomMenuTraversalExtractor,
     merge_menu_skeleton_and_materialized_nodes,
 )
+from app.domains.crawler_service.extractors.state_probe import ControlledStateProbeExtractor
 from app.domains.crawler_service.service import CrawlerService, PlaywrightBrowserFactory
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 
@@ -239,6 +240,14 @@ class StateProbeAwareFakeCrawlerPage:
     async def evaluate(self, script: str, *args):
         if "visibleSelector" in script:
             return self.settled
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": self.current_route,
+                "history_route": None,
+            }
         if "__RUNLET_ROUTE_HINTS__" in script:
             return [
                 {"path": "/dashboard", "title": "仪表盘"},
@@ -325,6 +334,15 @@ class StateProbeAwareFakeCrawlerPage:
             if entry_type == "paginate_probe":
                 self.active_states["/users"] = f"page={context.get('page_number', 1)}"
             return {"applied": True}
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return [
+                {
+                    "route_path": self.current_route,
+                    "page_title": "用户管理" if self.current_route == "/users" else "仪表盘",
+                    "reachable": True,
+                    "status_code": 200,
+                }
+            ]
         raise AssertionError(f"unexpected script: {script[:80]}")
 
     async def wait_for_timeout(self, timeout: int) -> None:
@@ -1099,6 +1117,7 @@ class PageVisitFirstBrowserSession:
         self.closed = False
         self.visited_routes: list[str] = []
         self.performed_targets: list[str] = []
+        self.performed_payloads: list[dict[str, object]] = []
         self.page_contexts = {
             "/dashboard": {
                 "route_path": "/dashboard",
@@ -1153,7 +1172,9 @@ class PageVisitFirstBrowserSession:
         crawl_scope: str,
     ) -> dict[str, object]:
         del crawl_scope, page_context
-        self.performed_targets.append(str(target.get("target_kind") or ""))
+        self.performed_payloads.append(dict(target))
+        entry_type = str(target.get("entry_type") or target.get("interaction_type") or "")
+        self.performed_targets.append(entry_type)
         return {
             "route_path": "/reports",
             "state_context": {"active_tab": "已归档"},
@@ -2574,3 +2595,41 @@ async def test_run_crawl_discovers_page_before_state_probe_targets(
     assert "route_unresolved" not in result.warning_messages
     assert browser_factory.session.visited_routes == ["/dashboard", "/reports"]
     assert browser_factory.session.performed_targets == ["tab_switch"]
+    assert browser_factory.session.performed_payloads[0]["entry_type"] == "tab_switch"
+    assert browser_factory.session.performed_payloads[0]["interaction_type"] == "tab_switch"
+
+
+@pytest.mark.anyio
+async def test_page_first_state_probe_uses_real_execution_contract_with_entry_type(monkeypatch):
+    page, context, browser, chromium, playwright = install_state_probe_aware_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=session,
+        system=None,
+        crawl_scope="full",
+        page_candidates=[PageCandidate(route_path="/users", page_title="用户管理")],
+        navigation_targets=[
+            {
+                "target_key": "tab:/users/disabled",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "parent_target_key": "page:/users",
+                "state_context": {"active_tab": "disabled"},
+                "materialization_status": "queued",
+            }
+        ],
+    )
+    await session.close()
+
+    assert "users:tab=disabled" in {element.state_signature for element in result.elements}
+    assert "tab_switch" in page.executed_probe_actions
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True

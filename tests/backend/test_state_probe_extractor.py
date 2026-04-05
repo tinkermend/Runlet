@@ -202,6 +202,7 @@ class PageVisitFirstStateProbeSession:
     def __init__(self) -> None:
         self.visited_routes: list[str] = []
         self.performed_targets: list[str] = []
+        self.performed_payloads: list[dict[str, object]] = []
         self.page_contexts = {
             "/dashboard": {
                 "route_path": "/dashboard",
@@ -256,7 +257,9 @@ class PageVisitFirstStateProbeSession:
         crawl_scope: str,
     ) -> dict[str, object]:
         del crawl_scope, page_context
-        self.performed_targets.append(str(target.get("target_kind") or ""))
+        self.performed_payloads.append(dict(target))
+        entry_type = str(target.get("entry_type") or target.get("interaction_type") or "")
+        self.performed_targets.append(entry_type)
         return {
             "route_path": "/reports",
             "state_context": {"active_tab": "已归档"},
@@ -269,6 +272,27 @@ class PageVisitFirstStateProbeSession:
                 }
             ],
             "probe_applied": True,
+        }
+
+
+class PageVisitFirstNotAppliedSession(PageVisitFirstStateProbeSession):
+    async def perform_navigation_target(
+        self,
+        *,
+        target: dict[str, object],
+        page_context: dict[str, object],
+        crawl_scope: str,
+    ) -> dict[str, object]:
+        del page_context, crawl_scope
+        self.performed_payloads.append(dict(target))
+        entry_type = str(target.get("entry_type") or target.get("interaction_type") or "")
+        self.performed_targets.append(entry_type)
+        return {
+            "route_path": "/reports",
+            "state_context": {"active_tab": "已归档"},
+            "elements": [],
+            "probe_applied": False,
+            "probe_apply_reason": "target_panel_not_materialized",
         }
 
 
@@ -403,7 +427,42 @@ async def test_state_probe_visits_discovered_pages_before_deriving_state_targets
 
     assert browser_session.visited_routes == ["/dashboard", "/reports"]
     assert browser_session.performed_targets == ["tab_switch"]
+    assert browser_session.performed_payloads[0]["entry_type"] == "tab_switch"
+    assert browser_session.performed_payloads[0]["interaction_type"] == "tab_switch"
     assert {element.state_signature for element in result.elements} >= {
         "dashboard:default",
         "reports:tab=已归档",
     }
+
+
+@pytest.mark.anyio
+async def test_state_probe_page_first_propagates_failure_detail_and_warning():
+    browser_session = PageVisitFirstNotAppliedSession()
+    page_candidates = [
+        PageCandidate(route_path="/reports", page_title="报表中心"),
+    ]
+
+    result = await ControlledStateProbeExtractor().extract(
+        browser_session=browser_session,
+        system=None,
+        crawl_scope="full",
+        page_candidates=page_candidates,
+        navigation_targets=[
+            NavigationTargetResult(
+                target_key="tab:/reports/archived",
+                target_kind="tab_switch",
+                route_hint="/reports",
+                parent_target_key="page:/reports",
+                state_context={"active_tab": "已归档"},
+                materialization_status="queued",
+            )
+        ],
+    )
+
+    assert browser_session.performed_targets == ["tab_switch"]
+    assert "state_transition_not_applied" in result.warning_messages
+    assert "target_panel_not_materialized" in result.warning_messages
+    target = next(target for target in result.navigation_targets if target.target_kind == "tab_switch")
+    assert target.materialization_status == "not_applied"
+    assert target.rejection_reason == "state_transition_not_applied"
+    assert target.rejection_detail == "target_panel_not_materialized"

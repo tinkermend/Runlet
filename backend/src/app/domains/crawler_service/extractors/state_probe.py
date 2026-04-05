@@ -242,11 +242,10 @@ class ControlledStateProbeExtractor:
                         self._append_warning(warnings, decision.reason)
                     continue
 
-                action = target.to_record()
-                action["route_path"] = target.route_hint
-                action["state_context"] = merge_state_context(
-                    baseline_state.get("state_context"),
-                    target.state_context,
+                action = build_navigation_action_payload(
+                    target=target,
+                    route_path=target.route_hint,
+                    base_state_context=baseline_state.get("state_context"),
                 )
 
                 try:
@@ -806,6 +805,30 @@ def merge_state_context(*contexts: object) -> dict[str, object]:
     return merged
 
 
+def build_navigation_action_payload(
+    *,
+    target: NavigationTarget | dict[str, object],
+    route_path: str | None = None,
+    base_state_context: object = None,
+) -> dict[str, object]:
+    record = target.to_record() if isinstance(target, NavigationTarget) else dict(target)
+    target_kind = record.get("target_kind")
+    entry_type = _normalize_action_name(
+        record.get("entry_type") or record.get("interaction_type") or target_kind
+    )
+    payload = dict(record)
+    normalized_route = _normalize_action_route(route_path or record.get("route_path") or record.get("route_hint"))
+    if normalized_route is not None:
+        payload["route_path"] = normalized_route
+        payload["page_route_path"] = normalized_route
+        payload["route_hint"] = normalized_route
+    if entry_type is not None:
+        payload["entry_type"] = entry_type
+        payload["interaction_type"] = entry_type
+    payload["state_context"] = merge_state_context(base_state_context, payload.get("state_context"))
+    return payload
+
+
 def build_state_signature(route_path: str, state_context: dict[str, object]) -> str:
     normalized_route = route_path.strip()
     if not normalized_route.startswith("/"):
@@ -878,3 +901,21 @@ def _normalize_signature_value(value: object) -> str | None:
         normalized = value.strip().lower().replace(" ", "_")
         return normalized or None
     return None
+
+
+def _normalize_action_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return cleaned.lower().replace("-", "_")
+
+
+def _normalize_action_route(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    route_path = value.strip()
+    if not route_path or not route_path.startswith("/"):
+        return None
+    return route_path.rstrip("/") or "/"

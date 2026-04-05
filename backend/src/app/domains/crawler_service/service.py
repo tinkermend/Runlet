@@ -29,6 +29,7 @@ from app.domains.crawler_service.extractors.route_resolution import resolve_rout
 from app.domains.crawler_service.extractors.state_probe import (
     ControlledStateProbeExtractor,
     StateProbeExtractor,
+    build_navigation_action_payload,
 )
 from app.domains.crawler_service.schemas import (
     ALLOWED_STATE_PROBE_ACTIONS,
@@ -1363,6 +1364,11 @@ async (targets) => {
             ) -> dict[str, object]:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
+                action = build_navigation_action_payload(
+                    target=action,
+                    route_path=action.get("route_path") or action.get("page_route_path") or action.get("route_hint"),
+                    base_state_context=action.get("state_context"),
+                )
                 entry_type = self_nonlocal._clean_text(action.get("entry_type") or action.get("interaction_type"))
                 if entry_type is None or entry_type.lower().replace("-", "_") not in ALLOWED_STATE_PROBE_ACTIONS:
                     raise ValueError("unsafe state probe action")
@@ -1424,7 +1430,12 @@ async (targets) => {
             ) -> dict[str, object]:
                 del crawl_scope
                 await self_nonlocal._ensure_settled()
-                route_path = self_nonlocal._normalize_path(target.get("route_hint") or target.get("route_path"))
+                action = build_navigation_action_payload(
+                    target=target,
+                    route_path=target.get("route_hint") or target.get("route_path"),
+                    base_state_context=target.get("state_context"),
+                )
+                route_path = self_nonlocal._normalize_path(action.get("route_path") or action.get("route_hint"))
                 current_route = self_nonlocal._normalize_path(
                     page_context.get("resolved_route") or page_context.get("route_path")
                 )
@@ -1446,38 +1457,10 @@ async (targets) => {
                             "probe_applied": False,
                             "probe_apply_reason": "route_unresolved",
                         }
-
-                action = dict(target)
-                if route_path is not None:
-                    action["route_path"] = route_path
-                state_context = action.get("state_context")
-                if not isinstance(state_context, dict):
-                    state_context = {}
-                execution_result = await self_nonlocal._evaluate_with_optional_arg(
-                    PlaywrightBrowserFactory._STATE_PROBE_EXECUTE_ACTION_SCRIPT,
-                    action,
+                return await self_nonlocal.perform_state_probe_action(
+                    action=action,
+                    crawl_scope="current",
                 )
-                applied = isinstance(execution_result, dict) and execution_result.get("applied") is True
-                execution_reason = (
-                    execution_result.get("reason")
-                    if isinstance(execution_result, dict) and isinstance(execution_result.get("reason"), str)
-                    else None
-                )
-                if applied:
-                    await self_nonlocal._wait_for_route_render()
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
-                    elements = await self_nonlocal._collect_current_page_elements(
-                        default_route=current_route or route_path or "/"
-                    )
-                else:
-                    elements = []
-                return {
-                    "route_path": current_route or route_path or "/",
-                    "state_context": state_context,
-                    "elements": elements,
-                    "probe_applied": applied,
-                    "probe_apply_reason": execution_reason,
-                }
 
             async def _evaluate_with_optional_arg(
                 self_nonlocal,
