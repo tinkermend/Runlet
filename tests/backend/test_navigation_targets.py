@@ -144,6 +144,34 @@ def test_navigation_target_registry_rejects_when_total_budget_is_exhausted():
     assert decision.reason == "total_budget_exhausted"
 
 
+def test_navigation_target_registry_prefers_higher_priority_discovery_source_on_duplicate_merge():
+    registry = NavigationTargetRegistry(max_targets_per_route=4)
+
+    first = NavigationTarget(
+        target_kind="tab_switch",
+        route_hint="/users",
+        state_context={"active_tab": "enabled"},
+        parent_target_key="page:/users",
+        discovery_source="network_request",
+    )
+    second = NavigationTarget(
+        target_kind="tab_switch",
+        route_hint="/users",
+        state_context={"active_tab": "enabled"},
+        parent_target_key="page:/users",
+        discovery_source="runtime_route_hints",
+    )
+
+    assert registry.add(first).accepted is True
+
+    decision = registry.add(second)
+
+    assert decision.accepted is False
+    assert decision.reason == "duplicate_target"
+    assert len(registry.targets) == 1
+    assert registry.targets[0].discovery_source == "runtime_route_hints"
+
+
 def test_navigation_target_result_rejects_unknown_contract_values():
     with pytest.raises(ValidationError):
         NavigationTargetResult.model_validate(

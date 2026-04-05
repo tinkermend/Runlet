@@ -8,6 +8,7 @@
 - 收紧 `NavigationTargetResult` 契约并补齐 page discovery 交互种类流转：`page_discovery` 现会保留 `toggle_view / expand_panel` 导航目标，`NavigationTargetResult` 对 `target_kind / materialization_status / rejection_reason` 使用严格枚举校验，并将执行层拒绝细节落到 `rejection_detail`。
 - `page_discovery` 现会把 registry 中因预算被拒绝的目标作为 blocked diagnostics 一并输出到 `navigation_targets`，同时 `NavigationTargetResult` 进一步禁止不可能的状态组合与额外字段。
 - 进一步收紧 `NavigationTargetResult` 语义校验：状态与拒绝原因需匹配，成功态禁止携带 `rejection_detail`；同时 `page_discovery` 选择 `discovery_source` 时改为遵循 `_SOURCE_PRIORITY`，不再退化为字母序。
+- 修正 `NavigationTarget` 重复目标合并时的 `discovery_source` 选择：相同 dedupe key 在后续合并中会按统一优先级提升为更高质量来源，不再被先到的低优先级来源锁定。
 
 ## [Unreleased] - 2026-04-04
 

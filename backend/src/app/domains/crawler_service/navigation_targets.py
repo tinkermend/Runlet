@@ -4,6 +4,15 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+_DISCOVERY_SOURCE_PRIORITY = {
+    "runtime_route_hints": 0,
+    "dom_menu_tree": 1,
+    "network_route_config": 2,
+    "network_resource": 3,
+    "network_request": 4,
+    "reachability_probe": 5,
+}
+
 
 @dataclass(slots=True)
 class NavigationTarget:
@@ -82,8 +91,7 @@ class NavigationTarget:
 
     def merge_from(self, other: "NavigationTarget") -> None:
         self.locator_candidates = _merge_locator_candidates(self.locator_candidates, other.locator_candidates)
-        if self.discovery_source is None:
-            self.discovery_source = other.discovery_source
+        self.discovery_source = _prefer_discovery_source(self.discovery_source, other.discovery_source)
         self.metadata = _merge_metadata(self.metadata, other.metadata)
 
     def to_record(self) -> dict[str, object]:
@@ -304,3 +312,18 @@ def _merge_metadata(existing: dict[str, object], incoming: dict[str, object]) ->
         if existing_value in (None, "", [], {}):
             merged[key] = raw_value
     return merged
+
+
+def _prefer_discovery_source(existing: str | None, incoming: str | None) -> str | None:
+    if existing is None:
+        return incoming
+    if incoming is None:
+        return existing
+
+    existing_priority = _DISCOVERY_SOURCE_PRIORITY.get(existing, 100)
+    incoming_priority = _DISCOVERY_SOURCE_PRIORITY.get(incoming, 100)
+    if incoming_priority < existing_priority:
+        return incoming
+    if incoming_priority > existing_priority:
+        return existing
+    return min(existing, incoming)
