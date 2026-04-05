@@ -4,10 +4,12 @@ import json
 from collections import defaultdict
 from typing import Any, Protocol
 
+from app.domains.crawler_service.navigation_targets import NavigationTarget, NavigationTargetRegistry
 from app.domains.crawler_service.schemas import (
     ALLOWED_STATE_PROBE_ACTIONS,
     CrawlExtractionResult,
     ElementCandidate,
+    NavigationTargetResult,
 )
 
 
@@ -46,7 +48,13 @@ class ControlledStateProbeExtractor:
         warnings: list[str] = []
         elements: list[ElementCandidate] = []
         visited_signatures: set[str] = set()
-        actions_consumed: dict[str, int] = defaultdict(int)
+        navigation_targets: list[NavigationTarget] = []
+        registry = NavigationTargetRegistry(
+            max_targets_per_route=self.max_actions_per_page,
+            max_total_targets=max(8, self.max_actions_per_page * 8),
+            max_targets_per_kind=max(4, self.max_actions_per_page * 4),
+            max_children_per_parent=max(4, self.max_actions_per_page * 4),
+        )
 
         try:
             baseline_states = await self._collect_baseline_states(
@@ -76,18 +84,42 @@ class ControlledStateProbeExtractor:
 
             entry_type = self._normalize_entry_type(action.get("entry_type") or action.get("interaction_type"))
             if entry_type is None or entry_type not in self.ALLOWED_ACTIONS:
+                navigation_targets.append(
+                    self._build_navigation_target(
+                        action=action,
+                        route_path=route_path,
+                        target_kind=entry_type or "unknown",
+                        status="blocked",
+                        reason="unsafe_action_rejected",
+                    )
+                )
                 self._append_warning(warnings, "unsafe_action_rejected")
                 continue
 
             if self._is_permission_blocked(action):
+                navigation_targets.append(
+                    self._build_navigation_target(
+                        action=action,
+                        route_path=route_path,
+                        target_kind=entry_type,
+                        status="blocked",
+                        reason="blocked_by_permission",
+                    )
+                )
                 self._append_warning(warnings, "blocked_by_permission")
                 continue
 
-            if actions_consumed[route_path] >= self.max_actions_per_page:
-                self._append_warning(warnings, "interaction_budget_exhausted")
+            target = self._build_navigation_target(action=action, route_path=route_path, target_kind=entry_type)
+            decision = registry.add(target)
+            if not decision.accepted:
+                navigation_targets.append(target)
+                if decision.reason == "duplicate_target":
+                    self._append_warning(warnings, "navigation_target_duplicate")
+                elif decision.reason and decision.reason.endswith("budget_exhausted"):
+                    self._append_warning(warnings, "interaction_budget_exhausted")
+                    self._append_warning(warnings, decision.reason)
                 continue
 
-            actions_consumed[route_path] += 1
             try:
                 state_payload = await self._perform_action(
                     browser_session=browser_session,
@@ -95,16 +127,24 @@ class ControlledStateProbeExtractor:
                     crawl_scope=crawl_scope,
                 )
             except PermissionError:
+                target.mark_blocked("blocked_by_permission")
+                navigation_targets.append(target)
                 self._append_warning(warnings, "blocked_by_permission")
                 continue
             except Exception:
+                target.mark_blocked("unsafe_action_rejected")
+                navigation_targets.append(target)
                 self._append_warning(warnings, "unsafe_action_rejected")
                 continue
 
             if not self._action_payload_applied(state_payload):
+                target.mark_not_applied("state_transition_not_applied")
+                navigation_targets.append(target)
                 self._append_warning(warnings, "state_transition_not_applied")
                 continue
 
+            target.mark_applied()
+            navigation_targets.append(target)
             state = self._to_state_payload(default_route=route_path, action=action, payload=state_payload)
             self._collect_state_elements(
                 state=state,
@@ -118,10 +158,36 @@ class ControlledStateProbeExtractor:
             framework_detected=self._clean_text(getattr(browser_session, "framework_hint", None)),
             quality_score=quality_score if elements else 0.0,
             elements=elements,
+            navigation_targets=[NavigationTargetResult.model_validate(target.to_record()) for target in navigation_targets],
             failure_reason=None,
             warning_messages=warnings,
             degraded=False,
         )
+
+    def _build_navigation_target(
+        self,
+        *,
+        action: dict[str, object],
+        route_path: str,
+        target_kind: str,
+        status: str = "discovered",
+        reason: str | None = None,
+    ) -> NavigationTarget:
+        target = NavigationTarget(
+            target_kind=target_kind,
+            route_hint=route_path,
+            locator_candidates=self._normalize_locator_candidates(action.get("locator_candidates")),
+            state_context=self._to_state_context(action.get("state_context")),
+            parent_target_key=f"page:{route_path}",
+            discovery_source="state_probe_action",
+            materialization_status=status,
+            rejection_reason=reason,
+        )
+        if status == "blocked" and reason is not None:
+            target.mark_blocked(reason)
+        elif status == "not_applied" and reason is not None:
+            target.mark_not_applied(reason)
+        return target
 
     def _collect_state_elements(
         self,

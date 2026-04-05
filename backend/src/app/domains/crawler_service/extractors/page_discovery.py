@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from app.domains.crawler_service.extractors.dom_menu import DomMenuTraversalExtractor
 from app.domains.crawler_service.extractors.router_runtime import RuntimeRouteHintExtractor
-from app.domains.crawler_service.schemas import CrawlExtractionResult, PageCandidate
+from app.domains.crawler_service.navigation_targets import NavigationTarget, NavigationTargetRegistry
+
+from app.domains.crawler_service.schemas import (
+    CrawlExtractionResult,
+    NavigationTargetResult,
+    PageCandidate,
+)
 
 
 class PageDiscoveryProtocol(Protocol):
@@ -84,46 +91,31 @@ class PageDiscoveryExtractor:
         quality_hints: list[float] = []
         framework_hints: list[str] = []
         merged_signals = [*route_signals, *nav_signals, *network_signals]
-        interaction_signals: list[tuple[dict[str, Any], list[dict[str, object]]]] = []
+        target_registry = NavigationTargetRegistry()
+        grouped_targets = self._group_navigation_targets(merged_signals)
+        for group in grouped_targets.values():
+            target_registry.add(group.target)
 
-        for signal in merged_signals:
-            entry_candidates = self._to_entry_candidates(signal)
-            if self._is_interaction_only_signal(signal=signal, entry_candidates=entry_candidates):
-                interaction_signals.append((signal, entry_candidates))
+        for target in target_registry.targets:
+            group = grouped_targets.get(target.dedupe_key())
+            if group is None:
                 continue
-
-            route_path = self._extract_route_path(signal)
+            route_path = target.route_hint
             if route_path is None:
                 continue
             page = page_store.setdefault(route_path, _PageStore())
-            self._merge_signal_to_page(
-                page=page,
-                signal=signal,
-                entry_candidates=entry_candidates,
-                include_label_as_title=True,
-            )
-            self._collect_extraction_hints(
-                signal=signal,
-                quality_hints=quality_hints,
-                framework_hints=framework_hints,
-            )
-
-        for signal, entry_candidates in interaction_signals:
-            route_path = self._resolve_interaction_target_route(signal=signal, page_store=page_store)
-            if route_path is None:
-                continue
-            page = page_store.setdefault(route_path, _PageStore())
-            self._merge_signal_to_page(
-                page=page,
-                signal=signal,
-                entry_candidates=entry_candidates,
-                include_label_as_title=False,
-            )
-            self._collect_extraction_hints(
-                signal=signal,
-                quality_hints=quality_hints,
-                framework_hints=framework_hints,
-            )
+            for seed in group.seeds:
+                self._merge_signal_to_page(
+                    page=page,
+                    signal=seed.signal,
+                    entry_candidates=[seed.entry_candidate] if seed.entry_candidate is not None else [],
+                    include_label_as_title=seed.include_label_as_title,
+                )
+                self._collect_extraction_hints(
+                    signal=seed.signal,
+                    quality_hints=quality_hints,
+                    framework_hints=framework_hints,
+                )
 
         for metadata in metadata_signals:
             route_path = self._extract_route_path(metadata)
@@ -177,10 +169,149 @@ class PageDiscoveryExtractor:
             framework_detected=framework_detected,
             quality_score=quality_score,
             pages=pages,
+            navigation_targets=[
+                NavigationTargetResult.model_validate(target.to_record()) for target in target_registry.targets
+            ],
             failure_reason=failure_reason,
             warning_messages=warnings,
             degraded=degraded,
         )
+
+    def _group_navigation_targets(
+        self,
+        signals: list[dict[str, Any]],
+    ) -> dict[str, "_NavigationTargetGroup"]:
+        grouped_targets: dict[str, _NavigationTargetGroup] = {}
+        for signal in signals:
+            for seed in self._build_target_seeds(signal):
+                dedupe_key = seed.target.dedupe_key()
+                group = grouped_targets.get(dedupe_key)
+                if group is None:
+                    grouped_targets[dedupe_key] = _NavigationTargetGroup(target=seed.target, seeds=[seed])
+                    continue
+                group.target.merge_from(seed.target)
+                group.seeds.append(seed)
+        return grouped_targets
+
+    def _build_target_seeds(self, signal: dict[str, Any]) -> list["_NavigationTargetSeed"]:
+        entry_candidates = self._to_entry_candidates(signal)
+        interaction_only = self._is_interaction_only_signal(signal=signal, entry_candidates=entry_candidates)
+        route_path = self._extract_route_path(signal)
+        seeds: list[_NavigationTargetSeed] = []
+        if not interaction_only and route_path is not None:
+            seeds.append(
+                _NavigationTargetSeed(
+                    target=NavigationTarget(
+                        target_kind="page_route",
+                        route_hint=route_path,
+                        discovery_source=self._primary_source(signal),
+                        metadata={"discovery_sources": sorted(self._extract_sources(signal))},
+                    ),
+                    signal=signal,
+                    entry_candidate=None,
+                    include_label_as_title=True,
+                )
+            )
+
+        for entry_candidate in entry_candidates:
+            target = self._build_interaction_target(signal=signal, entry_candidate=entry_candidate, default_route=route_path)
+            if target is None:
+                continue
+            seeds.append(
+                _NavigationTargetSeed(
+                    target=target,
+                    signal=signal,
+                    entry_candidate=entry_candidate,
+                    include_label_as_title=False,
+                )
+            )
+        return seeds
+
+    def _build_interaction_target(
+        self,
+        *,
+        signal: dict[str, Any],
+        entry_candidate: dict[str, object],
+        default_route: str | None,
+    ) -> NavigationTarget | None:
+        entry_type = self._normalize_entry_type(entry_candidate.get("entry_type"))
+        if entry_type is None:
+            return None
+        page_route = self._normalize_path(signal.get("page_route_path")) or default_route
+        if page_route is None:
+            return None
+        return NavigationTarget(
+            target_kind=entry_type,
+            route_hint=page_route,
+            locator_candidates=self._build_locator_candidates(signal=signal, entry_candidate=entry_candidate),
+            state_context=self._build_state_context(signal=signal, entry_candidate=entry_candidate),
+            parent_target_key=f"page:{page_route}",
+            discovery_source=self._primary_source(signal),
+            metadata={"discovery_sources": sorted(self._extract_sources(signal))},
+        )
+
+    def _build_state_context(
+        self,
+        *,
+        signal: dict[str, Any],
+        entry_candidate: dict[str, object],
+    ) -> dict[str, object]:
+        entry_type = self._normalize_entry_type(entry_candidate.get("entry_type"))
+        label = self._clean_text(
+            entry_candidate.get("label")
+            or signal.get("label")
+            or signal.get("text")
+            or signal.get("name")
+            or signal.get("title")
+        )
+        state_context: dict[str, object] = {}
+        if entry_type == "tab_switch" and label is not None:
+            state_context["active_tab"] = label
+        elif entry_type == "open_modal" and label is not None:
+            state_context["modal_title"] = label
+        elif entry_type == "open_drawer" and label is not None:
+            state_context["drawer_title"] = label
+        elif entry_type == "filter_expand" and label is not None:
+            state_context["panel_title"] = label
+
+        target_route = self._extract_route_path(signal)
+        page_route = self._normalize_path(signal.get("page_route_path"))
+        if (
+            target_route is not None
+            and page_route is not None
+            and target_route != page_route
+            and "target_route" not in state_context
+        ):
+            state_context["target_route"] = target_route
+        return state_context
+
+    def _build_locator_candidates(
+        self,
+        *,
+        signal: dict[str, Any],
+        entry_candidate: dict[str, object],
+    ) -> list[dict[str, object]]:
+        candidates: list[dict[str, object]] = []
+        for source in (
+            entry_candidate.get("locator_candidates"),
+            signal.get("locator_candidates"),
+        ):
+            if isinstance(source, list):
+                for candidate in source:
+                    if isinstance(candidate, dict):
+                        candidates.append(candidate)
+        playwright_locator = self._clean_text(
+            entry_candidate.get("playwright_locator") or signal.get("playwright_locator")
+        )
+        if playwright_locator is not None:
+            candidates.append({"strategy_type": "playwright", "selector": playwright_locator})
+        return candidates
+
+    def _primary_source(self, signal: dict[str, Any]) -> str | None:
+        sources = sorted(self._extract_sources(signal))
+        if sources:
+            return sources[0]
+        return None
 
     async def _collect_route_signals(
         self,
@@ -512,3 +643,17 @@ class _PageStore:
         self.entry_candidates: list[dict[str, object]] = []
         self.entry_keys: set[str] = set()
         self.context_constraints: dict[str, object] = {}
+
+
+@dataclass(slots=True)
+class _NavigationTargetSeed:
+    target: NavigationTarget
+    signal: dict[str, Any]
+    entry_candidate: dict[str, object] | None
+    include_label_as_title: bool
+
+
+@dataclass(slots=True)
+class _NavigationTargetGroup:
+    target: NavigationTarget
+    seeds: list[_NavigationTargetSeed] = field(default_factory=list)

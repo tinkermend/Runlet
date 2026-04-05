@@ -154,6 +154,36 @@ async def test_page_discovery_marks_tabs_and_modal_triggers_as_entry_candidates(
 
 
 @pytest.mark.anyio
+async def test_page_discovery_emits_navigation_targets_before_materializing_pages():
+    result = await PageDiscoveryExtractor().extract(
+        browser_session=FakeDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    assert {"page_route", "tab_switch", "open_modal"} <= {
+        target.target_kind for target in result.navigation_targets
+    }
+    users_tab = next(
+        target
+        for target in result.navigation_targets
+        if target.target_kind == "tab_switch" and target.parent_target_key == "page:/users"
+    )
+    create_modal = next(
+        target
+        for target in result.navigation_targets
+        if target.target_kind == "open_modal" and target.parent_target_key == "page:/users"
+    )
+
+    assert users_tab.route_hint == "/users"
+    assert users_tab.state_context is not None
+    assert users_tab.state_context["active_tab"] == "用户标签页"
+    assert create_modal.state_context is not None
+    assert create_modal.state_context["modal_title"] == "新增用户"
+    assert all(target.materialization_status == "queued" for target in result.navigation_targets)
+
+
+@pytest.mark.anyio
 async def test_page_discovery_merges_duplicate_page_sources():
     result = await PageDiscoveryExtractor().extract(
         browser_session=FakeDiscoverySession(),

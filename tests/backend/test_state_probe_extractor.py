@@ -215,6 +215,12 @@ async def test_state_probe_stops_when_interaction_budget_is_exhausted():
     )
 
     assert "interaction_budget_exhausted" in result.warning_messages
+    budget_blocked_targets = [
+        target
+        for target in result.navigation_targets
+        if target.materialization_status == "blocked" and target.rejection_reason == "route_budget_exhausted"
+    ]
+    assert budget_blocked_targets
 
 
 @pytest.mark.anyio
@@ -227,7 +233,7 @@ async def test_state_probe_dedups_elements_by_state_signature():
 
     signatures = [element.state_signature for element in result.elements]
     assert signatures.count("users:modal=create") == 1
-    assert "state_signature_duplicate" in result.warning_messages
+    assert "navigation_target_duplicate" in result.warning_messages
 
 
 def test_build_state_signature_includes_numeric_pagination_context():

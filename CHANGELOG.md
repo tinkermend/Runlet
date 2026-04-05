@@ -3,6 +3,7 @@
 ### Added
 - 新增通用采集健壮性与采集完整性增强设计文档：`docs/superpowers/specs/2026-04-05-crawler-resilience-and-crawl-completeness-design.md`，明确本轮优先通过通用 `crawler_service` 机制增强解决登录后菜单、页面与元素事实采集不完整问题，并提出“三段式采集引擎 + NavigationTarget + 路由稳定化 + 菜单 materialize + 状态探测”的主方案，以 `HotGo` 作为验证样本但不引入专属分支。
 - 新增通用采集健壮性与采集完整性增强实施计划：`docs/superpowers/plans/2026-04-05-crawler-resilience-and-crawl-completeness-plan.md`，将实现拆分为路由解析与稳定化底座、`NavigationTarget` 去重与预算、菜单 materialize、页面访问与状态探测重构、事实层持久化兼容以及 `HotGo` 样本回归六个可独立提交的任务。
+- 新增 `crawler_service/navigation_targets.py` 与对应测试，统一沉淀 `NavigationTarget`、去重键、预算拒绝原因和 materialization 状态；`page_discovery` 与 `state_probe` 现先产出导航目标，再分别做页面沉淀与状态动作执行，并在提取结果中暴露结构化 `navigation_targets` 诊断上下文。
 
 ## [Unreleased] - 2026-04-04
 
