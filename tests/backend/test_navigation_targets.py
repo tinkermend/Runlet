@@ -199,3 +199,38 @@ def test_navigation_target_result_rejects_impossible_status_and_extra_fields():
                 "unexpected_field": "boom",
             }
         )
+
+
+def test_navigation_target_result_rejects_semantically_invalid_reason_detail_pairs():
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "duplicate",
+                "rejection_reason": "route_budget_exhausted",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "queued",
+                "rejection_detail": "should-not-exist",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        NavigationTargetResult.model_validate(
+            {
+                "target_key": "x",
+                "target_kind": "tab_switch",
+                "route_hint": "/users",
+                "materialization_status": "applied",
+                "rejection_detail": "should-not-exist",
+            }
+        )

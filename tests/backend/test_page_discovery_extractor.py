@@ -3,6 +3,15 @@ import pytest
 from app.domains.crawler_service.extractors.page_discovery import PageDiscoveryExtractor
 
 
+class FakeDomMenuExtractor:
+    def __init__(self, signals: list[dict[str, object]]) -> None:
+        self._signals = signals
+
+    async def collect_navigation_signals(self, *, browser_session, crawl_scope: str) -> list[dict[str, object]]:
+        del browser_session, crawl_scope
+        return [dict(signal) for signal in self._signals]
+
+
 class FakeDiscoverySession:
     framework_hint = "react"
 
@@ -197,6 +206,23 @@ class RouteBudgetDiscoverySession(FakeDiscoverySession):
         self.network_route_configs = []
 
 
+class PrioritySourceDiscoverySession(FakeDiscoverySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.route_hints = []
+        self.network_route_configs = []
+        self.dom_menu_nodes = [
+            {
+                "label": "用户标签页",
+                "route_path": "/users/tab/security",
+                "page_route_path": "/users",
+                "entry_type": "tab_switch",
+                "role": "tab",
+                "discovery_sources": ["network_request", "runtime_route_hints"],
+            }
+        ]
+
+
 @pytest.mark.anyio
 async def test_page_discovery_merges_route_nav_and_network_signals():
     extractor = PageDiscoveryExtractor()
@@ -268,6 +294,33 @@ async def test_page_discovery_preserves_toggle_view_and_expand_panel_targets():
     assert "expand_panel" in users_targets
     assert users_targets["toggle_view"].state_context == {"view_mode": "切换为卡片视图"}
     assert users_targets["expand_panel"].state_context == {"panel_title": "展开高级筛选"}
+
+
+@pytest.mark.anyio
+async def test_page_discovery_prefers_source_priority_for_navigation_target_primary_source():
+    extractor = PageDiscoveryExtractor(
+        dom_menu_extractor=FakeDomMenuExtractor(
+            [
+                {
+                    "label": "用户标签页",
+                    "route_path": "/users/tab/security",
+                    "page_route_path": "/users",
+                    "entry_type": "tab_switch",
+                    "discovery_sources": ["network_request", "runtime_route_hints", "dom_menu_tree"],
+                }
+            ]
+        )
+    )
+    result = await extractor.extract(
+        browser_session=PrioritySourceDiscoverySession(),
+        system=None,
+        crawl_scope="full",
+    )
+
+    target = next(
+        target for target in result.navigation_targets if target.target_kind == "tab_switch"
+    )
+    assert target.discovery_source == "runtime_route_hints"
 
 
 @pytest.mark.anyio

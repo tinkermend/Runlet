@@ -87,11 +87,29 @@ class NavigationTargetResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_status_reason_combination(self) -> "NavigationTargetResult":
-        status_requires_reason = {"blocked", "duplicate", "not_applied"}
-        if self.materialization_status in status_requires_reason and self.rejection_reason is None:
+        allowed_reasons_by_status = {
+            "blocked": {
+                "total_budget_exhausted",
+                "route_budget_exhausted",
+                "kind_budget_exhausted",
+                "parent_budget_exhausted",
+                "blocked_by_permission",
+                "unsafe_action_rejected",
+            },
+            "duplicate": {"duplicate_target"},
+            "not_applied": {"state_transition_not_applied"},
+        }
+        success_statuses = {"discovered", "queued", "applied"}
+        if self.materialization_status in allowed_reasons_by_status and self.rejection_reason is None:
             raise ValueError("rejection_reason is required for blocked, duplicate, and not_applied targets")
-        if self.materialization_status in {"discovered", "queued", "applied"} and self.rejection_reason is not None:
+        if self.materialization_status in success_statuses and self.rejection_reason is not None:
             raise ValueError("rejection_reason must be empty unless the target was rejected or not applied")
+        if self.materialization_status in success_statuses and self.rejection_detail is not None:
+            raise ValueError("rejection_detail must be empty for discovered, queued, and applied targets")
+        if self.rejection_reason is not None:
+            allowed_reasons = allowed_reasons_by_status.get(self.materialization_status)
+            if allowed_reasons is None or self.rejection_reason not in allowed_reasons:
+                raise ValueError("rejection_reason does not match materialization_status semantics")
         return self
 
 

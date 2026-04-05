@@ -7,6 +7,7 @@
 - 补充 `NavigationTarget` 诊断细节保留：`state_probe` 在 `probe_applied=False` 时会保留 `probe_apply_reason` 到 target rejection detail，`page_discovery` 改为以 registry 作为导航目标去重与预算的单一收口，且 `NavigationTargetKind` 契约补齐 `expand_panel` 与 `toggle_view`。
 - 收紧 `NavigationTargetResult` 契约并补齐 page discovery 交互种类流转：`page_discovery` 现会保留 `toggle_view / expand_panel` 导航目标，`NavigationTargetResult` 对 `target_kind / materialization_status / rejection_reason` 使用严格枚举校验，并将执行层拒绝细节落到 `rejection_detail`。
 - `page_discovery` 现会把 registry 中因预算被拒绝的目标作为 blocked diagnostics 一并输出到 `navigation_targets`，同时 `NavigationTargetResult` 进一步禁止不可能的状态组合与额外字段。
+- 进一步收紧 `NavigationTargetResult` 语义校验：状态与拒绝原因需匹配，成功态禁止携带 `rejection_detail`；同时 `page_discovery` 选择 `discovery_source` 时改为遵循 `_SOURCE_PRIORITY`，不再退化为字母序。
 
 ## [Unreleased] - 2026-04-04
 

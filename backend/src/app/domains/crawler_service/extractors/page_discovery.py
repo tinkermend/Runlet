@@ -335,7 +335,10 @@ class PageDiscoveryExtractor:
         return candidates
 
     def _primary_source(self, signal: dict[str, Any]) -> str | None:
-        sources = sorted(self._extract_sources(signal))
+        sources = sorted(
+            self._extract_sources(signal),
+            key=lambda source: (self._SOURCE_PRIORITY.get(source, 100), source),
+        )
         if sources:
             return sources[0]
         return None
