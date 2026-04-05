@@ -1,8 +1,6 @@
-import json
 from uuid import uuid4
 
 import pytest
-import sqlalchemy as sa
 from sqlmodel import select
 
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint
@@ -731,38 +729,39 @@ async def test_compile_snapshot_keeps_representative_open_modal_check_and_uses_m
 
 
 @pytest.mark.anyio
-async def test_compile_snapshot_keeps_locator_bundle_when_materialized_by_modal(
+async def test_compile_snapshot_carries_materialization_metadata_through_normalized_element_payload(
     db_session,
     asset_compiler_service,
     seeded_modal_stateful_crawl_snapshot,
+    monkeypatch,
 ):
+    from app.domains.asset_compiler import service as asset_compiler_service_module
+
+    captured_page_payloads: list[dict[str, object]] = []
+    original_build_page_fingerprint = asset_compiler_service_module.build_page_fingerprint
+
+    def capture_build_page_fingerprint(page_payload: dict[str, object]) -> dict[str, str]:
+        captured_page_payloads.append(page_payload)
+        return original_build_page_fingerprint(page_payload)
+
+    monkeypatch.setattr(
+        asset_compiler_service_module,
+        "build_page_fingerprint",
+        capture_build_page_fingerprint,
+    )
+
     dialog = db_session.exec(
         select(PageElement)
         .where(PageElement.snapshot_id == seeded_modal_stateful_crawl_snapshot.id)
         .where(PageElement.element_type == "dialog")
         .order_by(PageElement.id.desc())
     ).one()
-    db_session.execute(
-        sa.text(
-            """
-            UPDATE page_elements
-            SET materialized_by = :materialized_by,
-                navigation_diagnostics = :navigation_diagnostics
-            WHERE id = :element_id
-            """
-        ),
-        {
-            "materialized_by": "modal",
-            "navigation_diagnostics": json.dumps(
-                {
-                    "target_kind": "open_modal",
-                    "materialization_status": "materialized",
-                },
-                ensure_ascii=False,
-            ),
-            "element_id": str(dialog.id),
-        },
-    )
+    dialog.materialized_by = "modal"
+    dialog.navigation_diagnostics = {
+        "target_kind": "open_modal",
+        "materialization_status": "materialized",
+    }
+    db_session.add(dialog)
     db_session.commit()
 
     result = await asset_compiler_service.compile_snapshot(
@@ -771,18 +770,20 @@ async def test_compile_snapshot_keeps_locator_bundle_when_materialized_by_modal(
 
     assert result.status == "success"
     assert result.check_ids
-    representative_check = db_session.exec(
-        select(PageCheck)
-        .where(PageCheck.check_code == "open_create_modal_state")
-        .order_by(PageCheck.id.desc())
-    ).one()
-    representative_plan = db_session.exec(
-        select(ModulePlan).where(ModulePlan.id == representative_check.module_plan_id)
-    ).one()
-    assert (
-        representative_plan.steps_json[-1]["params"]["locator_bundle"]["candidates"][0]["selector"]
-        == "role=dialog[name='新增用户']"
+    assert captured_page_payloads
+
+    dialog_payload = next(
+        element
+        for page_payload in captured_page_payloads
+        for element in page_payload["elements"]
+        if element["element_type"] == "dialog"
     )
+    assert dialog_payload["materialized_by"] == "modal"
+    assert dialog_payload["navigation_diagnostics"] == {
+        "target_kind": "open_modal",
+        "materialization_status": "materialized",
+    }
+    assert dialog_payload["locator_bundle"]["candidates"][0]["selector"] == "role=dialog[name='新增用户']"
 
 
 @pytest.mark.anyio
