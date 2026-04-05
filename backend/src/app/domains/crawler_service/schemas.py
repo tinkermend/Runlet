@@ -121,6 +121,7 @@ class PageCandidate(BaseModel):
     discovery_sources: list[str] = Field(default_factory=list)
     entry_candidates: list[dict[str, object]] = Field(default_factory=list)
     context_constraints: dict[str, object] | None = None
+    navigation_diagnostics: dict[str, object] | None = None
 
 
 class MenuCandidate(BaseModel):
@@ -134,6 +135,8 @@ class MenuCandidate(BaseModel):
     discovery_sources: list[str] = Field(default_factory=list)
     entry_candidates: list[dict[str, object]] = Field(default_factory=list)
     context_constraints: dict[str, object] | None = None
+    navigation_identity: dict[str, object] | None = None
+    parent_navigation_identity: dict[str, object] | None = None
 
 
 class ElementCandidate(BaseModel):
@@ -146,6 +149,8 @@ class ElementCandidate(BaseModel):
     element_text: str | None = None
     attributes: dict[str, object] | None = None
     playwright_locator: str | None = None
+    materialized_by: str | None = None
+    navigation_diagnostics: dict[str, object] | None = None
     stability_score: float | None = None
     usage_description: str | None = None
 

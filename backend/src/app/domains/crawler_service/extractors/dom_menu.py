@@ -97,6 +97,9 @@ def merge_menu_skeleton_and_materialized_nodes(
             )
         if existing.get("parent_label") is None and normalized.get("parent_label") is not None:
             existing["parent_label"] = normalized["parent_label"]
+        for field_name in ("navigation_identity", "parent_navigation_identity"):
+            if existing.get(field_name) is None and normalized.get(field_name) is not None:
+                existing[field_name] = normalized[field_name]
 
     return merged
 
@@ -263,6 +266,8 @@ class DomMenuTraversalExtractor:
             page_route_path=self._normalize_path(item.get("page_route_path") or route_path),
             discovery_sources=["dom_menu_tree"],
             entry_candidates=entry_candidates,
+            navigation_identity=_normalize_navigation_identity_value(item.get("navigation_identity")),
+            parent_navigation_identity=_normalize_navigation_identity_value(item.get("parent_navigation_identity")),
         )
 
     def _to_element_candidate(self, item: dict[str, Any]) -> ElementCandidate | None:
@@ -395,20 +400,38 @@ def _normalize_menu_node(item: dict[str, Any]) -> dict[str, Any] | None:
     label = _clean_text_value(item.get("label") or item.get("text") or item.get("name"))
     if label is None:
         return None
+    role = _clean_text_value(item.get("role"))
+    aria_label = _clean_text_value(item.get("aria_label"))
+    sibling_index = _to_optional_int_value(item.get("sibling_index"))
+    parent_label = _clean_text_value(
+        item.get("parent_label") or item.get("materialized_parent_label") or item.get("parent")
+    )
+    depth = _to_int_value(item.get("depth"))
     normalized: dict[str, Any] = {
         "label": label,
         "route_path": _normalize_path_value(item.get("route_path") or item.get("path")),
         "page_route_path": _normalize_path_value(item.get("page_route_path") or item.get("route_path")),
-        "depth": _to_int_value(item.get("depth")),
+        "depth": depth,
         "order": _to_int_value(item.get("order") or item.get("sort_order")),
-        "role": _clean_text_value(item.get("role")),
-        "aria_label": _clean_text_value(item.get("aria_label")),
-        "sibling_index": _to_optional_int_value(item.get("sibling_index")),
-        "parent_label": _clean_text_value(
-            item.get("parent_label") or item.get("materialized_parent_label") or item.get("parent")
-        ),
+        "role": role,
+        "aria_label": aria_label,
+        "sibling_index": sibling_index,
+        "parent_label": parent_label,
         "entry_type": _normalize_entry_type_value(item.get("entry_type") or item.get("interaction_type")),
         "aria_expanded": _clean_text_value(item.get("aria_expanded")),
+        "navigation_identity": _normalize_navigation_identity_value(
+            item.get("navigation_identity"),
+            fallback={
+                "label": label,
+                "depth": depth,
+                "role": role,
+                "aria_label": aria_label,
+                "sibling_index": sibling_index,
+            },
+        ),
+        "parent_navigation_identity": _normalize_navigation_identity_value(
+            item.get("parent_navigation_identity") or item.get("materialized_parent_identity"),
+        ),
     }
     return normalized
 
@@ -486,6 +509,32 @@ def _normalize_path_value(value: Any) -> str | None:
     if not path or not path.startswith("/"):
         return None
     return path
+
+
+def _normalize_navigation_identity_value(
+    value: Any,
+    fallback: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    raw = value if isinstance(value, dict) else fallback
+    if not isinstance(raw, dict):
+        return None
+    label = _clean_text_value(raw.get("label"))
+    if label is None:
+        return None
+    normalized: dict[str, object] = {
+        "label": label,
+        "depth": _to_int_value(raw.get("depth")),
+    }
+    role = _clean_text_value(raw.get("role"))
+    aria_label = _clean_text_value(raw.get("aria_label"))
+    sibling_index = _to_optional_int_value(raw.get("sibling_index"))
+    if role is not None:
+        normalized["role"] = role
+    if aria_label is not None:
+        normalized["aria_label"] = aria_label
+    if sibling_index is not None:
+        normalized["sibling_index"] = sibling_index
+    return normalized
 
 
 def _clean_text_value(value: Any) -> str | None:

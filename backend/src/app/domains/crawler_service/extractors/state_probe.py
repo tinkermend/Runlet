@@ -534,6 +534,7 @@ class ControlledStateProbeExtractor:
                 route_path=route_path,
                 state_signature=state_signature,
                 state_context=state_context,
+                navigation_state=state,
                 raw_element=raw_element,
             )
             if candidate is None:
@@ -552,6 +553,7 @@ class ControlledStateProbeExtractor:
         route_path: str,
         state_signature: str,
         state_context: dict[str, object],
+        navigation_state: dict[str, object],
         raw_element: dict[str, object],
     ) -> ElementCandidate | None:
         element_type = self._clean_text(raw_element.get("element_type") or raw_element.get("tag_name"))
@@ -576,6 +578,17 @@ class ControlledStateProbeExtractor:
             locator_candidates = [{"strategy_type": strategy_type, "selector": playwright_locator}]
         attributes = raw_element.get("attributes") if isinstance(raw_element.get("attributes"), dict) else None
         usage_description = self._clean_text(raw_element.get("usage_description"))
+        materialized_by = self._clean_text(
+            raw_element.get("materialized_by")
+            or navigation_state.get("entry_type")
+            or navigation_state.get("interaction_type")
+        )
+        navigation_diagnostics = self._build_navigation_diagnostics(
+            route_path=route_path,
+            navigation_state=navigation_state,
+            raw_element=raw_element,
+            materialized_by=materialized_by,
+        )
 
         return ElementCandidate(
             page_route_path=route_path,
@@ -587,8 +600,29 @@ class ControlledStateProbeExtractor:
             element_text=element_text,
             attributes=attributes,
             playwright_locator=playwright_locator,
+            materialized_by=materialized_by,
+            navigation_diagnostics=navigation_diagnostics,
             usage_description=usage_description,
         )
+
+    def _build_navigation_diagnostics(
+        self,
+        *,
+        route_path: str,
+        navigation_state: dict[str, object],
+        raw_element: dict[str, object],
+        materialized_by: str | None,
+    ) -> dict[str, object] | None:
+        diagnostics = (
+            dict(raw_element.get("navigation_diagnostics"))
+            if isinstance(raw_element.get("navigation_diagnostics"), dict)
+            else {}
+        )
+        if materialized_by is not None:
+            diagnostics.setdefault("target_kind", materialized_by)
+            diagnostics.setdefault("materialization_status", "applied")
+        diagnostics.setdefault("route_path", route_path)
+        return diagnostics or None
 
     async def _collect_baseline_states(self, *, browser_session, crawl_scope: str) -> list[dict[str, object]]:
         collector = getattr(browser_session, "collect_state_probe_baseline", None)

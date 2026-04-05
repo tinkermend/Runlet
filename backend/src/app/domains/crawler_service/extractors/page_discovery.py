@@ -171,6 +171,7 @@ class PageDiscoveryExtractor:
                     discovery_sources=discovery_sources,
                     entry_candidates=page.entry_candidates,
                     context_constraints=page.context_constraints or None,
+                    navigation_diagnostics=page.navigation_diagnostics or None,
                 )
             )
 
@@ -551,6 +552,9 @@ class PageDiscoveryExtractor:
         context_constraints = self._to_dict(signal.get("context_constraints"))
         if context_constraints:
             page.context_constraints.update(context_constraints)
+        navigation_diagnostics = self._to_dict(signal.get("navigation_diagnostics"))
+        if navigation_diagnostics:
+            page.navigation_diagnostics.update(navigation_diagnostics)
         for entry_candidate in entry_candidates:
             serialized = json.dumps(entry_candidate, ensure_ascii=False, sort_keys=True)
             if serialized in page.entry_keys:
@@ -673,6 +677,7 @@ class _PageStore:
         self.entry_candidates: list[dict[str, object]] = []
         self.entry_keys: set[str] = set()
         self.context_constraints: dict[str, object] = {}
+        self.navigation_diagnostics: dict[str, object] = {}
 
 
 @dataclass(slots=True)

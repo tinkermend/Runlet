@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 收口采集健壮性分支的集成修补：`crawler_service` 候选 schema 现补齐 `navigation_diagnostics/materialized_by/navigation_identity` 等字段，真实落库与 `asset_compiler` 读取链路不再丢失导航诊断；二次 `goto` 页面访问改为按当前 URL 重新执行 readiness 采样，`crawl_scope=current` 优先消费 `resolved_route` 以兼容 hash 路由 SPA；同时菜单 materialize 结果补充稳定父导航身份并按 identity 建立父子关系，避免重复 label 菜单串联。
 - 新增分析文档 `docs/analyze/product_route_recommendation.md`，从“企业级自动化仿真巡检与测试平台”目标出发，明确 `Runlet` 近期应坚持自研的平台能力、适合集成的开源底座能力以及当前不应投入的方向。
 - 新增分析文档 `docs/analyze/duibi_analyze.md`，从产品定位、技术路线、能力星级、适合/不适合场景与平台演进启示五个维度，对 `Runlet` 与 `Midscene`、`Playwright CLI`、`bb-browser`、`browser-use`、`Cypress`、`agent-browser` 做系统对比。
 - 新增分析文档 `docs/analyze/wait_003.md`，整理当前阶段将 `asset_compile` 归入 `crawl` 同池运行的判断依据，明确其更适合作为采集后处理链的一部分，而不应与 `run_check` 共用正式检查执行池。

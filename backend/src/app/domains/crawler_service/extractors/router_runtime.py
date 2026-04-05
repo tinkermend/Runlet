@@ -68,6 +68,10 @@ class RuntimeRouteHintExtractor:
                 "route_path": resolved_route,
                 "discovery_sources": ["runtime_route_snapshot"],
                 "context_constraints": {"route_source": route_source},
+                "navigation_diagnostics": {
+                    "resolved_route": resolved_route,
+                    "route_source": route_source,
+                },
             }
             existing = merged_by_route.get(resolved_route)
             if existing is None:
@@ -86,6 +90,8 @@ class RuntimeRouteHintExtractor:
                     existing_context = {}
                 snapshot_context = snapshot_signal["context_constraints"]
                 existing["context_constraints"] = {**snapshot_context, **existing_context}
+                if not isinstance(existing.get("navigation_diagnostics"), dict):
+                    existing["navigation_diagnostics"] = dict(snapshot_signal["navigation_diagnostics"])
         return list(merged_by_route.values())
 
     async def extract(
@@ -122,6 +128,11 @@ class RuntimeRouteHintExtractor:
                     route_path=route_path,
                     page_title=page_title,
                     discovery_sources=discovery_sources if isinstance(discovery_sources, list) else [],
+                    navigation_diagnostics=(
+                        dict(signal.get("navigation_diagnostics"))
+                        if isinstance(signal.get("navigation_diagnostics"), dict)
+                        else None
+                    ),
                 )
             )
 

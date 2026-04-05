@@ -578,6 +578,16 @@ async (targets) => {
   for (const target of safeTargets) {
     const node = findTargetNode(target);
     if (!node) continue;
+    const targetDepth = Number.isFinite(Number(target?.depth)) ? Number(target.depth) : 0;
+    const targetIdentity = {
+      label: normalizeText(target?.label) || null,
+      depth: targetDepth,
+      role: normalizeText(target?.role) || null,
+      aria_label: normalizeText(target?.aria_label) || null,
+    };
+    if (Number.isFinite(Number(target?.sibling_index))) {
+      targetIdentity.sibling_index = Number(target.sibling_index);
+    }
     const triggerNode = node.querySelector?.('[aria-expanded="false"], .ant-menu-submenu-title, .el-submenu__title, .tree-node__switcher') || node;
     let applied = false;
     if (target.target_kind === 'tree_expand') {
@@ -595,8 +605,11 @@ async (targets) => {
     const container = node.closest?.(containerSelectors) || document;
     for (const item of collectMenuNodes(container)) {
       const nextItem = { ...item };
-      if (!nextItem.parent_label && nextItem.depth > (Number(target.depth) || 0)) {
+      if (!nextItem.parent_label && nextItem.depth > targetDepth) {
         nextItem.parent_label = normalizeText(target.label) || null;
+      }
+      if (!nextItem.materialized_parent_identity && nextItem.depth > targetDepth) {
+        nextItem.materialized_parent_identity = targetIdentity.label ? targetIdentity : null;
       }
       materialized.push(nextItem);
     }
@@ -979,11 +992,22 @@ async (targets) => {
         class _Session:
             framework_hint = None
             _settled = False
+            _last_ready_location: str | None = None
 
             async def _ensure_settled(self_nonlocal) -> None:
-                if self_nonlocal._settled:
+                current_location = self_nonlocal._current_page_location()
+                if (
+                    self_nonlocal._settled
+                    and current_location is not None
+                    and current_location == self_nonlocal._last_ready_location
+                ):
                     return
-                await page.wait_for_timeout(PlaywrightBrowserFactory._INITIAL_SETTLE_MS)
+                initial_wait_ms = (
+                    PlaywrightBrowserFactory._INITIAL_SETTLE_MS
+                    if not self_nonlocal._settled
+                    else PlaywrightBrowserFactory._ROUTE_SETTLE_MS
+                )
+                await page.wait_for_timeout(initial_wait_ms)
                 samples: list[dict[str, object]] = []
                 for sample_index in range(PlaywrightBrowserFactory._APP_READINESS_MAX_SAMPLES):
                     samples.append(await self_nonlocal._collect_readiness_sample())
@@ -996,6 +1020,7 @@ async (targets) => {
                     if sample_index < PlaywrightBrowserFactory._APP_READINESS_MAX_SAMPLES - 1:
                         await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
                 self_nonlocal._settled = True
+                self_nonlocal._last_ready_location = self_nonlocal._current_page_location() or current_location
 
             async def collect_route_hints(
                 self_nonlocal,
@@ -1102,28 +1127,19 @@ async (targets) => {
                         if isinstance(node, dict):
                             add_route(node.get("route_path") or node.get("page_route_path"))
                 else:
-                    current_path = await page.evaluate("() => window.location.pathname")
-                    add_route(current_path)
+                    add_route(await self_nonlocal._resolve_current_route_path())
 
                 if not route_paths:
-                    current_path = await page.evaluate("() => window.location.pathname")
-                    add_route(current_path)
+                    add_route(await self_nonlocal._resolve_current_route_path())
 
                 elements: list[dict[str, object]] = []
                 seen_payloads: set[str] = set()
                 for route_path in route_paths:
                     await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
-                    await self_nonlocal._wait_for_route_render()
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
-                    collected = await page.evaluate(PlaywrightBrowserFactory._DOM_ELEMENTS_SCRIPT)
-                    if not isinstance(collected, list):
-                        continue
-                    for item in collected:
-                        if not isinstance(item, dict):
-                            continue
-                        payload = dict(item)
-                        if not payload.get("page_route_path"):
-                            payload["page_route_path"] = route_path
+                    await self_nonlocal._stabilize_after_navigation()
+                    resolved_route = await self_nonlocal._resolve_current_route_path(default_route=route_path)
+                    collected = await self_nonlocal._collect_current_page_elements(default_route=resolved_route)
+                    for payload in collected:
                         dedupe_key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
                         if dedupe_key in seen_payloads:
                             continue
@@ -1202,8 +1218,7 @@ async (targets) => {
                     }
 
                 await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
-                await self_nonlocal._wait_for_route_render()
-                await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                await self_nonlocal._stabilize_after_navigation()
 
                 route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
                 resolved_route = self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or route_path
@@ -1376,8 +1391,7 @@ async (targets) => {
                 route_path = self_nonlocal._normalize_path(action.get("route_path") or action.get("page_route_path"))
                 if route_path is not None:
                     await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
-                    await self_nonlocal._wait_for_route_render()
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    await self_nonlocal._stabilize_after_navigation()
                 else:
                     route_hints = await self_nonlocal.collect_route_hints(crawl_scope="current")
                     route_path = "/"
@@ -1442,8 +1456,7 @@ async (targets) => {
 
                 if route_path is not None and route_path != current_route:
                     await page.goto(f"{base_url.rstrip('/')}{route_path}", wait_until="domcontentloaded")
-                    await self_nonlocal._wait_for_route_render()
-                    await page.wait_for_timeout(PlaywrightBrowserFactory._ROUTE_SETTLE_MS)
+                    await self_nonlocal._stabilize_after_navigation()
                     route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
                     current_route = self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or route_path
                     if current_route != route_path:
@@ -1490,7 +1503,10 @@ async (targets) => {
                     if not isinstance(item, dict):
                         continue
                     payload = dict(item)
-                    if not payload.get("page_route_path"):
+                    normalized_route = self_nonlocal._normalize_path(
+                        payload.get("page_route_path") or payload.get("route_path")
+                    )
+                    if normalized_route is None or (normalized_route == "/" and default_route != "/"):
                         payload["page_route_path"] = default_route
                     elements.append(payload)
                 return elements
@@ -1601,6 +1617,17 @@ async (targets) => {
                     )
                 except Exception:
                     return
+
+            def _current_page_location(self_nonlocal) -> str | None:
+                return self_nonlocal._clean_text(getattr(page, "url", None) or getattr(page, "current_url", None))
+
+            async def _resolve_current_route_path(self_nonlocal, default_route: str = "/") -> str:
+                route_snapshot = await self_nonlocal._collect_route_snapshot_raw()
+                return self_nonlocal._normalize_path(route_snapshot.get("resolved_route")) or default_route
+
+            async def _stabilize_after_navigation(self_nonlocal) -> None:
+                await self_nonlocal._wait_for_route_render()
+                await self_nonlocal._ensure_settled()
 
             async def close(self_nonlocal) -> None:
                 await page.close()
@@ -1741,7 +1768,10 @@ class CrawlerService:
         )
         page_candidates: dict[str, PageCandidate] = {}
         for candidate in discovery.pages + dom.pages + probe.pages:
-            page_candidates[candidate.route_path] = candidate
+            existing = page_candidates.get(candidate.route_path)
+            page_candidates[candidate.route_path] = (
+                candidate if existing is None else self._merge_page_candidate(existing=existing, incoming=candidate)
+            )
 
         title_route_map = self._build_title_route_map(page_candidates.values())
 
@@ -1830,9 +1860,36 @@ class CrawlerService:
                     if candidate.stability_score is not None
                     else existing.stability_score,
                     "usage_description": candidate.usage_description or existing.usage_description,
+                    "materialized_by": candidate.materialized_by or existing.materialized_by,
+                    "navigation_diagnostics": self._merge_dict(
+                        existing.navigation_diagnostics,
+                        candidate.navigation_diagnostics,
+                    ),
                 }
             )
         return [merged[key] for key in ordered_keys]
+
+    def _merge_page_candidate(self, *, existing: PageCandidate, incoming: PageCandidate) -> PageCandidate:
+        return existing.model_copy(
+            update={
+                "page_title": existing.page_title or incoming.page_title,
+                "page_summary": existing.page_summary or incoming.page_summary,
+                "keywords": self._merge_dict(existing.keywords, incoming.keywords),
+                "discovery_sources": sorted({*existing.discovery_sources, *incoming.discovery_sources}),
+                "entry_candidates": self._merge_entry_candidates(
+                    existing.entry_candidates,
+                    incoming.entry_candidates,
+                ),
+                "context_constraints": self._merge_dict(
+                    existing.context_constraints,
+                    incoming.context_constraints,
+                ),
+                "navigation_diagnostics": self._merge_dict(
+                    existing.navigation_diagnostics,
+                    incoming.navigation_diagnostics,
+                ),
+            }
+        )
 
     def _build_representative_element_key(self, candidate: ElementCandidate) -> str:
         payload = {
@@ -1888,6 +1945,23 @@ class CrawlerService:
                 continue
             seen.add(serialized)
             merged.append(normalized)
+        return merged
+
+    def _merge_entry_candidates(
+        self,
+        base: list[dict[str, object]],
+        incoming: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        merged: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for candidate in [*base, *incoming]:
+            if not isinstance(candidate, dict):
+                continue
+            serialized = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
+            if serialized in seen:
+                continue
+            seen.add(serialized)
+            merged.append(dict(candidate))
         return merged
 
     def _build_title_route_map(self, pages: list[PageCandidate] | object) -> dict[str, str]:
@@ -1955,6 +2029,7 @@ class CrawlerService:
                 discovery_sources=candidate.discovery_sources,
                 entry_candidates=candidate.entry_candidates,
                 context_constraints=candidate.context_constraints,
+                navigation_diagnostics=candidate.navigation_diagnostics,
             )
             self.session.add(page)
             await self._flush()
@@ -1969,10 +2044,16 @@ class CrawlerService:
         menus: list[MenuCandidate],
         page_map: dict[str, Page],
     ) -> None:
+        identity_map: dict[str, MenuNode] = {}
         label_map: dict[str, MenuNode] = {}
         for candidate in menus:
             page = page_map.get(candidate.page_route_path or candidate.route_path or "")
-            parent = label_map.get(candidate.parent_label or "")
+            parent = None
+            parent_identity_key = self._serialize_navigation_identity(candidate.parent_navigation_identity)
+            if parent_identity_key is not None:
+                parent = identity_map.get(parent_identity_key)
+            if parent is None:
+                parent = label_map.get(candidate.parent_label or "")
             menu = MenuNode(
                 system_id=system_id,
                 snapshot_id=snapshot_id,
@@ -1990,6 +2071,9 @@ class CrawlerService:
             self.session.add(menu)
             await self._flush()
             label_map[candidate.label] = menu
+            identity_key = self._serialize_navigation_identity(candidate.navigation_identity)
+            if identity_key is not None:
+                identity_map[identity_key] = menu
 
     async def _persist_elements(
         self,
@@ -2015,11 +2099,48 @@ class CrawlerService:
                 state_signature=candidate.state_signature,
                 state_context=candidate.state_context,
                 locator_candidates=candidate.locator_candidates,
+                materialized_by=candidate.materialized_by,
+                navigation_diagnostics=candidate.navigation_diagnostics,
                 stability_score=candidate.stability_score,
                 usage_description=candidate.usage_description,
             )
             self.session.add(element)
             await self._flush()
+
+    def _serialize_navigation_identity(self, value: dict[str, object] | None) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        label = value.get("label")
+        depth = value.get("depth")
+        if not isinstance(label, str) or not label.strip():
+            return None
+        if isinstance(depth, bool):
+            return None
+        if not isinstance(depth, int):
+            if isinstance(depth, float):
+                depth = int(depth)
+            elif isinstance(depth, str) and depth.strip().isdigit():
+                depth = int(depth.strip())
+            else:
+                depth = 0
+        normalized: dict[str, object] = {
+            "label": label.strip(),
+            "depth": depth,
+        }
+        for key in ("role", "aria_label"):
+            raw = value.get(key)
+            if isinstance(raw, str) and raw.strip():
+                normalized[key] = raw.strip()
+        sibling_index = value.get("sibling_index")
+        if isinstance(sibling_index, bool):
+            sibling_index = None
+        elif isinstance(sibling_index, float):
+            sibling_index = int(sibling_index)
+        elif isinstance(sibling_index, str) and sibling_index.strip().isdigit():
+            sibling_index = int(sibling_index.strip())
+        if isinstance(sibling_index, int):
+            normalized["sibling_index"] = sibling_index
+        return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
 
     async def _load_latest_valid_auth_state(self, *, system_id: UUID) -> AuthState | None:
         statement = (

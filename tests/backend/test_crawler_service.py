@@ -26,6 +26,14 @@ def test_page_element_schema_exposes_state_and_locator_candidates():
     assert "locator_candidates" in ElementCandidate.model_fields
 
 
+def test_crawl_candidates_expose_navigation_metadata_fields():
+    assert "navigation_diagnostics" in PageCandidate.model_fields
+    assert "materialized_by" in ElementCandidate.model_fields
+    assert "navigation_diagnostics" in ElementCandidate.model_fields
+    assert "navigation_identity" in MenuCandidate.model_fields
+    assert "parent_navigation_identity" in MenuCandidate.model_fields
+
+
 class FakeBrowserSession:
     def __init__(self) -> None:
         self.closed = False
@@ -219,6 +227,132 @@ class FakeCrawlerPlaywright:
         self.stopped = True
 
 
+class PerVisitReadinessFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.current_url = "about:blank"
+        self.route_snapshot_eval_calls = 0
+        self.readiness_shell_urls: list[str] = []
+        self.route_ready_urls: list[str] = []
+        self._settled_paths: set[str] = set()
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = url
+
+    async def evaluate(self, script: str):
+        parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+        current_path = parsed.path or "/"
+        if "document.readyState" in script and "shell_ready" in script:
+            self.readiness_shell_urls.append(current_path)
+            return {"shell_ready": current_path in self._settled_paths}
+        if "visibleSelector" in script:
+            self.route_ready_urls.append(current_path)
+            return current_path in self._settled_paths
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            self.route_snapshot_eval_calls += 1
+            return {
+                "pathname": current_path,
+                "location_hash": f"#{parsed.fragment}" if parsed.fragment else None,
+                "router_route": None,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [
+                {"path": "/dashboard", "title": "仪表盘"},
+                {"path": "/users", "title": "用户管理"},
+            ]
+        if "__RUNLET_MENU_NODES__" in script:
+            return []
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            return [
+                {
+                    "page_route_path": current_path,
+                    "element_type": "button",
+                    "role": "button",
+                    "text": f"按钮{current_path}",
+                }
+            ]
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/")
+        current_path = parsed.path or "/"
+        if timeout >= 2000:
+            self._settled_paths.add(current_path)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class HashRouteCurrentScopeFakeCrawlerPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.wait_for_timeout_calls: list[int] = []
+        self.closed = False
+        self.current_url = "about:blank"
+        self._settled = False
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        self.current_url = "https://erp.example.com/#/users" if url == "https://erp.example.com" else url
+
+    async def evaluate(self, script: str):
+        parsed = urlparse(self.current_url if self.current_url.startswith("http") else "https://erp.example.com/#/users")
+        if "document.readyState" in script and "shell_ready" in script:
+            return {"shell_ready": self._settled}
+        if "visibleSelector" in script:
+            return self._settled
+        if "__RUNLET_ROUTE_SNAPSHOT__" in script:
+            return {
+                "pathname": parsed.path or "/",
+                "location_hash": "#/users",
+                "router_route": None,
+                "history_route": None,
+            }
+        if "__RUNLET_ROUTE_HINTS__" in script:
+            return [{"path": "/users", "title": "用户管理"}]
+        if "__RUNLET_MENU_NODES__" in script:
+            return []
+        if "__RUNLET_PAGE_ELEMENTS__" in script:
+            return [
+                {
+                    "page_route_path": "/",
+                    "element_type": "button",
+                    "role": "button",
+                    "text": "新增用户",
+                }
+            ]
+        if "__RUNLET_NETWORK_ROUTE_CONFIGS__" in script:
+            return []
+        if "__RUNLET_NETWORK_RESOURCES__" in script:
+            return []
+        if "__RUNLET_NETWORK_REQUESTS__" in script:
+            return []
+        if "__RUNLET_PAGE_METADATA__" in script:
+            return []
+        raise AssertionError(f"unexpected script: {script[:80]}")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        self.wait_for_timeout_calls.append(timeout)
+        if timeout >= 2000:
+            self._settled = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class StateProbeAwareFakeCrawlerPage:
     def __init__(self) -> None:
         self.goto_calls: list[tuple[str, str]] = []
@@ -364,6 +498,58 @@ def install_fake_crawler_async_api(
     FakeCrawlerPlaywright,
 ]:
     page = FakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
+def install_per_visit_readiness_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    PerVisitReadinessFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = PerVisitReadinessFakeCrawlerPage()
+    context = FakeCrawlerContext(page)
+    browser = FakeCrawlerBrowser(context)
+    chromium = FakeCrawlerChromium(browser)
+    playwright = FakeCrawlerPlaywright(chromium)
+
+    class FakeAsyncPlaywrightStarter:
+        async def start(self) -> FakeCrawlerPlaywright:
+            return playwright
+
+    module = ModuleType("playwright.async_api")
+    module.async_playwright = lambda: FakeAsyncPlaywrightStarter()
+    sys.modules["playwright.async_api"] = module
+    monkeypatch.setitem(sys.modules, "playwright.async_api", module)
+    return page, context, browser, chromium, playwright
+
+
+def install_hash_route_current_scope_async_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    HashRouteCurrentScopeFakeCrawlerPage,
+    FakeCrawlerContext,
+    FakeCrawlerBrowser,
+    FakeCrawlerChromium,
+    FakeCrawlerPlaywright,
+]:
+    page = HashRouteCurrentScopeFakeCrawlerPage()
     context = FakeCrawlerContext(page)
     browser = FakeCrawlerBrowser(context)
     chromium = FakeCrawlerChromium(browser)
@@ -1597,6 +1783,184 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
 
 
 @pytest.mark.anyio
+async def test_run_crawl_persists_navigation_metadata_from_crawler_candidates(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[
+                PageCandidate(
+                    route_path="/users",
+                    page_title="用户管理",
+                    discovery_sources=["runtime_route_hints"],
+                    navigation_diagnostics={
+                        "resolved_route": "/users",
+                        "route_source": "hash",
+                        "warning_messages": ["route_stabilized"],
+                    },
+                )
+            ],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")]
+        )
+    )
+    state_probe_extractor = FakeStateProbeExtractor(
+        CrawlExtractionResult(
+            elements=[
+                ElementCandidate(
+                    page_route_path="/users",
+                    element_type="dialog",
+                    state_signature="users:modal=create",
+                    state_context={"entry_type": "open_modal", "modal_title": "新增用户"},
+                    element_role="dialog",
+                    element_text="新增用户",
+                    playwright_locator="role=dialog[name='新增用户']",
+                    locator_candidates=[
+                        {"strategy_type": "semantic", "selector": "role=dialog[name='新增用户']"},
+                    ],
+                    materialized_by="open_modal",
+                    navigation_diagnostics={
+                        "target_kind": "open_modal",
+                        "materialization_status": "applied",
+                        "route_path": "/users",
+                    },
+                )
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=state_probe_extractor,
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    persisted_page = db_session.exec(select(Page).where(Page.route_path == "/users")).one()
+    persisted_element = db_session.exec(select(PageElement)).one()
+    assert persisted_page.navigation_diagnostics == {
+        "resolved_route": "/users",
+        "route_source": "hash",
+        "warning_messages": ["route_stabilized"],
+    }
+    assert persisted_element.materialized_by == "open_modal"
+    assert persisted_element.navigation_diagnostics == {
+        "target_kind": "open_modal",
+        "materialization_status": "applied",
+        "route_path": "/users",
+    }
+
+
+@pytest.mark.anyio
+async def test_run_crawl_persists_menu_parent_links_by_stable_identity(
+    db_session,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    page_discovery_extractor = FakePageDiscoveryExtractor(
+        CrawlExtractionResult(
+            pages=[
+                PageCandidate(route_path="/system/roles", page_title="角色设置"),
+                PageCandidate(route_path="/system/roles/list", page_title="角色列表"),
+                PageCandidate(route_path="/system/admin", page_title="管理员设置"),
+                PageCandidate(route_path="/system/admin/list", page_title="管理员列表"),
+            ],
+        )
+    )
+    dom_menu_extractor = FakeDomMenuExtractor(
+        CrawlExtractionResult(
+            menus=[
+                MenuCandidate(
+                    label="设置",
+                    route_path="/system/roles",
+                    page_route_path="/system/roles",
+                    navigation_identity={
+                        "label": "设置",
+                        "depth": 0,
+                        "role": "menuitem",
+                        "aria_label": "角色设置",
+                        "sibling_index": 0,
+                    },
+                ),
+                MenuCandidate(
+                    label="设置",
+                    route_path="/system/admin",
+                    page_route_path="/system/admin",
+                    navigation_identity={
+                        "label": "设置",
+                        "depth": 0,
+                        "role": "menuitem",
+                        "aria_label": "管理员设置",
+                        "sibling_index": 1,
+                    },
+                ),
+                MenuCandidate(
+                    label="角色列表",
+                    route_path="/system/roles/list",
+                    page_route_path="/system/roles/list",
+                    parent_label="设置",
+                    navigation_identity={
+                        "label": "角色列表",
+                        "depth": 1,
+                        "role": "menuitem",
+                        "sibling_index": 0,
+                    },
+                    parent_navigation_identity={
+                        "label": "设置",
+                        "depth": 0,
+                        "role": "menuitem",
+                        "aria_label": "角色设置",
+                        "sibling_index": 0,
+                    },
+                ),
+                MenuCandidate(
+                    label="管理员列表",
+                    route_path="/system/admin/list",
+                    page_route_path="/system/admin/list",
+                    parent_label="设置",
+                    navigation_identity={
+                        "label": "管理员列表",
+                        "depth": 1,
+                        "role": "menuitem",
+                        "sibling_index": 0,
+                    },
+                    parent_navigation_identity={
+                        "label": "设置",
+                        "depth": 0,
+                        "role": "menuitem",
+                        "aria_label": "管理员设置",
+                        "sibling_index": 1,
+                    },
+                ),
+            ]
+        )
+    )
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        page_discovery_extractor=page_discovery_extractor,
+        dom_menu_extractor=dom_menu_extractor,
+        state_probe_extractor=FakeStateProbeExtractor(CrawlExtractionResult()),
+    )
+
+    result = await crawler_service.run_crawl(system_id=seeded_auth_state.system_id, crawl_scope="full")
+
+    assert result.status == "success"
+    menus = db_session.exec(select(MenuNode).order_by(MenuNode.sort_order, MenuNode.id)).all()
+    by_route = {menu.route_path: menu for menu in menus}
+    assert by_route["/system/roles/list"].parent_id == by_route["/system/roles"].id
+    assert by_route["/system/admin/list"].parent_id == by_route["/system/admin"].id
+
+
+@pytest.mark.anyio
 async def test_run_crawl_uses_page_discovery_as_primary_page_source(
     db_session,
     seeded_system,
@@ -2358,6 +2722,60 @@ async def test_playwright_browser_factory_readiness_polling_is_used_once_and_cac
     assert first_shell_samples >= 2
     assert page.route_snapshot_eval_calls == first_snapshot_samples
     assert page.readiness_shell_eval_calls == first_shell_samples
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_playwright_browser_factory_rechecks_readiness_after_secondary_page_visits(monkeypatch):
+    page, context, browser, chromium, playwright = install_per_visit_readiness_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    dom_elements = await session.collect_dom_elements(crawl_scope="full")
+    await session.close()
+
+    assert [element["page_route_path"] for element in dom_elements] == ["/dashboard", "/users"]
+    assert "/" in page.readiness_shell_urls
+    assert "/dashboard" in page.readiness_shell_urls
+    assert "/users" in page.readiness_shell_urls
+    assert page.route_ready_urls.count("/dashboard") >= 1
+    assert page.route_ready_urls.count("/users") >= 1
+    assert chromium.headless_calls == [True]
+    assert page.closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert playwright.stopped is True
+
+
+@pytest.mark.anyio
+async def test_collect_dom_elements_current_scope_prefers_resolved_hash_route(monkeypatch):
+    page, context, browser, chromium, playwright = install_hash_route_current_scope_async_api(monkeypatch)
+    factory = PlaywrightBrowserFactory()
+
+    session = await factory.open_context(
+        base_url="https://erp.example.com",
+        storage_state={"cookies": [{"name": "sid", "value": "abc123"}]},
+    )
+
+    dom_elements = await session.collect_dom_elements(crawl_scope="current")
+    await session.close()
+
+    assert dom_elements == [
+        {
+            "page_route_path": "/users",
+            "element_type": "button",
+            "role": "button",
+            "text": "新增用户",
+        }
+    ]
     assert chromium.headless_calls == [True]
     assert page.closed is True
     assert context.closed is True
