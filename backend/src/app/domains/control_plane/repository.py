@@ -598,6 +598,7 @@ class SqlControlPlaneRepository:
                 PageCheck.id,
                 PageCheck.page_asset_id,
                 PageAsset.asset_key,
+                PageAsset.asset_version,
                 PageCheck.check_code,
                 PageCheck.goal,
                 alias_confidence_subquery.c.alias_confidence,
