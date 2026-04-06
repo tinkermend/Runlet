@@ -92,7 +92,58 @@ def test_initial_schema_exposes_navigation_alias_columns(db_engine):
         "chain_complete",
         "source",
         "is_active",
+        "disabled_reason",
+        "disabled_at",
+        "disabled_by_snapshot_id",
     } <= columns
+
+
+def test_initial_schema_exposes_navigation_alias_indexes(db_engine):
+    inspector = inspect(db_engine)
+    indexes = inspector.get_indexes("page_navigation_aliases")
+    indexed_columns = {tuple(index["column_names"]) for index in indexes}
+    assert {
+        ("system_id",),
+        ("page_asset_id",),
+        ("alias_type",),
+        ("alias_text",),
+    } <= indexed_columns
+
+
+def test_page_asset_delete_cascades_navigation_aliases(db_engine):
+    with Session(db_engine) as session:
+        system = systems.System(
+            code=f"sys-{uuid4().hex[:8]}",
+            name="Test System",
+            base_url="https://example.com",
+            framework_type="react",
+        )
+        page = crawl.Page(system_id=system.id, route_path="/dashboard")
+        page_asset = assets.PageAsset(
+            system_id=system.id,
+            page_id=page.id,
+            asset_key="dashboard",
+            asset_version="v1",
+        )
+        navigation_alias = assets.PageNavigationAlias(
+            system_id=system.id,
+            page_asset_id=page_asset.id,
+            alias_type="leaf",
+            alias_text="仪表盘",
+            source="crawl",
+        )
+
+        session.add(system)
+        session.add(page)
+        session.add(page_asset)
+        session.add(navigation_alias)
+        session.commit()
+
+        navigation_alias_id = navigation_alias.id
+        session.delete(page_asset)
+        session.commit()
+
+        assert session.get(assets.PageNavigationAlias, navigation_alias_id) is None
 
 
 def test_settings_expose_session_and_pat_controls():

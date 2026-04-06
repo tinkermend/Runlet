@@ -119,6 +119,14 @@ class PageAsset(BaseModel, table=True):
             cascade="all, delete-orphan",
         ),
     )
+    navigation_aliases: list["PageNavigationAlias"] = Relationship(
+        back_populates="page_asset",
+        sa_relationship=relationship(
+            "PageNavigationAlias",
+            back_populates="page_asset",
+            cascade="all, delete-orphan",
+        ),
+    )
 
 
 class PageCheck(BaseModel, table=True):
@@ -212,6 +220,11 @@ class PageNavigationAlias(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
     disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
+
+    page_asset: "PageAsset | None" = Relationship(
+        back_populates="navigation_aliases",
+        sa_relationship=relationship("PageAsset", back_populates="navigation_aliases"),
+    )
 
 
 class ModulePlan(BaseModel, table=True):
