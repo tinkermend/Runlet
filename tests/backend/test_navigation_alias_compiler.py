@@ -104,3 +104,50 @@ def test_build_navigation_aliases_sets_page_title_leaf_none_when_menus_empty():
     page_title_alias = next(item for item in aliases if item.alias_type == "page_title")
     assert page_title_alias.leaf_text is None
     assert page_title_alias.display_chain is None
+
+
+def test_build_navigation_aliases_prefers_leaf_matching_route_path():
+    root_a = uuid4()
+    leaf_a = uuid4()
+    root_b = uuid4()
+    mid_b = uuid4()
+    leaf_b = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="A页面",
+        route_path="/a",
+        menus=[
+            MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
+            MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
+            MenuNode(id=mid_b, label="中B", depth=1, sort_order=1, parent_id=root_b),
+            MenuNode(id=leaf_b, label="叶B", depth=2, sort_order=1, parent_id=mid_b, route_path="/b"),
+        ],
+    )
+
+    assert any(item.alias_type == "menu_leaf" and item.alias_text == "叶A" for item in aliases)
+    assert any(item.alias_type == "menu_chain" and item.alias_text == "根A -> 叶A" for item in aliases)
+    assert not any(item.alias_text == "叶B" for item in aliases)
+    assert not any(item.alias_text == "根B -> 中B -> 叶B" for item in aliases)
+
+
+def test_build_navigation_aliases_mixed_topology_still_recovers_depth_chain_for_matching_route():
+    root_a = uuid4()
+    leaf_a = uuid4()
+    root_b = uuid4()
+    child_b = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="A页面",
+        route_path="/a",
+        menus=[
+            MenuNode(id=root_b, label="根B", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=child_b, label="子B", depth=1, sort_order=1, parent_id=root_b, route_path="/b"),
+            MenuNode(id=root_a, label="根A", depth=0, sort_order=2, parent_id=None, route_path="/a"),
+            MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=2, parent_id=uuid4(), route_path="/a"),
+        ],
+    )
+
+    assert any(item.alias_type == "menu_leaf" and item.alias_text == "叶A" for item in aliases)
+    assert any(item.alias_type == "menu_chain" and item.alias_text == "根A -> 叶A" for item in aliases)
+    assert not any(item.alias_text == "根B -> 子B" for item in aliases)

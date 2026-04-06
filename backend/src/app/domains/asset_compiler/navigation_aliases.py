@@ -17,8 +17,7 @@ class NavigationAliasDraft:
 def build_navigation_aliases(
     *, page_title: str | None, route_path: str, menus: list[MenuNode]
 ) -> list[NavigationAliasDraft]:
-    del route_path  # Kept for caller contract consistency.
-    normalized_chain, chain_complete = _derive_menu_chain(menus)
+    normalized_chain, chain_complete = _derive_menu_chain(menus, route_path=route_path)
 
     drafts: list[NavigationAliasDraft] = []
     if page_title:
@@ -58,17 +57,12 @@ def build_navigation_aliases(
     return _dedupe_drafts(drafts)
 
 
-def _derive_menu_chain(menus: list[MenuNode]) -> tuple[list[str], bool]:
+def _derive_menu_chain(menus: list[MenuNode], *, route_path: str) -> tuple[list[str], bool]:
     labeled_nodes = [node for node in menus if (node.label or "").strip()]
     if not labeled_nodes:
         return [], False
 
     node_by_id = {node.id: node for node in labeled_nodes}
-    has_topology_links = any(
-        node.parent_id is not None and node.parent_id in node_by_id for node in labeled_nodes
-    )
-    if not has_topology_links:
-        return _derive_chain_from_depth_fallback(labeled_nodes)
 
     child_count_by_parent_id: dict[object, int] = {}
     for node in labeled_nodes:
@@ -80,37 +74,102 @@ def _derive_menu_chain(menus: list[MenuNode]) -> tuple[list[str], bool]:
     if not leaf_candidates:
         leaf_candidates = list(labeled_nodes)
 
-    candidate = min(
+    ordered_candidates = sorted(
         leaf_candidates,
-        key=lambda node: (-node.depth, node.sort_order, node.label.strip(), str(node.id)),
+        key=lambda node: (
+            0 if _route_matches(node.route_path, route_path) else 1,
+            -node.depth,
+            node.sort_order,
+            node.label.strip(),
+            str(node.id),
+        ),
     )
 
+    for candidate in ordered_candidates:
+        chain, chain_complete = _derive_chain_for_candidate(
+            candidate,
+            node_by_id=node_by_id,
+            nodes=labeled_nodes,
+            route_path=route_path,
+        )
+        if chain:
+            return chain, chain_complete
+
+    return [], False
+
+
+def _derive_chain_for_candidate(
+    candidate: MenuNode,
+    *,
+    node_by_id: dict[object, MenuNode],
+    nodes: list[MenuNode],
+    route_path: str,
+) -> tuple[list[str], bool]:
     lineage: list[MenuNode] = [candidate]
     visited = {candidate.id}
     current = candidate
     while current.parent_id is not None:
         parent = node_by_id.get(current.parent_id)
         if parent is None or parent.id in visited:
-            return [candidate.label.strip()], False
+            return _derive_chain_from_depth_fallback(
+                nodes,
+                preferred_leaf=candidate,
+                route_path=route_path,
+            )
         lineage.insert(0, parent)
         visited.add(parent.id)
         current = parent
 
-    depth_continuous = all(
-        child.depth == parent.depth + 1 for parent, child in zip(lineage, lineage[1:])
-    )
+    depth_continuous = all(child.depth == parent.depth + 1 for parent, child in zip(lineage, lineage[1:]))
     starts_from_root = lineage[0].depth == 0
     if not starts_from_root or not depth_continuous:
+        if candidate.parent_id is None:
+            return _derive_chain_from_depth_fallback(
+                nodes,
+                preferred_leaf=candidate,
+                route_path=route_path,
+            )
         return [candidate.label.strip()], False
-
     return [node.label.strip() for node in lineage], True
 
 
-def _derive_chain_from_depth_fallback(nodes: list[MenuNode]) -> tuple[list[str], bool]:
+def _derive_chain_from_depth_fallback(
+    nodes: list[MenuNode],
+    *,
+    preferred_leaf: MenuNode,
+    route_path: str,
+) -> tuple[list[str], bool]:
+    route_nodes = [node for node in nodes if _route_matches(node.route_path, route_path)]
+    neutral_nodes = [node for node in nodes if node.route_path is None]
+    candidate_pool = route_nodes + neutral_nodes
+    if not candidate_pool:
+        candidate_pool = list(nodes)
+
     first_node_by_depth: dict[int, MenuNode] = {}
-    for node in sorted(nodes, key=lambda item: (item.depth, item.sort_order, item.label.strip(), str(item.id))):
+    for node in sorted(
+        candidate_pool,
+        key=lambda item: (
+            0 if _route_matches(item.route_path, route_path) else 1,
+            item.sort_order,
+            item.label.strip(),
+            str(item.id),
+        ),
+    ):
         if node.depth not in first_node_by_depth:
             first_node_by_depth[node.depth] = node
+
+    if preferred_leaf.depth not in first_node_by_depth:
+        first_node_by_depth[preferred_leaf.depth] = preferred_leaf
+    else:
+        first_node_by_depth[preferred_leaf.depth] = min(
+            [first_node_by_depth[preferred_leaf.depth], preferred_leaf],
+            key=lambda item: (
+                0 if _route_matches(item.route_path, route_path) else 1,
+                item.sort_order,
+                item.label.strip(),
+                str(item.id),
+            ),
+        )
 
     ordered_depths = sorted(first_node_by_depth)
     labels = [first_node_by_depth[depth].label.strip() for depth in ordered_depths]
@@ -119,6 +178,10 @@ def _derive_chain_from_depth_fallback(nodes: list[MenuNode]) -> tuple[list[str],
     if not starts_from_root or has_gap:
         return [labels[-1]], False
     return labels, True
+
+
+def _route_matches(node_route_path: str | None, target_route_path: str) -> bool:
+    return bool(node_route_path) and node_route_path == target_route_path
 
 
 def _format_chain(chain: list[str]) -> str | None:
