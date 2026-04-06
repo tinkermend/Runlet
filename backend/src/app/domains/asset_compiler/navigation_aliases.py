@@ -42,12 +42,12 @@ def build_navigation_aliases(
             )
         )
 
-    if len(normalized_chain) > 1:
-        chain_text = _format_chain(normalized_chain)
+    chain_text = _format_chain(normalized_chain)
+    if chain_complete and chain_text:
         drafts.append(
             NavigationAliasDraft(
                 alias_type="menu_chain",
-                alias_text=chain_text or "",
+                alias_text=chain_text,
                 leaf_text=normalized_chain[-1],
                 display_chain=chain_text,
                 chain_complete=True,

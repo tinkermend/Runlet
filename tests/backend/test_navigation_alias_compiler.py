@@ -95,9 +95,11 @@ def test_build_navigation_aliases_treats_single_root_node_as_complete_chain():
 
     page_title_alias = next(item for item in aliases if item.alias_type == "page_title")
     leaf_alias = next(item for item in aliases if item.alias_type == "menu_leaf")
+    chain_alias = next(item for item in aliases if item.alias_type == "menu_chain")
     assert page_title_alias.chain_complete is True
     assert leaf_alias.chain_complete is True
-    assert not any(item.alias_type == "menu_chain" for item in aliases)
+    assert chain_alias.chain_complete is True
+    assert chain_alias.alias_text == leaf_alias.leaf_text
 
 
 def test_build_navigation_aliases_sets_page_title_leaf_none_when_menus_empty():

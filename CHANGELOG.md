@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 修复完整单节点菜单链产出缺失：当链路完整且仅含根节点时，导航别名编译器现在也会生成 `menu_chain`，并与 `menu_leaf` 文本保持一致。
 - 修复导航别名歧义判定中的重复事实误报：候选去重不再依赖数据库行 `id`，改为基于候选链路语义签名判定；同时补齐“完整分支 + 断裂分支且均不匹配 `route_path`”歧义收口，统一仅输出 `page_title`。
 - 修复导航别名候选歧义收口：当存在多个完整叶分支且都不匹配目标 `route_path` 时，编译器不再任意选择并生成 `menu_leaf/menu_chain`，改为仅输出 `page_title`（`leaf_text/display_chain` 为空）。
 - 修复导航别名编译回归：在 `route_path` 感知选叶的同时，缺失/断裂 `parent_id` 拓扑时不再通过 depth 回退生成 `menu_chain`；depth 回退仅用于保留目标叶子语义（`chain_complete=false`）。
