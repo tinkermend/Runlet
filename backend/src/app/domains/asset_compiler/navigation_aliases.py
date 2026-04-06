@@ -74,6 +74,17 @@ def _derive_menu_chain(menus: list[MenuNode], *, route_path: str) -> tuple[list[
     if not leaf_candidates:
         leaf_candidates = list(labeled_nodes)
 
+    matching_route_candidates = [
+        node for node in leaf_candidates if _route_matches(node.route_path, route_path)
+    ]
+    complete_topology_leaf_keys = {
+        _leaf_identity_key(node)
+        for node in leaf_candidates
+        if _has_complete_topology_chain(node, node_by_id=node_by_id)
+    }
+    if not matching_route_candidates and len(complete_topology_leaf_keys) > 1:
+        return [], False
+
     ordered_candidates = sorted(
         leaf_candidates,
         key=lambda node: (
@@ -133,6 +144,23 @@ def _derive_chain_for_candidate(
     return [node.label.strip() for node in lineage], True
 
 
+def _has_complete_topology_chain(candidate: MenuNode, *, node_by_id: dict[object, MenuNode]) -> bool:
+    lineage: list[MenuNode] = [candidate]
+    visited = {candidate.id}
+    current = candidate
+    while current.parent_id is not None:
+        parent = node_by_id.get(current.parent_id)
+        if parent is None or parent.id in visited:
+            return False
+        lineage.insert(0, parent)
+        visited.add(parent.id)
+        current = parent
+
+    depth_continuous = all(child.depth == parent.depth + 1 for parent, child in zip(lineage, lineage[1:]))
+    starts_from_root = lineage[0].depth == 0
+    return starts_from_root and depth_continuous
+
+
 def _derive_chain_from_depth_fallback(
     nodes: list[MenuNode],
     *,
@@ -145,6 +173,10 @@ def _derive_chain_from_depth_fallback(
 
 def _route_matches(node_route_path: str | None, target_route_path: str) -> bool:
     return bool(node_route_path) and node_route_path == target_route_path
+
+
+def _leaf_identity_key(node: MenuNode) -> tuple[object, object, object, object, object, object]:
+    return (node.id, node.parent_id, node.depth, node.sort_order, node.label.strip(), node.route_path)
 
 
 def _format_chain(chain: list[str]) -> str | None:

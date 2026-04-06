@@ -137,7 +137,7 @@ def test_build_navigation_aliases_prefers_leaf_matching_route_path():
     assert not any(item.alias_text == "根B -> 中B -> 叶B" for item in aliases)
 
 
-def test_build_navigation_aliases_mixed_topology_still_recovers_depth_chain_for_matching_route():
+def test_build_navigation_aliases_mixed_topology_keeps_target_leaf_without_menu_chain():
     root_a = uuid4()
     leaf_a = uuid4()
     root_b = uuid4()
@@ -159,3 +159,25 @@ def test_build_navigation_aliases_mixed_topology_still_recovers_depth_chain_for_
     assert leaf_alias.chain_complete is False
     assert not any(item.alias_type == "menu_chain" for item in aliases)
     assert not any(item.alias_text == "根B -> 子B" for item in aliases)
+
+
+def test_build_navigation_aliases_keeps_only_page_title_when_leaf_is_ambiguous_without_route_match():
+    root_a = uuid4()
+    leaf_a = uuid4()
+    root_b = uuid4()
+    leaf_b = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="目标页面",
+        route_path="/missing",
+        menus=[
+            MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
+            MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
+            MenuNode(id=leaf_b, label="叶B", depth=1, sort_order=1, parent_id=root_b, route_path="/b"),
+        ],
+    )
+
+    assert [item.alias_type for item in aliases] == ["page_title"]
+    assert aliases[0].leaf_text is None
+    assert aliases[0].display_chain is None
