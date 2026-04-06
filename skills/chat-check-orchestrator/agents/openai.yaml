@@ -1,0 +1,4 @@
+name: chat-check-orchestrator
+description: placeholder agent template for orchestrating chat-based checks
+model: gpt-4o-mini
+inputs: []
