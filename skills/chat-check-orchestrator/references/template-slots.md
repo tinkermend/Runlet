@@ -4,8 +4,8 @@
 
 | template_code | required_slots |
 | --- | --- |
-| has_data | none |
-| no_data | none |
+| has_data | 无 |
+| no_data | 无 |
 | field_equals_exists | field, operator, value |
 | status_exists | status |
 | count_gte | min_count |
