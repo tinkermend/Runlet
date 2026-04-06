@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 完成 `asset_compiler` 导航别名持久化接入：`compile_snapshot` 现调用 `build_navigation_aliases` 并写入 `page_navigation_aliases`，每次重编译会先停用同 `page_asset` 旧别名（`disabled_reason=recompiled`、`disabled_by_snapshot_id=当前快照`）再写入新别名；同时按“当前页菜单节点 + 祖先链”构建 `menu_topology`，支持祖先 `page_id=None` 的分行拓扑恢复 `menu_chain`，断链场景仅保留 `menu_leaf` 且 `chain_complete=false`。
 - 修复 `route_path` 命中候选偏差：导航别名编译不再只从叶节点挑选目标，`route_path` 命中非叶菜单节点时也可作为目标；同时对同一路由的多候选引入语义去重与歧义降级，避免静默排序选错并统一回退为仅 `page_title`。
 - 修复导航别名编译契约与真实拓扑不一致的问题：`build_navigation_aliases` 现显式要求输入全量相关 `menu_topology`，通过 `route_path` 选目标叶后沿 `parent_id` 回溯祖先链，可在“祖先与叶子分行持久化、同批次含无关分支”场景下稳定还原 `menu_chain`。
 - 修复完整单节点菜单链产出缺失：当链路完整且仅含根节点时，导航别名编译器现在也会生成 `menu_chain`，并与 `menu_leaf` 文本保持一致。

@@ -12,6 +12,7 @@ from app.infrastructure.db.models.assets import (
     ModulePlan,
     PageAsset,
     PageCheck,
+    PageNavigationAlias,
 )
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.infrastructure.db.models.jobs import PublishedJob
@@ -604,6 +605,401 @@ async def test_compile_snapshot_creates_page_assets_and_checks(
     assert result.status == "success"
     assert result.assets_created >= 1
     assert result.checks_created >= 1
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_persists_navigation_aliases_with_complete_chain(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    root_id = uuid4()
+    db_session.add(
+        MenuNode(
+            id=root_id,
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="系统管理",
+            depth=0,
+            sort_order=1,
+            parent_id=None,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=1,
+            sort_order=1,
+            parent_id=root_id,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="用户列表",
+            playwright_locator="get_by_role('table', name='用户列表')",
+            usage_description="展示用户列表",
+        )
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=snapshot.id)
+    page_asset_id = result.asset_ids[0]
+
+    aliases = db_session.exec(
+        select(PageNavigationAlias)
+        .where(PageNavigationAlias.page_asset_id == page_asset_id)
+        .where(PageNavigationAlias.is_active.is_(True))
+        .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
+    ).all()
+
+    assert {alias.alias_type for alias in aliases} == {"page_title", "menu_leaf", "menu_chain"}
+    page_title_alias = next(alias for alias in aliases if alias.alias_type == "page_title")
+    leaf_alias = next(alias for alias in aliases if alias.alias_type == "menu_leaf")
+    chain_alias = next(alias for alias in aliases if alias.alias_type == "menu_chain")
+    assert page_title_alias.display_chain == "系统管理 -> 用户管理"
+    assert page_title_alias.leaf_text == "用户管理"
+    assert leaf_alias.alias_text == "用户管理"
+    assert leaf_alias.chain_complete is True
+    assert chain_alias.alias_text == "系统管理 -> 用户管理"
+    assert chain_alias.chain_complete is True
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_navigation_alias_downgrades_to_leaf_when_chain_is_broken(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=2,
+            sort_order=1,
+            parent_id=uuid4(),
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="用户列表",
+            playwright_locator="get_by_role('table', name='用户列表')",
+            usage_description="展示用户列表",
+        )
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=snapshot.id)
+    aliases = db_session.exec(
+        select(PageNavigationAlias)
+        .where(PageNavigationAlias.page_asset_id == result.asset_ids[0])
+        .where(PageNavigationAlias.is_active.is_(True))
+        .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
+    ).all()
+
+    assert {alias.alias_type for alias in aliases} == {"page_title", "menu_leaf"}
+    page_title_alias = next(alias for alias in aliases if alias.alias_type == "page_title")
+    leaf_alias = next(alias for alias in aliases if alias.alias_type == "menu_leaf")
+    assert page_title_alias.display_chain == "用户管理"
+    assert page_title_alias.chain_complete is False
+    assert leaf_alias.alias_text == "用户管理"
+    assert leaf_alias.chain_complete is False
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_navigation_alias_handles_split_ancestor_topology(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=snapshot.id,
+        route_path="/front/database/configManage/indicesManage",
+        page_title="指标管理",
+        page_summary="指标管理列表",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    root_id = uuid4()
+    middle_id = uuid4()
+    leaf_id = uuid4()
+    db_session.add(
+        MenuNode(
+            id=root_id,
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=None,
+            label="数据库",
+            depth=0,
+            sort_order=1,
+            parent_id=None,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            id=middle_id,
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=None,
+            label="配置管理",
+            depth=1,
+            sort_order=1,
+            parent_id=root_id,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            id=leaf_id,
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            label="指标管理",
+            route_path="/front/database/configManage/indicesManage",
+            depth=2,
+            sort_order=1,
+            parent_id=middle_id,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="指标列表",
+            playwright_locator="get_by_role('table', name='指标列表')",
+            usage_description="展示指标列表",
+        )
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=snapshot.id)
+    aliases = db_session.exec(
+        select(PageNavigationAlias)
+        .where(PageNavigationAlias.page_asset_id == result.asset_ids[0])
+        .where(PageNavigationAlias.is_active.is_(True))
+        .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
+    ).all()
+
+    chain_alias = next(alias for alias in aliases if alias.alias_type == "menu_chain")
+    assert chain_alias.alias_text == "数据库 -> 配置管理 -> 指标管理"
+    assert chain_alias.chain_complete is True
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_navigation_alias_recompile_deactivates_previous_active_rows(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    first_snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(first_snapshot)
+    db_session.flush()
+
+    first_page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=first_snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表",
+    )
+    db_session.add(first_page)
+    db_session.flush()
+
+    first_root_id = uuid4()
+    db_session.add(
+        MenuNode(
+            id=first_root_id,
+            system_id=seeded_system.id,
+            snapshot_id=first_snapshot.id,
+            page_id=first_page.id,
+            label="系统管理",
+            depth=0,
+            sort_order=1,
+            parent_id=None,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=first_snapshot.id,
+            page_id=first_page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=1,
+            sort_order=1,
+            parent_id=first_root_id,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=first_snapshot.id,
+            page_id=first_page.id,
+            element_type="table",
+            element_role="table",
+            element_text="用户列表",
+            playwright_locator="get_by_role('table', name='用户列表')",
+            usage_description="展示用户列表",
+        )
+    )
+    db_session.commit()
+
+    first_result = await asset_compiler_service.compile_snapshot(snapshot_id=first_snapshot.id)
+    page_asset_id = first_result.asset_ids[0]
+    first_active_aliases = db_session.exec(
+        select(PageNavigationAlias)
+        .where(PageNavigationAlias.page_asset_id == page_asset_id)
+        .where(PageNavigationAlias.is_active.is_(True))
+        .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
+    ).all()
+
+    next_snapshot = CrawlSnapshot(
+        system_id=seeded_system.id,
+        crawl_type="full",
+        framework_detected=seeded_system.framework_type,
+    )
+    db_session.add(next_snapshot)
+    db_session.flush()
+
+    page = Page(
+        system_id=seeded_system.id,
+        snapshot_id=next_snapshot.id,
+        route_path="/users",
+        page_title="用户管理",
+        page_summary="用户管理列表",
+    )
+    db_session.add(page)
+    db_session.flush()
+
+    second_root_id = uuid4()
+    db_session.add(
+        MenuNode(
+            id=second_root_id,
+            system_id=seeded_system.id,
+            snapshot_id=next_snapshot.id,
+            page_id=page.id,
+            label="系统管理",
+            depth=0,
+            sort_order=1,
+            parent_id=None,
+        )
+    )
+    db_session.add(
+        MenuNode(
+            system_id=seeded_system.id,
+            snapshot_id=next_snapshot.id,
+            page_id=page.id,
+            label="用户管理",
+            route_path="/users",
+            depth=1,
+            sort_order=1,
+            parent_id=second_root_id,
+        )
+    )
+    db_session.add(
+        PageElement(
+            system_id=seeded_system.id,
+            snapshot_id=next_snapshot.id,
+            page_id=page.id,
+            element_type="table",
+            element_role="table",
+            element_text="用户列表",
+            playwright_locator="get_by_role('table', name='用户列表')",
+            usage_description="展示用户列表",
+        )
+    )
+    db_session.commit()
+
+    second_result = await asset_compiler_service.compile_snapshot(snapshot_id=next_snapshot.id)
+    assert second_result.asset_ids[0] == page_asset_id
+
+    active_aliases = db_session.exec(
+        select(PageNavigationAlias)
+        .where(PageNavigationAlias.page_asset_id == page_asset_id)
+        .where(PageNavigationAlias.is_active.is_(True))
+        .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
+    ).all()
+    inactive_aliases = db_session.exec(
+        select(PageNavigationAlias)
+        .where(PageNavigationAlias.page_asset_id == page_asset_id)
+        .where(PageNavigationAlias.is_active.is_(False))
+        .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
+    ).all()
+
+    assert len(active_aliases) >= 2
+    assert len({(alias.alias_type, alias.alias_text) for alias in active_aliases}) == len(active_aliases)
+    assert len(inactive_aliases) == len(first_active_aliases)
+    assert all(alias.disabled_reason == "recompiled" for alias in inactive_aliases)
+    assert all(alias.disabled_by_snapshot_id == next_snapshot.id for alias in inactive_aliases)
 
 
 @pytest.mark.anyio

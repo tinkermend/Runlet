@@ -13,6 +13,7 @@ from app.domains.asset_compiler.check_templates import build_standard_checks
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint, compare_fingerprints
 from app.domains.asset_compiler.locator_bundles import build_locator_bundle
 from app.domains.asset_compiler.module_plan_builder import build_module_plan
+from app.domains.asset_compiler.navigation_aliases import NavigationAliasDraft, build_navigation_aliases
 from app.domains.asset_compiler.reconciliation import (
     ActiveCheckTruth,
     ActivePageTruth,
@@ -30,6 +31,7 @@ from app.infrastructure.db.models.assets import (
     ModulePlan,
     PageAsset,
     PageCheck,
+    PageNavigationAlias,
 )
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
 from app.infrastructure.db.models.jobs import PublishedJob
@@ -70,6 +72,7 @@ class AssetCompilerService:
             menus=menus,
             elements=elements,
         )
+        menus_by_id = {menu.id: menu for menu in menus}
 
         menus_by_page = _group_by_page(menus)
         elements_by_page = _group_by_page(elements)
@@ -268,6 +271,22 @@ class AssetCompilerService:
                     asset_key=page_asset.asset_key,
                     check_code=check_definition.check_code,
                 )
+
+            navigation_alias_drafts = build_navigation_aliases(
+                page_title=page.page_title,
+                route_path=_normalize_route_path(page.route_path),
+                menu_topology=_build_navigation_menu_topology(
+                    page_id=page.id,
+                    menus=menus,
+                    menus_by_id=menus_by_id,
+                ),
+            )
+            await self._replace_navigation_aliases(
+                system_id=system.id,
+                page_asset_id=page_asset.id,
+                snapshot_id=snapshot.id,
+                drafts=navigation_alias_drafts,
+            )
 
             page_asset_ids.append(page_asset.id)
             if created_asset:
@@ -655,6 +674,42 @@ class AssetCompilerService:
                 )
             )
 
+    async def _replace_navigation_aliases(
+        self,
+        *,
+        system_id: UUID,
+        page_asset_id: UUID,
+        snapshot_id: UUID,
+        drafts: list[NavigationAliasDraft],
+    ) -> None:
+        existing_aliases = await self._exec_all(
+            select(PageNavigationAlias)
+            .where(PageNavigationAlias.page_asset_id == page_asset_id)
+            .where(PageNavigationAlias.is_active.is_(True))
+            .order_by(PageNavigationAlias.id)
+        )
+        disabled_at = _utcnow()
+        for alias in existing_aliases:
+            alias.is_active = False
+            alias.disabled_reason = "recompiled"
+            alias.disabled_at = disabled_at
+            alias.disabled_by_snapshot_id = snapshot_id
+
+        for draft in drafts:
+            self.session.add(
+                PageNavigationAlias(
+                    system_id=system_id,
+                    page_asset_id=page_asset_id,
+                    alias_type=draft.alias_type,
+                    alias_text=draft.alias_text,
+                    leaf_text=draft.leaf_text,
+                    display_chain=draft.display_chain,
+                    chain_complete=draft.chain_complete,
+                    source="asset_compiler",
+                    is_active=True,
+                )
+            )
+
     async def _get(self, model, identifier):
         if isinstance(self.session, AsyncSession):
             return await self.session.get(model, identifier)
@@ -690,6 +745,48 @@ def _group_by_page(records: Iterable[Any]) -> dict[UUID, list[Any]]:
     for record in records:
         grouped.setdefault(record.page_id, []).append(record)
     return grouped
+
+
+def _build_navigation_menu_topology(
+    *,
+    page_id: UUID,
+    menus: list[MenuNode],
+    menus_by_id: dict[UUID, MenuNode],
+) -> list[MenuNode]:
+    topology: list[MenuNode] = []
+    seen_ids: set[UUID] = set()
+    page_menus = [menu for menu in menus if menu.page_id == page_id]
+    for menu in page_menus:
+        _append_menu_with_ancestors(
+            menu=menu,
+            menus_by_id=menus_by_id,
+            topology=topology,
+            seen_ids=seen_ids,
+        )
+    return topology
+
+
+def _append_menu_with_ancestors(
+    *,
+    menu: MenuNode,
+    menus_by_id: dict[UUID, MenuNode],
+    topology: list[MenuNode],
+    seen_ids: set[UUID],
+) -> None:
+    lineage: list[MenuNode] = []
+    visited: set[UUID] = set()
+    current: MenuNode | None = menu
+    while current is not None and current.id not in visited:
+        lineage.append(current)
+        visited.add(current.id)
+        if current.parent_id is None:
+            break
+        current = menus_by_id.get(current.parent_id)
+    for node in reversed(lineage):
+        if node.id in seen_ids:
+            continue
+        seen_ids.add(node.id)
+        topology.append(node)
 
 
 def _build_asset_key(system_code: str, route_path: str, page_title: str | None) -> str:
