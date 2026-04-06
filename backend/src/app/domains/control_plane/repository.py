@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import case
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, desc, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -21,7 +22,7 @@ from app.domains.control_plane.schemas import (
     PageAssetCheckItem,
     PageAssetChecksList,
 )
-from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
+from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck, PageNavigationAlias
 from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
 from app.domains.runner_service.result_views import (
     ArtifactItem,
@@ -441,6 +442,27 @@ class SqlControlPlaneRepository:
             )
 
         normalized_page_hint = page_hint.strip().lower()
+        navigation_matches = await self._list_navigation_alias_resolution_matches(
+            system_id=system.id,
+            normalized_page_hint=normalized_page_hint,
+            normalized_goal=normalized_goal,
+        )
+        if len(navigation_matches) > 1:
+            return CheckResolution(
+                system=system,
+                page_asset=None,
+                page_check=None,
+                miss_reason="ambiguous_page_alias",
+            )
+        if len(navigation_matches) == 1:
+            page_asset, page_check, _ = navigation_matches[0]
+            return CheckResolution(
+                system=system,
+                page_asset=page_asset,
+                page_check=page_check,
+                miss_reason=None,
+            )
+
         asset_statement = (
             select(PageAsset)
             .join(IntentAlias, IntentAlias.asset_key == PageAsset.asset_key)
@@ -557,11 +579,43 @@ class SqlControlPlaneRepository:
             .group_by(IntentAlias.asset_key)
             .subquery()
         )
+        navigation_alias_ranked_subquery = (
+            select(
+                PageNavigationAlias.page_asset_id.label("page_asset_id"),
+                PageNavigationAlias.leaf_text.label("leaf_text"),
+                PageNavigationAlias.display_chain.label("display_chain"),
+                PageNavigationAlias.chain_complete.label("chain_complete"),
+                func.row_number()
+                .over(
+                    partition_by=PageNavigationAlias.page_asset_id,
+                    order_by=(
+                        PageNavigationAlias.chain_complete.desc(),
+                        PageNavigationAlias.id,
+                    ),
+                )
+                .label("alias_rank"),
+            )
+            .where(PageNavigationAlias.is_active.is_(True))
+            .where(func.lower(PageNavigationAlias.alias_text) == normalized_page_hint)
+            .subquery()
+        )
+        navigation_alias_subquery = (
+            select(
+                navigation_alias_ranked_subquery.c.page_asset_id,
+                navigation_alias_ranked_subquery.c.leaf_text,
+                navigation_alias_ranked_subquery.c.display_chain,
+                navigation_alias_ranked_subquery.c.chain_complete,
+            )
+            .where(navigation_alias_ranked_subquery.c.alias_rank == 1)
+            .subquery()
+        )
 
         sample_count = func.count(ExecutionRun.id).label("sample_count")
         last_run_at = func.max(ExecutionRun.created_at).label("last_run_at")
-        alias_confidence = func.coalesce(
-            alias_confidence_subquery.c.alias_confidence, 0.0
+        alias_confidence = case(
+            (alias_confidence_subquery.c.alias_confidence.is_not(None), alias_confidence_subquery.c.alias_confidence),
+            (navigation_alias_subquery.c.page_asset_id.is_not(None), 1.0),
+            else_=0.0,
         ).label("alias_confidence")
 
         statement = (
@@ -571,6 +625,9 @@ class SqlControlPlaneRepository:
                 PageAsset.asset_key,
                 PageCheck.check_code,
                 PageCheck.goal,
+                navigation_alias_subquery.c.leaf_text,
+                navigation_alias_subquery.c.display_chain,
+                func.coalesce(navigation_alias_subquery.c.chain_complete, False).label("chain_complete"),
                 alias_confidence,
                 PageCheck.success_rate,
                 sample_count,
@@ -582,6 +639,10 @@ class SqlControlPlaneRepository:
                 alias_confidence_subquery,
                 alias_confidence_subquery.c.asset_key == PageAsset.asset_key,
             )
+            .outerjoin(
+                navigation_alias_subquery,
+                navigation_alias_subquery.c.page_asset_id == PageAsset.id,
+            )
             .outerjoin(ExecutionPlan, ExecutionPlan.resolved_page_check_id == PageCheck.id)
             .outerjoin(ExecutionRun, ExecutionRun.execution_plan_id == ExecutionPlan.id)
             .where(PageAsset.system_id == system.id)
@@ -589,7 +650,8 @@ class SqlControlPlaneRepository:
             .where(PageAsset.lifecycle_status == AssetLifecycleStatus.ACTIVE)
             .where(PageCheck.lifecycle_status == AssetLifecycleStatus.ACTIVE)
             .where(
-                (alias_confidence_subquery.c.asset_key.is_not(None))
+                (navigation_alias_subquery.c.page_asset_id.is_not(None))
+                | (alias_confidence_subquery.c.asset_key.is_not(None))
                 | (func.lower(Page.page_title) == normalized_page_hint)
                 | (func.lower(Page.route_path) == normalized_page_hint)
                 | (func.lower(PageAsset.asset_key) == normalized_page_hint)
@@ -601,6 +663,10 @@ class SqlControlPlaneRepository:
                 PageAsset.asset_version,
                 PageCheck.check_code,
                 PageCheck.goal,
+                navigation_alias_subquery.c.page_asset_id,
+                navigation_alias_subquery.c.leaf_text,
+                navigation_alias_subquery.c.display_chain,
+                navigation_alias_subquery.c.chain_complete,
                 alias_confidence_subquery.c.alias_confidence,
                 PageCheck.success_rate,
             )
@@ -616,6 +682,9 @@ class SqlControlPlaneRepository:
                     asset_key=row.asset_key,
                     check_code=row.check_code,
                     goal=row.goal,
+                    leaf_text=row.leaf_text,
+                    display_chain=row.display_chain,
+                    chain_complete=bool(row.chain_complete),
                     alias_confidence=row.alias_confidence or 0.0,
                     success_rate=row.success_rate,
                     last_run_at=row.last_run_at,
@@ -623,6 +692,44 @@ class SqlControlPlaneRepository:
                 )
             )
         return candidates
+
+    async def _list_navigation_alias_resolution_matches(
+        self,
+        *,
+        system_id: UUID,
+        normalized_page_hint: str,
+        normalized_goal: str,
+    ) -> list[tuple[PageAsset, PageCheck, PageNavigationAlias]]:
+        statement = (
+            select(PageAsset, PageCheck, PageNavigationAlias)
+            .join(PageCheck, PageCheck.page_asset_id == PageAsset.id)
+            .join(PageNavigationAlias, PageNavigationAlias.page_asset_id == PageAsset.id)
+            .where(PageAsset.system_id == system_id)
+            .where(PageAsset.status == AssetStatus.SAFE)
+            .where(PageAsset.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+            .where(PageCheck.lifecycle_status == AssetLifecycleStatus.ACTIVE)
+            .where(PageNavigationAlias.is_active.is_(True))
+            .where(func.lower(PageNavigationAlias.alias_text) == normalized_page_hint)
+            .where(
+                (func.lower(PageCheck.goal) == normalized_goal)
+                | (func.lower(PageCheck.check_code) == normalized_goal)
+            )
+            .order_by(
+                PageNavigationAlias.chain_complete.desc(),
+                PageAsset.asset_version.desc(),
+                PageCheck.id,
+                PageNavigationAlias.id,
+            )
+        )
+        rows = await self._exec_all(statement)
+        deduped: list[tuple[PageAsset, PageCheck, PageNavigationAlias]] = []
+        seen_page_check_ids: set[UUID] = set()
+        for page_asset, page_check, navigation_alias in rows:
+            if page_check.id in seen_page_check_ids:
+                continue
+            seen_page_check_ids.add(page_check.id)
+            deduped.append((page_asset, page_check, navigation_alias))
+        return deduped
 
     async def get_execution_plan(
         self,

@@ -132,6 +132,9 @@ class CheckCandidateItem(BaseModel):
     asset_key: str
     check_code: str
     goal: str
+    leaf_text: str | None = None
+    display_chain: str | None = None
+    chain_complete: bool = False
     alias_confidence: float
     success_rate: float
     sample_count: int

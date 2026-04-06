@@ -7,7 +7,7 @@ from sqlmodel import select
 from app.domains.control_plane.repository import SqlControlPlaneRepository
 from app.domains.control_plane.service import ControlPlaneService
 from app.domains.runner_service.scheduler import PublishedJobService
-from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
+from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck, PageNavigationAlias
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob

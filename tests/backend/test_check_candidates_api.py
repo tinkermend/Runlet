@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.domains.control_plane.repository import SqlControlPlaneRepository
+from app.infrastructure.db.models.assets import PageNavigationAlias
 
 
 @pytest.mark.anyio
@@ -22,6 +23,56 @@ async def test_post_check_request_candidates_returns_ranked_candidates(
     body = response.json()
     assert 1 <= len(body["candidates"]) <= 3
     assert body["candidates"][0]["rank_score"] >= body["candidates"][-1]["rank_score"]
+
+
+@pytest.mark.anyio
+async def test_post_check_request_candidates_returns_navigation_chain_and_dedupes_same_asset_alias_rows(
+    client,
+    db_session,
+    seeded_system,
+    seeded_page_asset,
+):
+    db_session.add(
+        PageNavigationAlias(
+            system_id=seeded_system.id,
+            page_asset_id=seeded_page_asset.id,
+            alias_type="page_title",
+            alias_text="用户管理",
+            leaf_text="用户管理",
+            display_chain="系统管理 -> 用户管理",
+            chain_complete=True,
+            source="seed",
+        )
+    )
+    db_session.add(
+        PageNavigationAlias(
+            system_id=seeded_system.id,
+            page_asset_id=seeded_page_asset.id,
+            alias_type="menu_leaf",
+            alias_text="用户管理",
+            leaf_text="用户管理",
+            display_chain="系统管理 -> 用户管理",
+            chain_complete=True,
+            source="seed",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/check-requests:candidates",
+        json={
+            "system_hint": "ERP",
+            "page_hint": "用户管理",
+            "intent": "看下有没有数据",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["candidates"]) == 1
+    assert body["candidates"][0]["leaf_text"] == "用户管理"
+    assert body["candidates"][0]["display_chain"] == "系统管理 -> 用户管理"
+    assert body["candidates"][0]["chain_complete"] is True
 
 
 @pytest.mark.anyio
@@ -49,4 +100,5 @@ async def test_list_check_candidates_groups_asset_version_for_postgres(
 
     assert "ORDER BY alias_confidence DESC, page_assets.asset_version DESC, page_checks.id" in compiled
     assert "GROUP BY" in compiled
-    assert "page_assets.asset_version" in compiled.split("GROUP BY", 1)[1].split("ORDER BY", 1)[0]
+    group_by_clause = compiled.rsplit("GROUP BY", 1)[1].split("ORDER BY", 1)[0]
+    assert "page_assets.asset_version" in group_by_clause
