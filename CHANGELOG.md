@@ -13,6 +13,7 @@
 - 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
 
 ### Added
+- 新增纯函数导航别名编译器 `asset_compiler/navigation_aliases.py`，按菜单事实生成 `page_title/menu_leaf/menu_chain` 草案并在父链缺失时仅保留叶子别名；同时新增 `test_navigation_alias_compiler.py` 回归用例，覆盖完整链生成、缺父链降级与重复菜单去重。
 - 新增资产层导航别名解析实施计划：`docs/superpowers/plans/2026-04-06-asset-navigation-alias-resolution-plan.md`，把 `page_navigation_aliases` schema、导航别名编译、控制面唯一叶子命中与候选链路解释、回归验证拆成可独立执行的小任务。
 - 新增资产层导航别名解析设计文档：`docs/superpowers/specs/2026-04-06-asset-navigation-alias-resolution-design.md`，明确在不改变 `page_asset/page_check` 执行主模型的前提下，引入 `page_navigation_aliases` 作为资产层导航语义表，支持“叶子菜单唯一自动命中、重名返回候选确认、完整菜单链仅作消歧与解释信息”的页面解析规则。
 - 补齐 `chat-check-orchestrator` 轮询终止语义：在 `SKILL.md`、`references/api-contract.md` 与 `references/result-format.md` 中明确 `GET /api/v1/check-requests/{request_id}` 仅返回队列态，`completed/failed/retryable_failed/skipped` 都属于终态；命中终态后必须转查 `/result`，避免把 `completed` 误判为“仍在运行”。
