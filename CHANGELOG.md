@@ -8,6 +8,7 @@
 - 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
 
 ### Added
+- 新增资产层导航别名解析设计文档：`docs/superpowers/specs/2026-04-06-asset-navigation-alias-resolution-design.md`，明确在不改变 `page_asset/page_check` 执行主模型的前提下，引入 `page_navigation_aliases` 作为资产层导航语义表，支持“叶子菜单唯一自动命中、重名返回候选确认、完整菜单链仅作消歧与解释信息”的页面解析规则。
 - 补齐 `chat-check-orchestrator` 轮询终止语义：在 `SKILL.md`、`references/api-contract.md` 与 `references/result-format.md` 中明确 `GET /api/v1/check-requests/{request_id}` 仅返回队列态，`completed/failed/retryable_failed/skipped` 都属于终态；命中终态后必须转查 `/result`，避免把 `completed` 误判为“仍在运行”。
 - 收紧 `skills/chat-check-orchestrator/SKILL.md` 与 `skills/chat-check-orchestrator/references/result-format.md` 的失败出口语义：当结果证据显示登录页回退或 `auth_status=reused` 后导航失败时，对话后续动作必须优先提示“先去控制台刷新认证再重试检查”，避免只输出泛化失败结论。
 - 通过压力场景复核并收紧 `skills/chat-check-orchestrator/SKILL.md` 的门控描述：补齐“单候选但未达高置信也必须进入 Recommend/确认，不允许直执行，且 Recommend 后必须等待用户确认才能 Execute”的兜底分支，并明确“菜单完整性等结构诉求优先走普通页面检查、半结构化但未明确的断言先 AskOneQuestion 澄清、候选为空时不进入 Recommend 而是先补问/无法澄清则停止”，避免与 `decision-rules.md`/Task 6 压力用例语义不一致。
