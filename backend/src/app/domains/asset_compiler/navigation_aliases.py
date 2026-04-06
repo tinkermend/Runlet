@@ -77,13 +77,19 @@ def _derive_menu_chain(menus: list[MenuNode], *, route_path: str) -> tuple[list[
     matching_route_candidates = [
         node for node in leaf_candidates if _route_matches(node.route_path, route_path)
     ]
-    complete_topology_leaf_keys = {
-        _leaf_identity_key(node)
-        for node in leaf_candidates
-        if _has_complete_topology_chain(node, node_by_id=node_by_id)
-    }
-    if not matching_route_candidates and len(complete_topology_leaf_keys) > 1:
-        return [], False
+    if not matching_route_candidates:
+        semantic_candidate_signatures: set[tuple[str, tuple[str, ...], bool]] = set()
+        for node in leaf_candidates:
+            chain, chain_complete = _derive_chain_for_candidate(
+                node,
+                node_by_id=node_by_id,
+                nodes=labeled_nodes,
+                route_path=route_path,
+            )
+            if chain:
+                semantic_candidate_signatures.add((node.label.strip(), tuple(chain), chain_complete))
+        if len(semantic_candidate_signatures) > 1:
+            return [], False
 
     ordered_candidates = sorted(
         leaf_candidates,
@@ -173,10 +179,6 @@ def _derive_chain_from_depth_fallback(
 
 def _route_matches(node_route_path: str | None, target_route_path: str) -> bool:
     return bool(node_route_path) and node_route_path == target_route_path
-
-
-def _leaf_identity_key(node: MenuNode) -> tuple[object, object, object, object, object, object]:
-    return (node.id, node.parent_id, node.depth, node.sort_order, node.label.strip(), node.route_path)
 
 
 def _format_chain(chain: list[str]) -> str | None:

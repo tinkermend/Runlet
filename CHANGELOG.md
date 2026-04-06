@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 修复导航别名歧义判定中的重复事实误报：候选去重不再依赖数据库行 `id`，改为基于候选链路语义签名判定；同时补齐“完整分支 + 断裂分支且均不匹配 `route_path`”歧义收口，统一仅输出 `page_title`。
 - 修复导航别名候选歧义收口：当存在多个完整叶分支且都不匹配目标 `route_path` 时，编译器不再任意选择并生成 `menu_leaf/menu_chain`，改为仅输出 `page_title`（`leaf_text/display_chain` 为空）。
 - 修复导航别名编译回归：在 `route_path` 感知选叶的同时，缺失/断裂 `parent_id` 拓扑时不再通过 depth 回退生成 `menu_chain`；depth 回退仅用于保留目标叶子语义（`chain_complete=false`）。
 - 修复导航别名编译在多分支菜单下的目标漂移：候选叶子选择新增 `route_path` 感知（优先命中 `menu.route_path == route_path`），避免被其他更深分支误选；同时移除全局拓扑开关，改为逐候选“拓扑回溯 + 局部 depth 回退”，保证 mixed snapshot 中无可用 `parent_id` 的匹配分支仍可保留目标叶子语义。

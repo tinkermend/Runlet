@@ -25,10 +25,10 @@ def test_build_navigation_aliases_emits_title_leaf_and_chain_when_chain_complete
 def test_build_navigation_aliases_downgrades_to_leaf_when_parent_chain_is_broken():
     aliases = build_navigation_aliases(
         page_title="指标管理",
-        route_path="/front/database/configManage/indicesManage",
+        route_path="/target",
         menus=[
             MenuNode(label="数据库", depth=0, sort_order=1),
-            MenuNode(label="指标管理", depth=2, sort_order=11),
+            MenuNode(label="指标管理", depth=2, sort_order=11, route_path="/target"),
         ],
     )
 
@@ -70,12 +70,12 @@ def test_build_navigation_aliases_does_not_synthesize_cross_branch_chain():
 
     aliases = build_navigation_aliases(
         page_title="目标页面",
-        route_path="/front/database/configManage/indicesManage",
+        route_path="/target",
         menus=[
             MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=child_a, label="子A", depth=1, sort_order=1, parent_id=root_a),
             MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
-            MenuNode(id=leaf_b, label="叶B", depth=2, sort_order=1, parent_id=root_b),
+            MenuNode(id=leaf_b, label="叶B", depth=2, sort_order=1, parent_id=root_b, route_path="/target"),
         ],
     )
 
@@ -175,6 +175,49 @@ def test_build_navigation_aliases_keeps_only_page_title_when_leaf_is_ambiguous_w
             MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
             MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
             MenuNode(id=leaf_b, label="叶B", depth=1, sort_order=1, parent_id=root_b, route_path="/b"),
+        ],
+    )
+
+    assert [item.alias_type for item in aliases] == ["page_title"]
+    assert aliases[0].leaf_text is None
+    assert aliases[0].display_chain is None
+
+
+def test_build_navigation_aliases_duplicate_semantic_chains_do_not_trigger_ambiguity():
+    root_a1 = uuid4()
+    leaf_a1 = uuid4()
+    root_a2 = uuid4()
+    leaf_a2 = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="A页面",
+        route_path="/missing",
+        menus=[
+            MenuNode(id=root_a1, label="根A", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=leaf_a1, label="叶A", depth=1, sort_order=1, parent_id=root_a1, route_path="/a"),
+            MenuNode(id=root_a2, label="根A", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=leaf_a2, label="叶A", depth=1, sort_order=1, parent_id=root_a2, route_path="/a"),
+        ],
+    )
+
+    assert any(item.alias_type == "menu_leaf" and item.alias_text == "叶A" for item in aliases)
+    assert any(item.alias_type == "menu_chain" and item.alias_text == "根A -> 叶A" for item in aliases)
+
+
+def test_build_navigation_aliases_keeps_only_page_title_when_complete_and_broken_branches_are_mixed_without_route_match():
+    root_a = uuid4()
+    leaf_a = uuid4()
+    root_b = uuid4()
+    leaf_b = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="目标页面",
+        route_path="/missing",
+        menus=[
+            MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
+            MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
+            MenuNode(id=leaf_b, label="叶B", depth=2, sort_order=1, parent_id=root_b, route_path="/b"),
         ],
     )
 
