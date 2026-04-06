@@ -37,7 +37,7 @@ from app.infrastructure.db.models.execution import (
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemAuthPolicy, SystemCrawlPolicy
 from app.infrastructure.db.models.systems import System
-from app.shared.enums import AssetLifecycleStatus, AssetStatus, RuntimePolicyState
+from app.shared.enums import AssetLifecycleStatus, AssetStatus, QueuedJobStatus, RuntimePolicyState
 
 
 @dataclass(frozen=True)
@@ -598,6 +598,7 @@ class SqlControlPlaneRepository:
                 PageCheck.id,
                 PageCheck.page_asset_id,
                 PageAsset.asset_key,
+                PageAsset.asset_version,
                 PageCheck.check_code,
                 PageCheck.goal,
                 alias_confidence_subquery.c.alias_confidence,
@@ -858,15 +859,7 @@ class SqlControlPlaneRepository:
             ExecutionPlan.execution_request_id == request_id
         )
         plan = await self._exec_first(statement)
-        queued_jobs = await self._exec_all(select(QueuedJob))
-        queued_job = next(
-            (
-                job
-                for job in queued_jobs
-                if job.payload.get("execution_request_id") == str(request_id)
-            ),
-            None,
-        )
+        queued_job = await self._find_check_request_queued_job(request_id=request_id)
 
         return CheckRequestStatus(
             request_id=request.id,
@@ -889,6 +882,24 @@ class SqlControlPlaneRepository:
         plan = await self._exec_first(
             select(ExecutionPlan).where(ExecutionPlan.execution_request_id == request_id)
         )
+        queued_job = await self._find_check_request_queued_job(request_id=request_id)
+        if queued_job is not None and queued_job.status not in {
+            QueuedJobStatus.COMPLETED.value,
+            QueuedJobStatus.FAILED.value,
+            QueuedJobStatus.RETRYABLE_FAILED.value,
+            QueuedJobStatus.SKIPPED.value,
+        }:
+            return CheckResultView(
+                request_id=request.id,
+                plan_id=plan.id if plan else None,
+                page_check_id=plan.resolved_page_check_id if plan else None,
+                execution_track=_normalize_public_execution_track(plan.execution_track) if plan else None,
+                execution_summary=None,
+                artifacts=[],
+                needs_recrawl=False,
+                needs_recompile=False,
+            )
+
         artifacts: list[ExecutionArtifact] = []
         execution_summary: ExecutionSummary | None = None
         if plan is not None:
@@ -958,6 +969,17 @@ class SqlControlPlaneRepository:
             ],
             needs_recrawl=needs_recrawl,
             needs_recompile=needs_recompile,
+        )
+
+    async def _find_check_request_queued_job(self, *, request_id: UUID) -> QueuedJob | None:
+        queued_jobs = await self._exec_all(select(QueuedJob))
+        return next(
+            (
+                job
+                for job in queued_jobs
+                if job.payload.get("execution_request_id") == str(request_id)
+            ),
+            None,
         )
 
     async def get_page_check_run_target(

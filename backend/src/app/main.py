@@ -81,16 +81,16 @@ def create_app() -> FastAPI:
         try:
             response = await call_next(request)
         finally:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
             request_id_ctx.reset(token)
-            response.headers["X-Request-ID"] = rid
-            logger.info(
-                "%s %s -> %s (%dms)",
-                request.method,
-                request.url.path,
-                response.status_code,
-                elapsed_ms,
-            )
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        response.headers["X-Request-ID"] = rid
+        logger.info(
+            "%s %s -> %s (%dms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
         return response
 
     # ── 路由 ─────────────────────────────────────────────────

@@ -1,6 +1,15 @@
 ## [Unreleased] - 2026-04-05
 
+### Fixed
+- 修正 `GET /api/v1/check-requests/{request_id}/result` 在 `run_check` 仍处于进行中重试时提前暴露中间失败尝试的问题：当同一请求的队列任务状态尚未进入终态时，结果接口现在保持 `execution_summary=null`、`artifacts=[]`，避免与状态接口的进行中语义冲突。
+- 修复 `POST /api/v1/check-requests:candidates` 在真实 PostgreSQL 上的分组查询兼容性：候选排序继续按 `alias_confidence -> asset_version -> page_check_id` 执行，但 `SqlControlPlaneRepository.list_check_candidates` 现在把 `page_assets.asset_version` 一并纳入 `GROUP BY`，避免 asyncpg/PG 因 `ORDER BY` 非分组列抛出 `GroupingError`；同时补充回归测试锁定该 SQL 形态。
+- 修正控制台同步数据库会话对 PostgreSQL 运行时 URL 的转换逻辑，`/api/console/*` 不再把 `postgresql+asyncpg` 粗暴改成默认 `psycopg2` 方言，改为统一转换到已声明依赖的 `postgresql+psycopg`。
+- 修正 API 请求中间件在下游抛异常时错误访问未初始化 `response` 的问题，避免把真实异常统一掩盖成 `UnboundLocalError`。
+- 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
+
 ### Added
+- 新增 AI Chat 检查编排 skill 实施计划：`docs/superpowers/plans/2026-04-06-chat-check-orchestration-skill-plan.md`，把项目级 `skills/chat-check-orchestrator/` 的实现拆分为包骨架、主 `SKILL.md` 状态机、PAT/API references、决策/模板/结果 references、`agents/openai.yaml` 与压力场景验证六个可独立提交的任务。
+- 新增 AI Chat 检查编排 skill 设计文档：`docs/superpowers/specs/2026-04-06-chat-check-orchestration-skill-design.md`，明确该 skill 作为“检查型对话编排层”统一覆盖普通页面检查与模板化只读检查，采用 `RUNLET_PAT` 强前置校验、单问题补问、高置信推荐直执行、统一 `check-requests*` API 编排，以及“执行成功后才可选发布”的后置流程。
 - 新增示教驱动功能测试设计文档：`docs/superpowers/specs/2026-04-06-demonstration-driven-flow-plan-design.md`，明确 `Runlet` 面向企业级自动化仿真巡检与测试时采用“双路径产品形态 + 统一资产执行内核”，在保持 `page_check + module_plan` 巡检主链不变的前提下，引入复用 Midscene 录制插件、平台侧 `demonstration_bundle -> action_block/assertion_block/flow_plan` 编译链与受控写操作执行边界。
 - 新增采集失效认证态自动恢复设计与实施计划：`docs/superpowers/specs/2026-04-06-crawler-stale-auth-refresh-retry-design.md` 与 `docs/superpowers/plans/2026-04-06-crawler-stale-auth-refresh-retry-plan.md`，明确 `crawler_service` 在命中“旧 auth_state 注入成功但真实回退登录页”的通用特征后，可执行一次服务端认证刷新并仅重试一次 crawl。
 - `crawler_service` 新增通用失效认证态判定与一次性自动刷新重试能力：首次 crawl 若呈现“登录页/根页事实 + 菜单为 0 + 代表元素极少 + `state_probe_baseline_degraded`”的组合信号，会触发一次 `auth_service.refresh_auth_state()`；刷新成功后仅重跑一次 crawl 并补充 `auth_state_auto_refreshed` warning，刷新失败则保留首次结果并补充 `auth_state_refresh_failed` 诊断，同时新增对应 crawler 回归测试。

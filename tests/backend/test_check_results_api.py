@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from sqlmodel import select
+
 from app.infrastructure.db.models.execution import (
     ExecutionArtifact,
     ExecutionPlan,
     ExecutionRequest,
     ExecutionRun,
 )
+from app.infrastructure.db.models.jobs import QueuedJob
 from app.shared.enums import ExecutionResultStatus
 
 
@@ -187,6 +190,58 @@ def test_get_check_request_result_uses_latest_execution_run_by_run_created_at(
     assert body["execution_summary"]["page_title"] == "最新结果"
     assert len(body["artifacts"]) == 1
     assert body["artifacts"][0]["payload"]["page_title"] == "最新结果"
+
+
+def test_get_check_request_result_hides_intermediate_attempts_while_job_running(
+    client,
+    db_session,
+    accepted_request,
+    seeded_page_asset,
+):
+    plan = db_session.get(ExecutionPlan, accepted_request.plan_id)
+    assert plan is not None
+
+    queued_job = db_session.exec(
+        select(QueuedJob).where(
+            QueuedJob.payload["execution_request_id"].as_string() == str(accepted_request.request_id)
+        )
+    ).one()
+    queued_job.status = "running"
+    db_session.add(queued_job)
+    db_session.flush()
+
+    execution_run = ExecutionRun(
+        execution_plan_id=plan.id,
+        status="failed",
+        duration_ms=321,
+        auth_status="reused",
+        failure_category="navigation_failed",
+        asset_version=seeded_page_asset.asset_version,
+    )
+    db_session.add(execution_run)
+    db_session.flush()
+
+    db_session.add(
+        ExecutionArtifact(
+            execution_run_id=execution_run.id,
+            artifact_kind="module_execution",
+            result_status=ExecutionResultStatus.FAILED,
+            payload={
+                "final_url": "https://erp.example.com/users",
+                "page_title": "中间失败结果",
+            },
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/check-requests/{accepted_request.request_id}/result")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["execution_summary"] is None
+    assert body["artifacts"] == []
+    assert body["needs_recrawl"] is False
+    assert body["needs_recompile"] is False
 
 
 def test_get_check_request_result_returns_404_for_missing_request(client):

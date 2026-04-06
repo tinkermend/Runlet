@@ -190,6 +190,8 @@
 | needs_recrawl | bool | 是否需要重新采集 |
 | needs_recompile | bool | 是否需要重新编译 |
 
+> 说明：当请求仍处于 `accepted` / `queued` / `running` 等进行中状态时，本接口不会提前暴露中间重试尝试的执行摘要；此时 `execution_summary` 为空、`artifacts` 为空列表。应先结合 `GET /api/v1/check-requests/{request_id}` 判断请求是否已进入终态。
+
 **ExecutionSummary**：
 
 | 字段 | 类型 | 说明 |
