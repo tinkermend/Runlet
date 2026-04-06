@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 补充 `skills/chat-check-orchestrator/SKILL.md` 的“参考入口”和“完成与退出条件”：显式指向 `setup-and-auth/api-contract/decision-rules/template-slots/result-format` 五个 references，并收口 `RUNLET_PAT` 缺失、澄清后仍缺参、拒绝推荐、执行成功、执行失败/超时 的退出语义。
 - 定义 `skills/chat-check-orchestrator/SKILL.md` 主流程状态机与边界：补齐 `PreflightAuth -> ParseIntent -> AssessReadiness -> AskOneQuestion/Recommend/Execute -> PollStatus -> FetchResult -> SummarizeResult -> OfferPublish`，明确 `RUNLET_PAT` 前置校验、`realtime_probe` 非默认路径，以及“仅成功后可选发布”门控。
 - 新增 AI Chat 检查编排 skill 实施计划：`docs/superpowers/plans/2026-04-06-chat-check-orchestration-skill-plan.md`，把项目级 `skills/chat-check-orchestrator/` 的实现拆分为包骨架、主 `SKILL.md` 状态机、PAT/API references、决策/模板/结果 references、`agents/openai.yaml` 与压力场景验证六个可独立提交的任务。
 - 搭建 `skills/chat-check-orchestrator` 包骨架，包含 `SKILL.md`、各类 references 占位文档与 `agents/openai.yaml`，确保结构完备。

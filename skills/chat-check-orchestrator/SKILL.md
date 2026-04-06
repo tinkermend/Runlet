@@ -49,3 +49,19 @@ description: Use when a user wants to run a Runlet page check or readonly templa
   - 存在多候选 -> `Recommend`（给出简洁推荐，用户确认后执行）
   - 满足高置信门槛 -> `Execute`
 - `OfferPublish` 仅在执行成功后出现；失败或未完成时不进入发布分支。
+
+## 参考入口
+
+- `references/setup-and-auth.md`：环境变量与 PAT 前置校验入口。
+- `references/api-contract.md`：`check-requests*` 调用契约与字段入口。
+- `references/decision-rules.md`：补问、推荐与直执行门控规则入口。
+- `references/template-slots.md`：模板化检查槽位与参数约束入口。
+- `references/result-format.md`：执行结果摘要与证据输出格式入口。
+
+## 完成与退出条件
+
+- 缺少 `RUNLET_PAT`：立即停止并提示先创建 PAT。
+- 澄清后仍信息不足：停止本轮并要求用户补充后再试。
+- 用户拒绝候选推荐：停止本轮，不强制执行。
+- 执行成功：输出结果摘要，并可选询问是否发布。
+- 执行失败或超时：输出失败摘要后结束本轮。
