@@ -2605,6 +2605,37 @@ async def test_run_crawl_persists_snapshot_pages_and_elements(
 
 
 @pytest.mark.anyio
+async def test_run_crawl_defaults_snapshot_state_to_draft(
+    db_session,
+    seeded_system,
+    seeded_auth_state,
+):
+    browser_factory = FakeBrowserFactory()
+    crawler_service = CrawlerService(
+        session=db_session,
+        browser_factory=browser_factory,
+        router_extractor=FakeRouterExtractor(
+            CrawlExtractionResult(
+                framework_detected="react",
+                pages=[PageCandidate(route_path="/users")],
+            )
+        ),
+        dom_menu_extractor=FakeDomMenuExtractor(CrawlExtractionResult()),
+    )
+
+    result = await crawler_service.run_crawl(
+        system_id=seeded_system.id,
+        crawl_scope="full",
+    )
+
+    assert result.status == "success"
+
+    snapshot = db_session.exec(select(CrawlSnapshot)).one()
+    assert snapshot.state == "draft"
+    assert snapshot.activated_at is None
+
+
+@pytest.mark.anyio
 async def test_run_crawl_passes_derived_entry_url_from_login_url(
     db_session,
     seeded_system,

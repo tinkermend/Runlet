@@ -2779,6 +2779,7 @@ class CrawlerService:
             failure_reason=extraction.failure_reason,
             warning_messages=extraction.warning_messages,
             structure_hash=structure_hash,
+            state="draft",
         )
 
     async def _persist_pages(
