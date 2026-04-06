@@ -5,13 +5,16 @@ from app.infrastructure.db.models.crawl import MenuNode
 
 
 def test_build_navigation_aliases_emits_title_leaf_and_chain_when_chain_complete():
+    root_id = uuid4()
+    middle_id = uuid4()
+    leaf_id = uuid4()
     aliases = build_navigation_aliases(
         page_title="指标管理",
         route_path="/front/database/configManage/indicesManage",
         menus=[
-            MenuNode(label="数据库", depth=0, sort_order=1),
-            MenuNode(label="配置管理", depth=1, sort_order=1),
-            MenuNode(label="指标管理", depth=2, sort_order=1),
+            MenuNode(id=root_id, label="数据库", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id),
+            MenuNode(id=leaf_id, label="指标管理", depth=2, sort_order=1, parent_id=middle_id),
         ],
     )
 
@@ -39,15 +42,18 @@ def test_build_navigation_aliases_downgrades_to_leaf_when_parent_chain_is_broken
 
 
 def test_build_navigation_aliases_dedupes_repeated_menu_nodes():
+    root_id = uuid4()
+    middle_id = uuid4()
+    leaf_id = uuid4()
     aliases = build_navigation_aliases(
         page_title="指标管理",
         route_path="/front/database/configManage/indicesManage",
         menus=[
-            MenuNode(label="数据库", depth=0, sort_order=1),
-            MenuNode(label="配置管理", depth=1, sort_order=1),
-            MenuNode(label="配置管理", depth=1, sort_order=1),
-            MenuNode(label="指标管理", depth=2, sort_order=1),
-            MenuNode(label="指标管理", depth=2, sort_order=1),
+            MenuNode(id=root_id, label="数据库", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id),
+            MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id),
+            MenuNode(id=leaf_id, label="指标管理", depth=2, sort_order=1, parent_id=middle_id),
+            MenuNode(id=leaf_id, label="指标管理", depth=2, sort_order=1, parent_id=middle_id),
         ],
     )
 
@@ -148,6 +154,8 @@ def test_build_navigation_aliases_mixed_topology_still_recovers_depth_chain_for_
         ],
     )
 
-    assert any(item.alias_type == "menu_leaf" and item.alias_text == "叶A" for item in aliases)
-    assert any(item.alias_type == "menu_chain" and item.alias_text == "根A -> 叶A" for item in aliases)
+    leaf_alias = next(item for item in aliases if item.alias_type == "menu_leaf")
+    assert leaf_alias.alias_text == "叶A"
+    assert leaf_alias.chain_complete is False
+    assert not any(item.alias_type == "menu_chain" for item in aliases)
     assert not any(item.alias_text == "根B -> 子B" for item in aliases)

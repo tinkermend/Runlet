@@ -139,45 +139,8 @@ def _derive_chain_from_depth_fallback(
     preferred_leaf: MenuNode,
     route_path: str,
 ) -> tuple[list[str], bool]:
-    route_nodes = [node for node in nodes if _route_matches(node.route_path, route_path)]
-    neutral_nodes = [node for node in nodes if node.route_path is None]
-    candidate_pool = route_nodes + neutral_nodes
-    if not candidate_pool:
-        candidate_pool = list(nodes)
-
-    first_node_by_depth: dict[int, MenuNode] = {}
-    for node in sorted(
-        candidate_pool,
-        key=lambda item: (
-            0 if _route_matches(item.route_path, route_path) else 1,
-            item.sort_order,
-            item.label.strip(),
-            str(item.id),
-        ),
-    ):
-        if node.depth not in first_node_by_depth:
-            first_node_by_depth[node.depth] = node
-
-    if preferred_leaf.depth not in first_node_by_depth:
-        first_node_by_depth[preferred_leaf.depth] = preferred_leaf
-    else:
-        first_node_by_depth[preferred_leaf.depth] = min(
-            [first_node_by_depth[preferred_leaf.depth], preferred_leaf],
-            key=lambda item: (
-                0 if _route_matches(item.route_path, route_path) else 1,
-                item.sort_order,
-                item.label.strip(),
-                str(item.id),
-            ),
-        )
-
-    ordered_depths = sorted(first_node_by_depth)
-    labels = [first_node_by_depth[depth].label.strip() for depth in ordered_depths]
-    has_gap = any(curr != prev + 1 for prev, curr in zip(ordered_depths, ordered_depths[1:]))
-    starts_from_root = ordered_depths[0] == 0
-    if not starts_from_root or has_gap:
-        return [labels[-1]], False
-    return labels, True
+    del nodes, route_path
+    return [preferred_leaf.label.strip()], False
 
 
 def _route_matches(node_route_path: str | None, target_route_path: str) -> bool:
