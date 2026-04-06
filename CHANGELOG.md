@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 补齐 `skills/chat-check-orchestrator/references/setup-and-auth.md` 与 `skills/chat-check-orchestrator/references/api-contract.md` 最小可用内容：明确 `RUNLET_PAT` 强前置、`RUNLET_BASE_URL` 可选读取、PAT 缺失立即停止并指引去 Web 管理台创建 3/7 天 PAT，以及 `check-requests` 五类接口固定契约（`candidates/create/status/result/publish`）与统一 Bearer PAT 调用口径。
 - 补充 `skills/chat-check-orchestrator/SKILL.md` 的“参考入口”和“完成与退出条件”：显式指向 `setup-and-auth/api-contract/decision-rules/template-slots/result-format` 五个 references，并收口 `RUNLET_PAT` 缺失、澄清后仍缺参、拒绝推荐、执行成功、执行失败/超时 的退出语义。
 - 定义 `skills/chat-check-orchestrator/SKILL.md` 主流程状态机与边界：补齐 `PreflightAuth -> ParseIntent -> AssessReadiness -> AskOneQuestion/Recommend/Execute -> PollStatus -> FetchResult -> SummarizeResult -> OfferPublish`，明确 `RUNLET_PAT` 前置校验、`realtime_probe` 非默认路径，以及“仅成功后可选发布”门控。
 - 新增 AI Chat 检查编排 skill 实施计划：`docs/superpowers/plans/2026-04-06-chat-check-orchestration-skill-plan.md`，把项目级 `skills/chat-check-orchestrator/` 的实现拆分为包骨架、主 `SKILL.md` 状态机、PAT/API references、决策/模板/结果 references、`agents/openai.yaml` 与压力场景验证六个可独立提交的任务。
