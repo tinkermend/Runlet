@@ -1,11 +1,51 @@
 ---
 name: chat-check-orchestrator
-description: Use when outlining the chat check orchestrator skill structure.
+description: Use when a user wants to run a Runlet page check or readonly template check from chat and needs slot filling, candidate selection, execution, result summarization, or optional publish-after-success flow
 ---
 
-## 概要
-这是 chat-check-orchestrator 技能包的骨架文档，后续任务填充具体能力与流程。仅记录主要占位内容，确保结构完备。
+# Chat Check Orchestrator
 
-## 目录提示
-- `references/`：放置配置、合同、规则等参考协议
-- `agents/`：定义 agent 模板和所需资源
+## 概览
+
+- 这是一个检查型对话编排 skill，不是正式执行器。
+- 正式执行真相仍是 `control_plane -> asset_compiler -> runner_service`。
+- 该 skill 负责对话槽位收集、候选门控、执行触发与结果总结，不负责后端认证注入。
+
+## 触发条件
+
+- 用户希望在聊天中发起 Runlet 页面检查。
+- 用户希望发起只读模板检查并获得结果摘要。
+- 用户需要“补问一个关键参数 / 候选推荐 / 直接执行 / 结果总结 / 成功后可选发布”这一整套编排。
+
+## 非目标与边界
+
+- 不绕过 `control_plane` 直接执行。
+- 不把自由脚本文本作为正式执行真相。
+- 不负责服务端认证注入策略。
+- `realtime_probe` 不是默认路径，仅在后续专门策略中才可考虑。
+- 发布不是主链步骤，仅在本次执行成功后进入可选询问。
+
+## 前置校验
+
+- 必须先检查 `RUNLET_PAT`。
+- 缺少 `RUNLET_PAT` 时立即停止，并提示用户先在管理台创建 PAT。
+- `RUNLET_BASE_URL` 可选，未设置时使用约定默认地址。
+
+## 核心流程（状态机）
+
+1. `PreflightAuth`
+2. `ParseIntent`
+3. `AssessReadiness`
+4. `AskOneQuestion | Recommend | Execute`
+5. `PollStatus`
+6. `FetchResult`
+7. `SummarizeResult`
+8. `OfferPublish`
+
+## 状态门控说明
+
+- `AssessReadiness` 判定分支：
+  - 信息不足 -> `AskOneQuestion`（单轮只问一个关键问题）
+  - 存在多候选 -> `Recommend`（给出简洁推荐，用户确认后执行）
+  - 满足高置信门槛 -> `Execute`
+- `OfferPublish` 仅在执行成功后出现；失败或未完成时不进入发布分支。
