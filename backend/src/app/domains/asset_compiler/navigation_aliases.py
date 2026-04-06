@@ -15,9 +15,9 @@ class NavigationAliasDraft:
 
 
 def build_navigation_aliases(
-    *, page_title: str | None, route_path: str, menus: list[MenuNode]
+    *, page_title: str | None, route_path: str, menu_topology: list[MenuNode]
 ) -> list[NavigationAliasDraft]:
-    normalized_chain, chain_complete = _derive_menu_chain(menus, route_path=route_path)
+    normalized_chain, chain_complete = _derive_menu_chain(menu_topology, route_path=route_path)
 
     drafts: list[NavigationAliasDraft] = []
     if page_title:

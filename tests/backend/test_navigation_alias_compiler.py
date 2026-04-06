@@ -11,7 +11,7 @@ def test_build_navigation_aliases_emits_title_leaf_and_chain_when_chain_complete
     aliases = build_navigation_aliases(
         page_title="指标管理",
         route_path="/front/database/configManage/indicesManage",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_id, label="数据库", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id),
             MenuNode(id=leaf_id, label="指标管理", depth=2, sort_order=1, parent_id=middle_id),
@@ -26,7 +26,7 @@ def test_build_navigation_aliases_downgrades_to_leaf_when_parent_chain_is_broken
     aliases = build_navigation_aliases(
         page_title="指标管理",
         route_path="/target",
-        menus=[
+        menu_topology=[
             MenuNode(label="数据库", depth=0, sort_order=1),
             MenuNode(label="指标管理", depth=2, sort_order=11, route_path="/target"),
         ],
@@ -48,7 +48,7 @@ def test_build_navigation_aliases_dedupes_repeated_menu_nodes():
     aliases = build_navigation_aliases(
         page_title="指标管理",
         route_path="/front/database/configManage/indicesManage",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_id, label="数据库", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id),
             MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id),
@@ -71,7 +71,7 @@ def test_build_navigation_aliases_does_not_synthesize_cross_branch_chain():
     aliases = build_navigation_aliases(
         page_title="目标页面",
         route_path="/target",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=child_a, label="子A", depth=1, sort_order=1, parent_id=root_a),
             MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
@@ -90,7 +90,7 @@ def test_build_navigation_aliases_treats_single_root_node_as_complete_chain():
     aliases = build_navigation_aliases(
         page_title="系统设置",
         route_path="/settings",
-        menus=[MenuNode(label="系统设置", depth=0, sort_order=1, parent_id=None)],
+        menu_topology=[MenuNode(label="系统设置", depth=0, sort_order=1, parent_id=None)],
     )
 
     page_title_alias = next(item for item in aliases if item.alias_type == "page_title")
@@ -106,7 +106,7 @@ def test_build_navigation_aliases_sets_page_title_leaf_none_when_menus_empty():
     aliases = build_navigation_aliases(
         page_title="系统设置",
         route_path="/settings",
-        menus=[],
+        menu_topology=[],
     )
 
     page_title_alias = next(item for item in aliases if item.alias_type == "page_title")
@@ -124,7 +124,7 @@ def test_build_navigation_aliases_prefers_leaf_matching_route_path():
     aliases = build_navigation_aliases(
         page_title="A页面",
         route_path="/a",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
             MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
@@ -148,7 +148,7 @@ def test_build_navigation_aliases_mixed_topology_keeps_target_leaf_without_menu_
     aliases = build_navigation_aliases(
         page_title="A页面",
         route_path="/a",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_b, label="根B", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=child_b, label="子B", depth=1, sort_order=1, parent_id=root_b, route_path="/b"),
             MenuNode(id=root_a, label="根A", depth=0, sort_order=2, parent_id=None, route_path="/a"),
@@ -172,7 +172,7 @@ def test_build_navigation_aliases_keeps_only_page_title_when_leaf_is_ambiguous_w
     aliases = build_navigation_aliases(
         page_title="目标页面",
         route_path="/missing",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
             MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
@@ -194,7 +194,7 @@ def test_build_navigation_aliases_duplicate_semantic_chains_do_not_trigger_ambig
     aliases = build_navigation_aliases(
         page_title="A页面",
         route_path="/missing",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_a1, label="根A", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=leaf_a1, label="叶A", depth=1, sort_order=1, parent_id=root_a1, route_path="/a"),
             MenuNode(id=root_a2, label="根A", depth=0, sort_order=1, parent_id=None),
@@ -215,7 +215,7 @@ def test_build_navigation_aliases_keeps_only_page_title_when_complete_and_broken
     aliases = build_navigation_aliases(
         page_title="目标页面",
         route_path="/missing",
-        menus=[
+        menu_topology=[
             MenuNode(id=root_a, label="根A", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=1, parent_id=root_a, route_path="/a"),
             MenuNode(id=root_b, label="根B", depth=0, sort_order=2, parent_id=None),
@@ -226,3 +226,35 @@ def test_build_navigation_aliases_keeps_only_page_title_when_complete_and_broken
     assert [item.alias_type for item in aliases] == ["page_title"]
     assert aliases[0].leaf_text is None
     assert aliases[0].display_chain is None
+
+
+def test_build_navigation_aliases_reconstructs_chain_from_full_topology_with_separate_ancestor_rows():
+    root_id = uuid4()
+    middle_id = uuid4()
+    leaf_id = uuid4()
+    other_root = uuid4()
+    other_leaf = uuid4()
+    page_id = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="指标管理",
+        route_path="/target",
+        menu_topology=[
+            MenuNode(id=root_id, label="数据库", depth=0, sort_order=1, parent_id=None, page_id=None),
+            MenuNode(id=middle_id, label="配置管理", depth=1, sort_order=1, parent_id=root_id, page_id=None),
+            MenuNode(
+                id=leaf_id,
+                label="指标管理",
+                depth=2,
+                sort_order=1,
+                parent_id=middle_id,
+                page_id=page_id,
+                route_path="/target",
+            ),
+            MenuNode(id=other_root, label="其他根", depth=0, sort_order=2, parent_id=None),
+            MenuNode(id=other_leaf, label="其他页", depth=1, sort_order=1, parent_id=other_root, route_path="/other"),
+        ],
+    )
+
+    assert any(item.alias_type == "menu_leaf" and item.alias_text == "指标管理" for item in aliases)
+    assert any(item.alias_type == "menu_chain" and item.alias_text == "数据库 -> 配置管理 -> 指标管理" for item in aliases)
