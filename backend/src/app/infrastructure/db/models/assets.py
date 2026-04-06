@@ -187,6 +187,30 @@ class IntentAlias(BaseModel, table=True):
     disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
 
 
+class PageNavigationAlias(BaseModel, table=True):
+    __tablename__ = "page_navigation_aliases"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    system_id: UUID = Field(foreign_key="systems.id", index=True)
+    page_asset_id: UUID = Field(foreign_key="page_assets.id", index=True)
+    alias_type: str = Field(max_length=32, index=True)
+    alias_text: str = Field(max_length=512, index=True)
+    leaf_text: str | None = Field(default=None, max_length=255)
+    display_chain: str | None = Field(default=None, max_length=1024)
+    chain_complete: bool = Field(default=False)
+    source: str = Field(max_length=64)
+    is_active: bool = Field(
+        default=True,
+        sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
+    disabled_reason: str | None = Field(default=None, max_length=64)
+    disabled_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
+
+
 class ModulePlan(BaseModel, table=True):
     __tablename__ = "module_plans"
 

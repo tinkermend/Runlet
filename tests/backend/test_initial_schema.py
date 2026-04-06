@@ -62,6 +62,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "menu_nodes",
         "module_plans",
         "page_assets",
+        "page_navigation_aliases",
         "page_checks",
         "page_elements",
         "pages",
@@ -76,6 +77,22 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "user_sessions",
         "users",
     }
+
+
+def test_initial_schema_exposes_navigation_alias_columns(db_engine):
+    inspector = inspect(db_engine)
+    columns = {column["name"] for column in inspector.get_columns("page_navigation_aliases")}
+    assert {
+        "system_id",
+        "page_asset_id",
+        "alias_type",
+        "alias_text",
+        "leaf_text",
+        "display_chain",
+        "chain_complete",
+        "source",
+        "is_active",
+    } <= columns
 
 
 def test_settings_expose_session_and_pat_controls():
