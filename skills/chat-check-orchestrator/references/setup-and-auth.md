@@ -1,4 +1,4 @@
-# Setup And Auth
+# 初始化与认证
 
 - 启动前必须检查 `RUNLET_PAT`。
 - 可选读取 `RUNLET_BASE_URL`，未设置时使用 skill 默认地址。
