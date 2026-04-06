@@ -2,6 +2,7 @@
 
 ### Added
 - 新增 AI Chat 检查编排 skill 实施计划：`docs/superpowers/plans/2026-04-06-chat-check-orchestration-skill-plan.md`，把项目级 `skills/chat-check-orchestrator/` 的实现拆分为包骨架、主 `SKILL.md` 状态机、PAT/API references、决策/模板/结果 references、`agents/openai.yaml` 与压力场景验证六个可独立提交的任务。
+- 搭建 `skills/chat-check-orchestrator` 包骨架，包含 `SKILL.md`、各类 references 占位文档与 `agents/openai.yaml` 供后续 Task 1 填充。
 - 新增 AI Chat 检查编排 skill 设计文档：`docs/superpowers/specs/2026-04-06-chat-check-orchestration-skill-design.md`，明确该 skill 作为“检查型对话编排层”统一覆盖普通页面检查与模板化只读检查，采用 `RUNLET_PAT` 强前置校验、单问题补问、高置信推荐直执行、统一 `check-requests*` API 编排，以及“执行成功后才可选发布”的后置流程。
 - 新增示教驱动功能测试设计文档：`docs/superpowers/specs/2026-04-06-demonstration-driven-flow-plan-design.md`，明确 `Runlet` 面向企业级自动化仿真巡检与测试时采用“双路径产品形态 + 统一资产执行内核”，在保持 `page_check + module_plan` 巡检主链不变的前提下，引入复用 Midscene 录制插件、平台侧 `demonstration_bundle -> action_block/assertion_block/flow_plan` 编译链与受控写操作执行边界。
 - 新增采集失效认证态自动恢复设计与实施计划：`docs/superpowers/specs/2026-04-06-crawler-stale-auth-refresh-retry-design.md` 与 `docs/superpowers/plans/2026-04-06-crawler-stale-auth-refresh-retry-plan.md`，明确 `crawler_service` 在命中“旧 auth_state 注入成功但真实回退登录页”的通用特征后，可执行一次服务端认证刷新并仅重试一次 crawl。
