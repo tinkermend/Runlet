@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
 from app.domains.control_plane.job_types import ASSET_COMPILE_JOB_TYPE
+from app.infrastructure.db.models.crawl import CrawlSnapshot
 from app.infrastructure.db.models.jobs import QueuedJob
 from app.infrastructure.db.models.runtime_policies import SystemCrawlPolicy
 from app.shared.enums import QueuedJobStatus
@@ -53,6 +54,7 @@ class CrawlJobHandler:
             result = await self.crawler_service.run_crawl(
                 system_id=UUID(system_id),
                 crawl_scope=crawl_scope,
+                auto_commit=False,
             )
         except Exception as exc:
             await self._mark_failed(job, message=str(exc), policy=policy)
@@ -72,6 +74,10 @@ class CrawlJobHandler:
                 "snapshot_id": str(result.snapshot_id),
                 "compile_scope": "impacted_pages_only",
             },
+        )
+        await self._discard_superseded_uncompiled_drafts(
+            system_id=UUID(system_id),
+            keep_snapshot_id=result.snapshot_id,
         )
         self.session.add(compile_job)
         job.status = QueuedJobStatus.COMPLETED.value
@@ -134,6 +140,41 @@ class CrawlJobHandler:
             result = await self.session.exec(statement)
             return result.first()
         return self.session.exec(statement).first()
+
+    async def _discard_superseded_uncompiled_drafts(
+        self,
+        *,
+        system_id: UUID,
+        keep_snapshot_id: UUID,
+    ) -> None:
+        snapshots = await self._exec_all(
+            select(CrawlSnapshot)
+            .where(CrawlSnapshot.system_id == system_id)
+            .where(CrawlSnapshot.state == "draft")
+            .order_by(CrawlSnapshot.started_at.desc(), CrawlSnapshot.finished_at.desc(), CrawlSnapshot.id.desc())
+        )
+        queued_jobs = await self._exec_all(
+            select(QueuedJob).where(QueuedJob.job_type == ASSET_COMPILE_JOB_TYPE)
+        )
+        queued_snapshot_ids = {
+            snapshot_id
+            for snapshot_id in (_parse_uuid(job.payload.get("snapshot_id")) for job in queued_jobs)
+            if snapshot_id is not None
+        }
+        for snapshot in snapshots:
+            if snapshot.id == keep_snapshot_id:
+                continue
+            if snapshot.id in queued_snapshot_ids:
+                continue
+            snapshot.state = "discarded"
+            snapshot.discarded_at = utcnow()
+            snapshot.failure_reason = "superseded_by_newer_draft"
+
+    async def _exec_all(self, statement):
+        if isinstance(self.session, AsyncSession):
+            result = await self.session.exec(statement)
+            return result.all()
+        return self.session.exec(statement).all()
 
     def _apply_queue_audit_fields(self, job: QueuedJob) -> None:
         policy_id = _parse_uuid(job.payload.get("policy_id"))

@@ -2339,6 +2339,7 @@ class CrawlerService:
         *,
         system_id: UUID,
         crawl_scope: str,
+        auto_commit: bool = True,
     ) -> CrawlRunResult:
         system = await self._get(System, system_id)
         if system is None:
@@ -2421,6 +2422,7 @@ class CrawlerService:
             system_framework=system.framework_type,
             extraction=combined,
             message=result_message,
+            auto_commit=auto_commit,
         )
 
     async def _extract_crawl_once(
@@ -2481,6 +2483,7 @@ class CrawlerService:
         system_framework: str,
         extraction: CrawlExtractionResult,
         message: str | None = None,
+        auto_commit: bool = True,
     ) -> CrawlRunResult:
         snapshot = self._build_snapshot(
             system_id=system_id,
@@ -2510,7 +2513,8 @@ class CrawlerService:
         )
 
         snapshot.finished_at = utcnow()
-        await self._commit()
+        if auto_commit:
+            await self._commit()
 
         return CrawlRunResult(
             system_id=system_id,

@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 修复正式采集链路可能遗留孤儿 `draft snapshot` 的问题：`crawl_job` 现以单事务方式调用 `CrawlerService.run_crawl(auto_commit=False)`，避免事实快照先独立提交、后续 `asset_compile` 入队失败时留下“只有 draft、没有 compile/hist”的中间态；同时对同系统内无编译任务接手的旧 `draft` 做 `discarded` 收口，只保留最新候选进入编译主链。
 - 同步当前态语料切换实施计划的完成态摘要，补记 Task 1-5 提交链路与最终 `82` 条回归验证结果，避免计划文档仍停留在执行中语义。
 - 修正当前态切换/控制台资产回归用例与事实读取收口：`current_state_switch` 归档测试改为稳定命中叶子菜单历史记录，`console_assets` 控制台接口补齐“优先读取 active snapshot 页面标题、采集时间与原始事实”的行为验证，避免编译资产仍绑定废弃页面时把展示与 raw facts 误读到 discarded snapshot。
 - 收敛 Alembic `0015` 双 head：新增 `0016_merge_0015_heads`，恢复 `alembic upgrade head` 的单 head 升级路径，并将导航别名编译回归测试对齐到当前 `draft -> active/discarded` 语义。
