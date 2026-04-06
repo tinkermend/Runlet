@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 收敛 Alembic `0015` 双 head：新增 `0016_merge_0015_heads`，恢复 `alembic upgrade head` 的单 head 升级路径，并将导航别名编译回归测试对齐到当前 `draft -> active/discarded` 语义。
 - 完成 control plane 导航别名消费接入：`resolve_page_asset_and_check` 现优先从 active `page_navigation_aliases -> page_asset -> page_check` 解析页面，唯一叶子菜单可直接自动命中，重名叶子菜单不再静默选错而是保持未解析；同时候选 API 会消费导航别名并返回 `leaf_text/display_chain/chain_complete`，并对同一资产的多条 alias 行做去重。
 - 完成 `asset_compiler` 导航别名持久化接入：`compile_snapshot` 现调用 `build_navigation_aliases` 并写入 `page_navigation_aliases`，每次重编译会先停用同 `page_asset` 旧别名（`disabled_reason=recompiled`、`disabled_by_snapshot_id=当前快照`）再写入新别名；同时按“当前页菜单节点 + 祖先链”构建 `menu_topology`，支持祖先 `page_id=None` 的分行拓扑恢复 `menu_chain`，断链场景仅保留 `menu_leaf` 且 `chain_complete=false`。
 - 修复 `route_path` 命中候选偏差：导航别名编译不再只从叶节点挑选目标，`route_path` 命中非叶菜单节点时也可作为目标；同时对同一路由的多候选引入语义去重与歧义降级，避免静默排序选错并统一回退为仅 `page_title`。

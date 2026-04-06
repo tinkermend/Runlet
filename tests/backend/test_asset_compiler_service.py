@@ -618,13 +618,12 @@ async def test_compile_snapshot_persists_navigation_aliases_with_complete_chain(
     asset_compiler_service,
     seeded_system,
 ):
-    snapshot = CrawlSnapshot(
-        system_id=seeded_system.id,
-        crawl_type="full",
-        framework_detected=seeded_system.framework_type,
+    snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
     )
-    db_session.add(snapshot)
-    db_session.flush()
 
     page = Page(
         system_id=seeded_system.id,
@@ -703,13 +702,12 @@ async def test_compile_snapshot_navigation_alias_downgrades_to_leaf_when_chain_i
     asset_compiler_service,
     seeded_system,
 ):
-    snapshot = CrawlSnapshot(
-        system_id=seeded_system.id,
-        crawl_type="full",
-        framework_detected=seeded_system.framework_type,
+    snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
     )
-    db_session.add(snapshot)
-    db_session.flush()
 
     page = Page(
         system_id=seeded_system.id,
@@ -770,13 +768,12 @@ async def test_compile_snapshot_navigation_alias_handles_split_ancestor_topology
     asset_compiler_service,
     seeded_system,
 ):
-    snapshot = CrawlSnapshot(
-        system_id=seeded_system.id,
-        crawl_type="full",
-        framework_detected=seeded_system.framework_type,
+    snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
     )
-    db_session.add(snapshot)
-    db_session.flush()
 
     page = Page(
         system_id=seeded_system.id,
@@ -861,13 +858,12 @@ async def test_compile_snapshot_navigation_alias_recompile_deactivates_previous_
     asset_compiler_service,
     seeded_system,
 ):
-    first_snapshot = CrawlSnapshot(
-        system_id=seeded_system.id,
-        crawl_type="full",
-        framework_detected=seeded_system.framework_type,
+    first_snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
     )
-    db_session.add(first_snapshot)
-    db_session.flush()
 
     first_page = Page(
         system_id=seeded_system.id,
@@ -927,20 +923,19 @@ async def test_compile_snapshot_navigation_alias_recompile_deactivates_previous_
         .order_by(PageNavigationAlias.alias_type, PageNavigationAlias.id)
     ).all()
 
-    next_snapshot = CrawlSnapshot(
-        system_id=seeded_system.id,
-        crawl_type="full",
-        framework_detected=seeded_system.framework_type,
+    next_snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
     )
-    db_session.add(next_snapshot)
-    db_session.flush()
 
     page = Page(
         system_id=seeded_system.id,
         snapshot_id=next_snapshot.id,
         route_path="/users",
         page_title="用户管理",
-        page_summary="用户管理列表",
+        page_summary="用户管理列表，支持按状态筛选",
     )
     db_session.add(page)
     db_session.flush()
@@ -977,9 +972,9 @@ async def test_compile_snapshot_navigation_alias_recompile_deactivates_previous_
             page_id=page.id,
             element_type="table",
             element_role="table",
-            element_text="用户列表",
-            playwright_locator="get_by_role('table', name='用户列表')",
-            usage_description="展示用户列表",
+            element_text="用户筛选列表",
+            playwright_locator="get_by_role('table', name='用户筛选列表')",
+            usage_description="展示支持筛选的用户列表",
         )
     )
     db_session.commit()
