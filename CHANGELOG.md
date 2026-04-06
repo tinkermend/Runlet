@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 同步当前态语料切换实施计划的完成态摘要，补记 Task 1-5 提交链路与最终 `82` 条回归验证结果，避免计划文档仍停留在执行中语义。
 - 修正当前态切换/控制台资产回归用例与事实读取收口：`current_state_switch` 归档测试改为稳定命中叶子菜单历史记录，`console_assets` 控制台接口补齐“优先读取 active snapshot 页面标题、采集时间与原始事实”的行为验证，避免编译资产仍绑定废弃页面时把展示与 raw facts 误读到 discarded snapshot。
 - 收敛 Alembic `0015` 双 head：新增 `0016_merge_0015_heads`，恢复 `alembic upgrade head` 的单 head 升级路径，并将导航别名编译回归测试对齐到当前 `draft -> active/discarded` 语义。
 - 完成 control plane 导航别名消费接入：`resolve_page_asset_and_check` 现优先从 active `page_navigation_aliases -> page_asset -> page_check` 解析页面，唯一叶子菜单可直接自动命中，重名叶子菜单不再静默选错而是保持未解析；同时候选 API 会消费导航别名并返回 `leaf_text/display_chain/chain_complete`，并对同一资产的多条 alias 行做去重。

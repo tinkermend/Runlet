@@ -8,6 +8,13 @@
 
 **Tech Stack:** FastAPI, SQLModel, Alembic, PostgreSQL, pytest
 
+**执行状态（2026-04-06）**
+
+- Task 1-5 已全部完成，相关提交为 `a718f8f`、`161befd`、`05661ac`、`f46adc7`、`26e45ca`。
+- 事实层现已收敛为 `draft -> active/discarded + *_hist` 模型，控制台默认事实读取已收口到当前 `active snapshot`。
+- 最终回归验证命令：`uv run --project backend --group dev pytest tests/backend/test_initial_schema.py tests/backend/test_current_state_switch.py tests/backend/test_asset_compiler_service.py tests/backend/test_asset_compile_job.py tests/backend/test_console_assets_api.py -q`
+- 最终回归结果：`82 passed in 7.59s`。
+
 ---
 
 ## 实施约束
