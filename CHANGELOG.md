@@ -1,6 +1,12 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 新增示教驱动功能测试设计文档：`docs/superpowers/specs/2026-04-06-demonstration-driven-flow-plan-design.md`，明确 `Runlet` 面向企业级自动化仿真巡检与测试时采用“双路径产品形态 + 统一资产执行内核”，在保持 `page_check + module_plan` 巡检主链不变的前提下，引入复用 Midscene 录制插件、平台侧 `demonstration_bundle -> action_block/assertion_block/flow_plan` 编译链与受控写操作执行边界。
+- 新增采集失效认证态自动恢复设计与实施计划：`docs/superpowers/specs/2026-04-06-crawler-stale-auth-refresh-retry-design.md` 与 `docs/superpowers/plans/2026-04-06-crawler-stale-auth-refresh-retry-plan.md`，明确 `crawler_service` 在命中“旧 auth_state 注入成功但真实回退登录页”的通用特征后，可执行一次服务端认证刷新并仅重试一次 crawl。
+- `crawler_service` 新增通用失效认证态判定与一次性自动刷新重试能力：首次 crawl 若呈现“登录页/根页事实 + 菜单为 0 + 代表元素极少 + `state_probe_baseline_degraded`”的组合信号，会触发一次 `auth_service.refresh_auth_state()`；刷新成功后仅重跑一次 crawl 并补充 `auth_state_auto_refreshed` warning，刷新失败则保留首次结果并补充 `auth_state_refresh_failed` 诊断，同时新增对应 crawler 回归测试。
+- 收口全量采集重复开销：`PlaywrightBrowserFactory` 现对同一 browser session 内的 `full route hints` 与 `full materialized menu nodes` 做只读缓存，避免 `page_discovery -> dom traversal` 链路重复执行整站 leaf 路由发现与菜单展开；同时新增对应 crawler 回归测试，要求在已完成 `collect_route_hints(full)` / `collect_dom_menu_nodes(full)` 后，后续 `collect_dom_elements(full)` 必须复用缓存结果。
+- 继续收口 HotGo 类后台的通用采集增强：`crawler_service` 新增 `login_url -> crawl entry_url` 推导，采集入口不再盲从 `System.base_url`；同时补齐 Naive UI `n-menu-item-content--collapsed` 折叠菜单识别与“无 href/无 route_path 叶子菜单点击发现路由”能力，可在不写 HotGo 专属分支的前提下发现 `#/permission/role` 这类 hash 路由，并补充对应 crawler 回归测试与 browser factory 向后兼容兜底。
+- 继续收口 HotGo 类后台采集最后一公里：`crawler_service` 现会在 route-less leaf 点击前沿祖先链做真实菜单展开、在点击后轮询等待 hash 路由真正切换，再把增强后的 `collect_route_hints(full)` 接入 `collect_dom_elements(full)`；同时元素归属路由优先消费 resolved hash route 而非 shell pathname，并补充 delayed route change / parent chain expand / click-discovered dom elements 等回归测试。真实 HotGo 复用有效认证态验证后，`run_crawl(full)` 已从 `elements_saved=0` 提升到 `elements_saved=358`，关键业务页如 `/permission/role`、`/permission/menu`、`/system/dict` 可稳定落库。
 - 收口采集健壮性分支的集成修补：`crawler_service` 候选 schema 现补齐 `navigation_diagnostics/materialized_by/navigation_identity` 等字段，真实落库与 `asset_compiler` 读取链路不再丢失导航诊断；二次 `goto` 页面访问改为按当前 URL 重新执行 readiness 采样，`crawl_scope=current` 优先消费 `resolved_route` 以兼容 hash 路由 SPA；同时菜单 materialize 结果补充稳定父导航身份并按 identity 建立父子关系，避免重复 label 菜单串联。
 - 新增分析文档 `docs/analyze/product_route_recommendation.md`，从“企业级自动化仿真巡检与测试平台”目标出发，明确 `Runlet` 近期应坚持自研的平台能力、适合集成的开源底座能力以及当前不应投入的方向。
 - 新增分析文档 `docs/analyze/duibi_analyze.md`，从产品定位、技术路线、能力星级、适合/不适合场景与平台演进启示五个维度，对 `Runlet` 与 `Midscene`、`Playwright CLI`、`bb-browser`、`browser-use`、`Cypress`、`agent-browser` 做系统对比。
