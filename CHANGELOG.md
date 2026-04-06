@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- 修复 chat-check references 契约漂移：`template-slots.md` 槽位名对齐后端模板注册（`field_equals_exists` 改为 `field/operator/value`，`count_gte` 改为 `min_count` 并补充“至少 N 条”映射），`decision-rules.md` 增补直执行高置信锚点（`rank_score`/top1-top2 gap/`sample_count`），`result-format.md` 增补定位信息需“请求上下文 + 结果”联合归纳说明。
 - 补齐 `skills/chat-check-orchestrator/references/decision-rules.md`、`skills/chat-check-orchestrator/references/template-slots.md`、`skills/chat-check-orchestrator/references/result-format.md` 三份 reference：新增补问/推荐/直执行门控、V1 模板槽位表（`has_data/no_data/field_equals_exists/status_exists/count_gte`）与结果摘要结构（结论/定位/证据/后续动作及 `needs_recrawl/needs_recompile` 标注）。
 - 收紧 `skills/chat-check-orchestrator/references/setup-and-auth.md` 与 `skills/chat-check-orchestrator/references/api-contract.md` 的文档边界：移除流程门控/实现差异描述，仅保留稳定契约（`check-requests*` 统一 Bearer PAT）并将 `RUNLET_BASE_URL` 文案调整为“未设置时按编排器约定默认地址处理”。
 - 跟进修复 `skills/chat-check-orchestrator/references/setup-and-auth.md` 与 `skills/chat-check-orchestrator/references/api-contract.md` 的文档语言一致性：将正文中的英文自然语言表述（如 `Skill/skill`）替换为中文表达，保留环境变量与 HTTP 接口等技术标识不变。
