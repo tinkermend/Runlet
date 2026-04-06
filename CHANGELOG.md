@@ -1,4 +1,4 @@
-## [Unreleased] - 2026-04-05
+## [Unreleased] - 2026-04-06
 
 ### Fixed
 - 修正 `GET /api/v1/check-requests/{request_id}/result` 在 `run_check` 仍处于进行中重试时提前暴露中间失败尝试的问题：当同一请求的队列任务状态尚未进入终态时，结果接口现在保持 `execution_summary=null`、`artifacts=[]`，避免与状态接口的进行中语义冲突。
@@ -8,7 +8,21 @@
 - 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
 
 ### Added
+- 补齐 `chat-check-orchestrator` 轮询终止语义：在 `SKILL.md`、`references/api-contract.md` 与 `references/result-format.md` 中明确 `GET /api/v1/check-requests/{request_id}` 仅返回队列态，`completed/failed/retryable_failed/skipped` 都属于终态；命中终态后必须转查 `/result`，避免把 `completed` 误判为“仍在运行”。
+- 收紧 `skills/chat-check-orchestrator/SKILL.md` 与 `skills/chat-check-orchestrator/references/result-format.md` 的失败出口语义：当结果证据显示登录页回退或 `auth_status=reused` 后导航失败时，对话后续动作必须优先提示“先去控制台刷新认证再重试检查”，避免只输出泛化失败结论。
+- 通过压力场景复核并收紧 `skills/chat-check-orchestrator/SKILL.md` 的门控描述：补齐“单候选但未达高置信也必须进入 Recommend/确认，不允许直执行，且 Recommend 后必须等待用户确认才能 Execute”的兜底分支，并明确“菜单完整性等结构诉求优先走普通页面检查、半结构化但未明确的断言先 AskOneQuestion 澄清、候选为空时不进入 Recommend 而是先补问/无法澄清则停止”，避免与 `decision-rules.md`/Task 6 压力用例语义不一致。
+- 修复 chat-check references 契约漂移：`template-slots.md` 必填槽位修正为后端模板注册契约（`field_equals_exists` 必填为 `field/operator/value`，`count_gte` 必填为 `min_count`，并补充“至少 N 条”映射），`decision-rules.md` 增补直执行高置信锚点（`rank_score`/`sample_count`/前两名 `rank_score` 差值的派生判断），`result-format.md` 增补定位信息需“请求上下文 + 结果”联合归纳说明。
+- 明确 `skills/chat-check-orchestrator/references/decision-rules.md`/`template-slots.md`/`result-format.md` 的语义收敛：低于高置信门槛不能自行执行、`field_equals_exists` 的 operator 在语义未明确时统一回退为 `equals` 且不得省略/自造、结果定位只引用 API `execution_track` 的字符串值，并将候选确认动作收敛为“确认目标对象或选择候选”。
+- 补齐 `skills/chat-check-orchestrator/references/decision-rules.md`、`skills/chat-check-orchestrator/references/template-slots.md`、`skills/chat-check-orchestrator/references/result-format.md` 三份 reference：新增补问/推荐/直执行门控、V1 模板槽位表（`has_data/no_data/field_equals_exists/status_exists/count_gte`）与结果摘要结构（结论/定位/证据/后续动作及 `needs_recrawl/needs_recompile` 标注）。
+- 收紧 `skills/chat-check-orchestrator/references/setup-and-auth.md` 与 `skills/chat-check-orchestrator/references/api-contract.md` 的文档边界：移除流程门控/实现差异描述，仅保留稳定契约（`check-requests*` 统一 Bearer PAT）并将 `RUNLET_BASE_URL` 文案调整为“未设置时按编排器约定默认地址处理”。
+- 跟进修复 `skills/chat-check-orchestrator/references/setup-and-auth.md` 与 `skills/chat-check-orchestrator/references/api-contract.md` 的文档语言一致性：将正文中的英文自然语言表述（如 `Skill/skill`）替换为中文表达，保留环境变量与 HTTP 接口等技术标识不变。
+- 补齐 `skills/chat-check-orchestrator/references/setup-and-auth.md` 与 `skills/chat-check-orchestrator/references/api-contract.md` 最小可用内容：明确 `RUNLET_PAT` 强前置、`RUNLET_BASE_URL` 可选读取、PAT 缺失立即停止并指引去 Web 管理台创建 3/7 天 PAT，以及 `check-requests` 五类接口固定契约（`candidates/create/status/result/publish`）与统一 Bearer PAT 调用口径。
+- 补充 `skills/chat-check-orchestrator/SKILL.md` 的“参考入口”和“完成与退出条件”：显式指向 `setup-and-auth/api-contract/decision-rules/template-slots/result-format` 五个 references，并收口 `RUNLET_PAT` 缺失、澄清后仍缺参、拒绝推荐、执行成功、执行失败/超时 的退出语义。
+- 定义 `skills/chat-check-orchestrator/SKILL.md` 主流程状态机与边界：补齐 `PreflightAuth -> ParseIntent -> AssessReadiness -> AskOneQuestion/Recommend/Execute -> PollStatus -> FetchResult -> SummarizeResult -> OfferPublish`，明确 `RUNLET_PAT` 前置校验、`realtime_probe` 非默认路径，以及“仅成功后可选发布”门控。
 - 新增 AI Chat 检查编排 skill 实施计划：`docs/superpowers/plans/2026-04-06-chat-check-orchestration-skill-plan.md`，把项目级 `skills/chat-check-orchestrator/` 的实现拆分为包骨架、主 `SKILL.md` 状态机、PAT/API references、决策/模板/结果 references、`agents/openai.yaml` 与压力场景验证六个可独立提交的任务。
+- 收口 `skills/chat-check-orchestrator/agents/openai.yaml` 的 UI 元数据：补齐 `interface` 架构中的 display_name、short_description 与 default_prompt，确保描述 Runlet 页面检查与只读模板检查时涵盖槽位补问、候选推荐/直执行、结果总结与成功后可选发布的职责。
+- 搭建 `skills/chat-check-orchestrator` 包骨架，包含 `SKILL.md`、各类 references 占位文档与 `agents/openai.yaml`，确保结构完备。
+- 运行 `test -f skills/chat-check-orchestrator/SKILL.md` 等存在性校验，确认所需文件齐全。
 - 新增 AI Chat 检查编排 skill 设计文档：`docs/superpowers/specs/2026-04-06-chat-check-orchestration-skill-design.md`，明确该 skill 作为“检查型对话编排层”统一覆盖普通页面检查与模板化只读检查，采用 `RUNLET_PAT` 强前置校验、单问题补问、高置信推荐直执行、统一 `check-requests*` API 编排，以及“执行成功后才可选发布”的后置流程。
 - 新增示教驱动功能测试设计文档：`docs/superpowers/specs/2026-04-06-demonstration-driven-flow-plan-design.md`，明确 `Runlet` 面向企业级自动化仿真巡检与测试时采用“双路径产品形态 + 统一资产执行内核”，在保持 `page_check + module_plan` 巡检主链不变的前提下，引入复用 Midscene 录制插件、平台侧 `demonstration_bundle -> action_block/assertion_block/flow_plan` 编译链与受控写操作执行边界。
 - 新增采集失效认证态自动恢复设计与实施计划：`docs/superpowers/specs/2026-04-06-crawler-stale-auth-refresh-retry-design.md` 与 `docs/superpowers/plans/2026-04-06-crawler-stale-auth-refresh-retry-plan.md`，明确 `crawler_service` 在命中“旧 auth_state 注入成功但真实回退登录页”的通用特征后，可执行一次服务端认证刷新并仅重试一次 crawl。
