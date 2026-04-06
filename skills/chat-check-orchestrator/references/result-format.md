@@ -2,6 +2,8 @@
 
 仅约束对话输出结构，不复述后端原始 schema。
 
+先决规则：`GET /api/v1/check-requests/{request_id}` 若仍是 `accepted`、`queued`、`running`，可输出“已受理但仍在运行”；若已进入 `completed`、`failed`、`retryable_failed`、`skipped`，必须先查 `/result`，不要继续输出“运行中”。
+
 1. 结论：本次检查是否通过，失败时给一句原因。
 2. 定位：说明命中的系统/页面/检查对象与执行轨道；执行轨道只引用 API 返回的 `execution_track` 字符串值，不要展开结构化对象，也不要再定义额外的轨道词。
 3. 证据：引用关键字段（如状态、数量、截图或最终 URL）。

@@ -55,6 +55,9 @@ description: Use when a user wants to run a Runlet page check or readonly templa
   - 未达高置信直执行门槛且存在可确认候选 -> `Recommend`（给出候选或要求用户确认目标对象；包含多候选、候选分数接近、单候选但信号不足等情况）
   - `Recommend` 后，只有在用户明确确认目标对象/候选后才允许进入 `Execute`
   - 满足高置信直执行门槛 -> `Execute`
+- `PollStatus` 只轮询 `GET /api/v1/check-requests/{request_id}` 的队列态，不直接把该接口返回值当作最终业务结论。
+- `accepted`、`queued`、`running` 视为进行中；`completed`、`failed`、`retryable_failed`、`skipped` 视为终态。
+- 命中终态后立即进入 `FetchResult`，再由 `/result` 中的 `execution_summary.status` 归纳“通过/失败”；不要把 `completed` 误判为“仍在运行”。
 - `OfferPublish` 仅在执行成功后出现；失败或未完成时不进入发布分支。
 
 ## 参考入口
