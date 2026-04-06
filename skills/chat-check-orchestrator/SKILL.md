@@ -1,4 +1,7 @@
-# Chat 检查协调器 Skill
+---
+name: Chat Check Orchestrator
+description: Skeleton documentation for the chat check orchestrator skill package.
+---
 
 ## 概要
 这是 chat-check-orchestrator 技能包的骨架文档，后续任务填充具体能力与流程。仅记录主要占位内容，确保结构完备。
