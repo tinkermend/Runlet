@@ -8,6 +8,7 @@
 - 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
 
 ### Added
+- 新增当前态语料语义差异纯函数：增加 `backend/src/app/domains/asset_compiler/current_state_diff.py`，提供页面语义指纹、关键元素具名描述以及 `active/draft` 的 `added_routes/deleted_routes/changed_routes` 比较，并补齐归一化、去重、无序输入、空路由/重复路由异常等回归测试。
 - 新增当前态语料 schema 基线：`crawl_snapshots` 增加 `state/activated_at/discarded_at` 当前态管理字段，并引入 `crawl_snapshots_hist/pages_hist/menu_nodes_hist/page_elements_hist` 冷历史表；同时补齐 revision 长度守卫与 PostgreSQL `warning_messages` JSONB 规范化迁移守卫。
 - 新增当前态语料切换实施计划：`docs/superpowers/plans/2026-04-06-current-state-corpus-switch-and-history-archive-plan.md`，把 `crawl_snapshots` 当前态状态字段、`*_hist` 冷归档表、页面语义指纹比较、`draft -> active` 原子切换、默认事实查询收口与 system teardown 清理拆成可独立执行的小任务。
 - 新增当前态语料切换与历史归档设计文档：`docs/superpowers/specs/2026-04-06-current-state-corpus-switch-and-history-archive-design.md`，明确采集事实层收敛为“正式区 + 候选区 + 冷历史区”三分模型，并规定“只有高质量且存在事实层有效变化时才归档旧正式集并原子切换；无变化或低质量候选直接丢弃，不做无意义 DML”。
