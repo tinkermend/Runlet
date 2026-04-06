@@ -5,8 +5,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import relationship
-from sqlmodel import Field, Relationship
+from sqlmodel import Field
 
 from app.infrastructure.db.base import BaseModel
 
@@ -18,23 +17,22 @@ def utcnow() -> datetime:
 json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
 
 
-class CrawlSnapshot(BaseModel, table=True):
-    __tablename__ = "crawl_snapshots"
+class CrawlSnapshotHist(BaseModel, table=True):
+    __tablename__ = "crawl_snapshots_hist"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    snapshot_id: UUID = Field(index=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
     crawl_type: str = Field(max_length=32)
     framework_detected: str | None = Field(default=None, max_length=32)
     quality_score: float | None = Field(default=None)
     degraded: bool = Field(default=False)
-    state: str = Field(
-        default="draft",
-        max_length=32,
-        sa_column=sa.Column(
-            sa.String(length=32),
-            nullable=False,
-            server_default=sa.text("'draft'"),
-        ),
+    state: str = Field(max_length=32)
+    source_active_snapshot_id: UUID | None = Field(default=None, index=True)
+    replaced_by_snapshot_id: UUID | None = Field(default=None, index=True)
+    archive_reason: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Text(), nullable=True),
     )
     activated_at: datetime | None = Field(
         default=None,
@@ -54,46 +52,25 @@ class CrawlSnapshot(BaseModel, table=True):
     )
     structure_hash: str | None = Field(default=None, max_length=255)
     started_at: datetime = Field(
-        default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
     finished_at: datetime | None = Field(
         default=None,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
-
-    pages: list["Page"] = Relationship(
-        back_populates="snapshot",
-        sa_relationship=relationship(
-            "Page",
-            back_populates="snapshot",
-            cascade="all, delete-orphan",
-        ),
-    )
-    menu_nodes: list["MenuNode"] = Relationship(
-        back_populates="snapshot",
-        sa_relationship=relationship(
-            "MenuNode",
-            back_populates="snapshot",
-            cascade="all, delete-orphan",
-        ),
-    )
-    page_elements: list["PageElement"] = Relationship(
-        back_populates="snapshot",
-        sa_relationship=relationship(
-            "PageElement",
-            back_populates="snapshot",
-            cascade="all, delete-orphan",
-        ),
+    archived_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
 
-class Page(BaseModel, table=True):
-    __tablename__ = "pages"
+class PageHist(BaseModel, table=True):
+    __tablename__ = "pages_hist"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    page_id: UUID = Field(index=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
-    snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id", index=True)
+    snapshot_id: UUID | None = Field(default=None, index=True)
     route_path: str = Field(max_length=512)
     page_title: str | None = Field(default=None, max_length=255)
     page_summary: str | None = Field(
@@ -121,40 +98,23 @@ class Page(BaseModel, table=True):
         sa_column=sa.Column(json_type, nullable=True),
     )
     crawled_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+    )
+    archived_at: datetime = Field(
         default_factory=utcnow,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
-    snapshot: "CrawlSnapshot | None" = Relationship(
-        back_populates="pages",
-        sa_relationship=relationship("CrawlSnapshot", back_populates="pages"),
-    )
-    menu_nodes: list["MenuNode"] = Relationship(
-        back_populates="page",
-        sa_relationship=relationship(
-            "MenuNode",
-            back_populates="page",
-            cascade="all, delete-orphan",
-        ),
-    )
-    page_elements: list["PageElement"] = Relationship(
-        back_populates="page",
-        sa_relationship=relationship(
-            "PageElement",
-            back_populates="page",
-            cascade="all, delete-orphan",
-        ),
-    )
 
-
-class MenuNode(BaseModel, table=True):
-    __tablename__ = "menu_nodes"
+class MenuNodeHist(BaseModel, table=True):
+    __tablename__ = "menu_nodes_hist"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    menu_node_id: UUID = Field(index=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
-    snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
-    parent_id: UUID | None = Field(default=None, foreign_key="menu_nodes.id", index=True)
-    page_id: UUID | None = Field(default=None, foreign_key="pages.id", index=True)
+    snapshot_id: UUID = Field(index=True)
+    parent_id: UUID | None = Field(default=None, index=True)
+    page_id: UUID | None = Field(default=None, index=True)
     label: str = Field(max_length=255)
     route_path: str | None = Field(default=None, max_length=512)
     depth: int = Field(default=0)
@@ -175,24 +135,20 @@ class MenuNode(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(json_type, nullable=True),
     )
-
-    snapshot: "CrawlSnapshot | None" = Relationship(
-        back_populates="menu_nodes",
-        sa_relationship=relationship("CrawlSnapshot", back_populates="menu_nodes"),
-    )
-    page: "Page | None" = Relationship(
-        back_populates="menu_nodes",
-        sa_relationship=relationship("Page", back_populates="menu_nodes"),
+    archived_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
 
-class PageElement(BaseModel, table=True):
-    __tablename__ = "page_elements"
+class PageElementHist(BaseModel, table=True):
+    __tablename__ = "page_elements_hist"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    page_element_id: UUID = Field(index=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
-    snapshot_id: UUID = Field(foreign_key="crawl_snapshots.id", index=True)
-    page_id: UUID = Field(foreign_key="pages.id", index=True)
+    snapshot_id: UUID = Field(index=True)
+    page_id: UUID = Field(index=True)
     element_type: str = Field(max_length=64)
     element_role: str | None = Field(default=None, max_length=64)
     element_text: str | None = Field(
@@ -229,12 +185,7 @@ class PageElement(BaseModel, table=True):
         default=None,
         sa_column=sa.Column(sa.Text(), nullable=True),
     )
-
-    snapshot: "CrawlSnapshot | None" = Relationship(
-        back_populates="page_elements",
-        sa_relationship=relationship("CrawlSnapshot", back_populates="page_elements"),
-    )
-    page: "Page | None" = Relationship(
-        back_populates="page_elements",
-        sa_relationship=relationship("Page", back_populates="page_elements"),
+    archived_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )

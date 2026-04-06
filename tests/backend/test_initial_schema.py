@@ -52,6 +52,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "auth_audit_logs",
         "auth_states",
         "crawl_snapshots",
+        "crawl_snapshots_hist",
         "execution_artifacts",
         "execution_plans",
         "execution_requests",
@@ -64,7 +65,9 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "page_assets",
         "page_checks",
         "page_elements",
+        "page_elements_hist",
         "pages",
+        "pages_hist",
         "published_jobs",
         "queued_jobs",
         "script_renders",
@@ -72,6 +75,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "system_crawl_policies",
         "system_credentials",
         "systems",
+        "menu_nodes_hist",
         "user_pats",
         "user_sessions",
         "users",
@@ -363,6 +367,36 @@ def test_page_elements_table_has_materialization_metadata(inspector):
 def test_pages_table_has_navigation_diagnostics(inspector):
     columns = {column["name"] for column in inspector.get_columns("pages")}
     assert {"navigation_diagnostics"} <= columns
+
+
+def test_current_state_snapshot_columns_present(inspector):
+    columns = {column["name"] for column in inspector.get_columns("crawl_snapshots")}
+    assert {"state", "activated_at", "discarded_at"} <= columns
+
+    state_column = next(
+        column for column in inspector.get_columns("crawl_snapshots") if column["name"] == "state"
+    )
+    server_default = str(state_column["default"] or "")
+    assert "draft" in server_default
+
+
+def test_crawl_history_tables_present(inspector):
+    table_names = set(inspector.get_table_names())
+    assert {
+        "crawl_snapshots_hist",
+        "pages_hist",
+        "menu_nodes_hist",
+        "page_elements_hist",
+    } <= table_names
+
+    crawl_snapshots_hist_columns = {
+        column["name"] for column in inspector.get_columns("crawl_snapshots_hist")
+    }
+    assert {
+        "source_active_snapshot_id",
+        "replaced_by_snapshot_id",
+        "archive_reason",
+    } <= crawl_snapshots_hist_columns
 
 
 def test_execution_run_created_at_migration_backfills_from_artifacts(tmp_path):
@@ -747,3 +781,19 @@ def test_alembic_revision_ids_fit_version_table_limit():
 
     assert revision_ids
     assert all(len(revision_id) <= 32 for revision_id in revision_ids)
+
+
+def test_crawl_snapshot_warning_messages_pg_normalization_guard():
+    project_root = Path(__file__).resolve().parents[2]
+    migration_path = (
+        project_root / "backend" / "alembic" / "versions" / "0015_current_state_corpus_history.py"
+    )
+    content = migration_path.read_text(encoding="utf-8")
+
+    assert 'bind.dialect.name == "postgresql"' in content
+    assert "ALTER COLUMN warning_messages TYPE jsonb" in content
+    assert "USING warning_messages::jsonb" in content
+    assert "ALTER COLUMN warning_messages SET DEFAULT '[]'::jsonb" in content
+    assert "ALTER COLUMN warning_messages TYPE json" in content
+    assert "USING warning_messages::json" in content
+    assert "ALTER COLUMN warning_messages SET DEFAULT '[]'::json" in content
