@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 修正当前态切换/控制台资产回归用例与事实读取收口：`current_state_switch` 归档测试改为稳定命中叶子菜单历史记录，`console_assets` 控制台接口补齐“优先读取 active snapshot 页面标题、采集时间与原始事实”的行为验证，避免编译资产仍绑定废弃页面时把展示与 raw facts 误读到 discarded snapshot。
 - 收敛 Alembic `0015` 双 head：新增 `0016_merge_0015_heads`，恢复 `alembic upgrade head` 的单 head 升级路径，并将导航别名编译回归测试对齐到当前 `draft -> active/discarded` 语义。
 - 完成 control plane 导航别名消费接入：`resolve_page_asset_and_check` 现优先从 active `page_navigation_aliases -> page_asset -> page_check` 解析页面，唯一叶子菜单可直接自动命中，重名叶子菜单不再静默选错而是保持未解析；同时候选 API 会消费导航别名并返回 `leaf_text/display_chain/chain_complete`，并对同一资产的多条 alias 行做去重。
 - 完成 `asset_compiler` 导航别名持久化接入：`compile_snapshot` 现调用 `build_navigation_aliases` 并写入 `page_navigation_aliases`，每次重编译会先停用同 `page_asset` 旧别名（`disabled_reason=recompiled`、`disabled_by_snapshot_id=当前快照`）再写入新别名；同时按“当前页菜单节点 + 祖先链”构建 `menu_topology`，支持祖先 `page_id=None` 的分行拓扑恢复 `menu_chain`，断链场景仅保留 `menu_leaf` 且 `chain_complete=false`。

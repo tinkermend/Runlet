@@ -16,7 +16,7 @@ from app.domains.control_plane.console_schemas import (
 )
 from app.infrastructure.db.console_session import get_console_db
 from app.infrastructure.db.models.assets import PageAsset, PageCheck
-from app.infrastructure.db.models.crawl import Page
+from app.infrastructure.db.models.crawl import CrawlSnapshot, Page
 from app.infrastructure.db.models.identity import User
 from app.infrastructure.db.models.systems import System
 
@@ -51,6 +51,35 @@ def _get_check_codes_for_asset(session: Session, asset_id: UUID) -> list[str]:
     return [c.check_code for c in checks]
 
 
+def _get_active_snapshot(session: Session, system_id: UUID) -> CrawlSnapshot | None:
+    return session.exec(
+        select(CrawlSnapshot)
+        .where(CrawlSnapshot.system_id == system_id)
+        .where(CrawlSnapshot.state == "active")
+        .order_by(CrawlSnapshot.activated_at.desc(), CrawlSnapshot.started_at.desc(), CrawlSnapshot.id.desc())
+    ).first()
+
+
+def _resolve_active_page_for_asset(
+    session: Session,
+    *,
+    asset: PageAsset,
+    fallback_page: Page | None,
+) -> Page | None:
+    if fallback_page is None or not fallback_page.route_path:
+        return None
+    active_snapshot = _get_active_snapshot(session, asset.system_id)
+    if active_snapshot is None:
+        return None
+    return session.exec(
+        select(Page)
+        .where(Page.system_id == asset.system_id)
+        .where(Page.snapshot_id == active_snapshot.id)
+        .where(Page.route_path == fallback_page.route_path)
+        .order_by(Page.id)
+    ).first()
+
+
 @router.get("/", response_model=list[SystemAssetGroup])
 def list_assets(
     session: ConsoleDep,
@@ -72,7 +101,13 @@ def list_assets(
         pages: list[PageGroup] = []
         for page_id, page_assets in page_map.items():
             page = session.get(Page, page_id)
-            page_name = page.page_title or page.route_path if page else str(page_id)
+            active_page = _resolve_active_page_for_asset(
+                session,
+                asset=page_assets[0],
+                fallback_page=page,
+            )
+            display_page = active_page or page
+            page_name = display_page.page_title or display_page.route_path if display_page else str(page_id)
 
             asset_items: list[AssetItem] = []
             for asset in page_assets:
@@ -111,7 +146,9 @@ def get_asset(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     page = session.get(Page, asset.page_id)
-    page_name = page.page_title or page.route_path if page else str(asset.page_id)
+    active_page = _resolve_active_page_for_asset(session, asset=asset, fallback_page=page)
+    display_page = active_page or page
+    page_name = display_page.page_title or display_page.route_path if display_page else str(asset.page_id)
 
     system = session.get(System, asset.system_id)
     system_name = system.name if system else str(asset.system_id)
@@ -119,16 +156,20 @@ def get_asset(
     check_codes = _get_check_codes_for_asset(session, asset.id)
     label = _check_type_label(asset.asset_key, check_codes)
 
-    # Raw facts: collect menu nodes and page elements linked to this page
+    # Raw facts always read from the current active page when one exists.
     raw_facts: dict | None = None
-    if page:
+    if active_page:
         from app.infrastructure.db.models.crawl import MenuNode, PageElement
 
         menu_nodes = session.exec(
-            select(MenuNode).where(MenuNode.page_id == page.id)
+            select(MenuNode)
+            .where(MenuNode.page_id == active_page.id)
+            .where(MenuNode.snapshot_id == active_page.snapshot_id)
         ).all()
         page_elements = session.exec(
-            select(PageElement).where(PageElement.page_id == page.id)
+            select(PageElement)
+            .where(PageElement.page_id == active_page.id)
+            .where(PageElement.snapshot_id == active_page.snapshot_id)
         ).all()
 
         if menu_nodes or page_elements:
@@ -155,7 +196,7 @@ def get_asset(
                 ],
             }
 
-    collected_at = page.crawled_at if page else None
+    collected_at = active_page.crawled_at if active_page else None
 
     return AssetDetail(
         id=asset.id,

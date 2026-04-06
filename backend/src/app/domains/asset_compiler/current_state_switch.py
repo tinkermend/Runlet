@@ -14,7 +14,12 @@ from app.domains.asset_compiler.current_state_diff import (
     compare_semantic_states,
 )
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
-from app.infrastructure.db.models.crawl_history import CrawlSnapshotHist
+from app.infrastructure.db.models.crawl_history import (
+    CrawlSnapshotHist,
+    MenuNodeHist,
+    PageElementHist,
+    PageHist,
+)
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,10 @@ async def apply_current_state_switch(
         finished_at=active_snapshot.finished_at,
     )
     session.add(archived_snapshot)
+    await _archive_active_snapshot_facts(
+        session=session,
+        active_snapshot_id=active_snapshot.id,
+    )
 
     active_snapshot.state = "discarded"
     active_snapshot.discarded_at = now
@@ -206,6 +215,91 @@ def _build_element_semantic_text(element: PageElement) -> str:
     state_signature = _normalize_text(element.state_signature)
     state_context = _normalize_state_context(element.state_context)
     return f"{text}|state={state_signature}|context={state_context}"
+
+
+async def _archive_active_snapshot_facts(
+    *,
+    session: Session | AsyncSession,
+    active_snapshot_id: UUID,
+) -> None:
+    pages = await _exec_all(
+        session,
+        select(Page)
+        .where(Page.snapshot_id == active_snapshot_id)
+        .order_by(Page.id),
+    )
+    menu_nodes = await _exec_all(
+        session,
+        select(MenuNode)
+        .where(MenuNode.snapshot_id == active_snapshot_id)
+        .order_by(MenuNode.id),
+    )
+    page_elements = await _exec_all(
+        session,
+        select(PageElement)
+        .where(PageElement.snapshot_id == active_snapshot_id)
+        .order_by(PageElement.id),
+    )
+
+    for page in pages:
+        session.add(
+            PageHist(
+                page_id=page.id,
+                system_id=page.system_id,
+                snapshot_id=page.snapshot_id,
+                route_path=page.route_path,
+                page_title=page.page_title,
+                page_summary=page.page_summary,
+                keywords=page.keywords,
+                discovery_sources=page.discovery_sources,
+                entry_candidates=page.entry_candidates,
+                context_constraints=page.context_constraints,
+                navigation_diagnostics=page.navigation_diagnostics,
+                crawled_at=page.crawled_at,
+            )
+        )
+
+    for menu_node in menu_nodes:
+        session.add(
+            MenuNodeHist(
+                menu_node_id=menu_node.id,
+                system_id=menu_node.system_id,
+                snapshot_id=menu_node.snapshot_id,
+                parent_id=menu_node.parent_id,
+                page_id=menu_node.page_id,
+                label=menu_node.label,
+                route_path=menu_node.route_path,
+                depth=menu_node.depth,
+                sort_order=menu_node.sort_order,
+                playwright_locator=menu_node.playwright_locator,
+                discovery_sources=menu_node.discovery_sources,
+                entry_candidates=menu_node.entry_candidates,
+                context_constraints=menu_node.context_constraints,
+            )
+        )
+
+    for page_element in page_elements:
+        session.add(
+            PageElementHist(
+                page_element_id=page_element.id,
+                system_id=page_element.system_id,
+                snapshot_id=page_element.snapshot_id,
+                page_id=page_element.page_id,
+                element_type=page_element.element_type,
+                element_role=page_element.element_role,
+                element_text=page_element.element_text,
+                attributes=page_element.attributes,
+                playwright_locator=page_element.playwright_locator,
+                state_signature=page_element.state_signature,
+                state_context=page_element.state_context,
+                locator_candidates=page_element.locator_candidates,
+                materialized_by=page_element.materialized_by,
+                navigation_diagnostics=page_element.navigation_diagnostics,
+                stability_score=page_element.stability_score,
+                usage_description=page_element.usage_description,
+            )
+        )
+    await _flush(session)
 
 
 async def _get(session: Session | AsyncSession, model, identifier):

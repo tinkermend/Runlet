@@ -2,9 +2,15 @@ from sqlmodel import select
 
 import pytest
 import sqlalchemy as sa
+from datetime import UTC, datetime
 
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
-from app.infrastructure.db.models.crawl_history import CrawlSnapshotHist
+from app.infrastructure.db.models.crawl_history import (
+    CrawlSnapshotHist,
+    MenuNodeHist,
+    PageElementHist,
+    PageHist,
+)
 
 
 def _create_snapshot(
@@ -196,6 +202,129 @@ async def test_apply_current_state_switch_promotes_draft_and_archives_previous_a
     assert archived_rows[0].snapshot_id == active_snapshot.id
     assert archived_rows[0].source_active_snapshot_id == active_snapshot.id
     assert archived_rows[0].replaced_by_snapshot_id == draft_snapshot.id
+
+
+@pytest.mark.anyio
+async def test_apply_current_state_switch_promotes_and_archives_active_pages_menus_and_elements(
+    db_session,
+    seeded_system,
+):
+    from app.domains.asset_compiler.current_state_switch import apply_current_state_switch
+
+    active_snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+        state="active",
+    )
+    active_page = _add_page_fact(
+        db_session,
+        seeded_system,
+        active_snapshot,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户列表",
+    )
+
+    draft_snapshot = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+        state="draft",
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        draft_snapshot,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户清单",
+    )
+    active_page.page_summary = "旧正式页摘要"
+    active_page.keywords = {"module": "users"}
+    active_page.discovery_sources = ["route_hint"]
+    active_page.entry_candidates = [{"kind": "menu", "route_path": "/users"}]
+    active_page.context_constraints = {"tenant": "default"}
+    active_page.navigation_diagnostics = {"resolved_route": "/users"}
+    active_page.crawled_at = datetime(2026, 4, 6, 12, 0, tzinfo=UTC)
+    db_session.add(active_page)
+
+    active_menu_nodes = db_session.exec(
+        select(MenuNode)
+        .where(MenuNode.snapshot_id == active_snapshot.id)
+    ).all()
+    assert len(active_menu_nodes) >= 2
+    active_leaf_menu = db_session.exec(
+        select(MenuNode)
+        .where(MenuNode.snapshot_id == active_snapshot.id)
+        .where(MenuNode.route_path == "/users")
+        .where(MenuNode.label == "用户管理")
+        .where(MenuNode.depth == 1)
+    ).one()
+    active_leaf_menu.playwright_locator = "role=menuitem[name='用户管理']"
+    active_leaf_menu.discovery_sources = ["dom_menu"]
+    active_leaf_menu.entry_candidates = [{"kind": "menu_click"}]
+    active_leaf_menu.context_constraints = {"requires_auth": True}
+    db_session.add(active_leaf_menu)
+
+    active_element = db_session.exec(
+        select(PageElement)
+        .where(PageElement.snapshot_id == active_snapshot.id)
+        .order_by(PageElement.id)
+    ).one()
+    active_element.attributes = {"data-testid": "users-table"}
+    active_element.state_signature = "users:default"
+    active_element.state_context = {"entry_type": "default"}
+    active_element.locator_candidates = [{"strategy_type": "semantic", "selector": "role=table[name='用户列表']"}]
+    active_element.materialized_by = "runtime_probe"
+    active_element.navigation_diagnostics = {"resolved_route": "/users", "source": "probe"}
+    active_element.stability_score = 0.95
+    active_element.usage_description = "展示用户列表"
+    db_session.add(active_element)
+    db_session.commit()
+
+    result = await apply_current_state_switch(
+        session=db_session,
+        draft_snapshot_id=draft_snapshot.id,
+    )
+
+    page_hist_rows = db_session.exec(select(PageHist)).all()
+    menu_hist_rows = db_session.exec(select(MenuNodeHist)).all()
+    element_hist_rows = db_session.exec(select(PageElementHist)).all()
+
+    assert result.outcome == "promoted"
+    assert len(page_hist_rows) == 1
+    assert page_hist_rows[0].page_id == active_page.id
+    assert page_hist_rows[0].snapshot_id == active_snapshot.id
+    assert page_hist_rows[0].page_summary == "旧正式页摘要"
+    assert page_hist_rows[0].keywords == {"module": "users"}
+    assert page_hist_rows[0].entry_candidates == [{"kind": "menu", "route_path": "/users"}]
+    assert page_hist_rows[0].navigation_diagnostics == {"resolved_route": "/users"}
+    assert len(menu_hist_rows) >= 2
+    assert {row.snapshot_id for row in menu_hist_rows} == {active_snapshot.id}
+    archived_leaf_menu = next(
+        row
+        for row in menu_hist_rows
+        if row.route_path == "/users" and row.label == "用户管理" and row.depth == 1
+    )
+    assert archived_leaf_menu.playwright_locator == "role=menuitem[name='用户管理']"
+    assert archived_leaf_menu.entry_candidates == [{"kind": "menu_click"}]
+    assert archived_leaf_menu.context_constraints == {"requires_auth": True}
+    assert len(element_hist_rows) == 1
+    assert element_hist_rows[0].snapshot_id == active_snapshot.id
+    assert element_hist_rows[0].page_id == active_page.id
+    assert element_hist_rows[0].attributes == {"data-testid": "users-table"}
+    assert element_hist_rows[0].state_signature == "users:default"
+    assert element_hist_rows[0].state_context == {"entry_type": "default"}
+    assert element_hist_rows[0].locator_candidates == [
+        {"strategy_type": "semantic", "selector": "role=table[name='用户列表']"}
+    ]
+    assert element_hist_rows[0].materialized_by == "runtime_probe"
+    assert element_hist_rows[0].navigation_diagnostics == {"resolved_route": "/users", "source": "probe"}
 
 
 @pytest.mark.anyio
