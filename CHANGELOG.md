@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 补齐系统 teardown 对 `page_navigation_aliases` 的收口：`SystemTeardownIds` 新增 `navigation_alias_ids`，`collect_system_teardown_ids`/`list_remaining_reference_tables` 纳入导航别名扫描，并将删除顺序调整为先删导航别名再删 `page_asset` 父链，避免 FK 约束导致 teardown 失败。
 - 为 `PageAsset` 补齐 `navigation_aliases` 双向 ORM 关系并启用 `delete-orphan` 级联，`PageNavigationAlias` 同步补齐 `page_asset` 反向关系，避免删除页面资产后遗留导航别名孤儿记录。
 - 收紧导航别名 schema 回归覆盖：`test_initial_schema` 现额外断言 `disabled_reason/disabled_at/disabled_by_snapshot_id` 列存在，并锁定 `system_id/page_asset_id/alias_type/alias_text` 四个索引。
 - 对齐 `page_navigation_aliases.chain_complete` 的 schema 默认值定义：SQLModel metadata 现显式声明 `server_default=false`，与 `0015_page_navigation_aliases` 迁移保持一致，消除 `test_initial_schema_matches_sqlmodel_metadata` 中的 `modify_default` 漂移。
