@@ -1,4 +1,4 @@
-display_name: Chat Check Orchestrator
-short_description: Coordinate chat-based check workflows and runtime triggers.
-default_prompt: |
-  Coordinate chat-based checks in line with the orchestrator scaffold guidelines.
+interface:
+  display_name: "Chat Check Orchestrator"
+  short_description: "Runlet 页面/只读模板检查的候选、槽位和执行编排"
+  default_prompt: "Use $chat-check-orchestrator 在对话中编排 Runlet 页面检查或只读模板检查：先检查 RUNLET_PAT，再按单槽位补问、候选推荐或高置信直执行走 `/api/v1/check-requests*`，总结结果，并且只在成功后再询问是否发布，不要把它当作自由 Playwright 执行器。"

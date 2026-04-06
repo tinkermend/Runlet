@@ -42,12 +42,19 @@ description: Use when a user wants to run a Runlet page check or readonly templa
 7. `SummarizeResult`
 8. `OfferPublish`
 
+## 意图解析（ParseIntent）
+
+- 仅当用户明确表达结构化只读断言（字段值是否存在、状态是否存在、数量是否不少于阈值等）时，才进入“模板化只读检查”路径并按 `template-slots.md` 补槽位。
+- 若用户表达接近模板断言、但还不足以确定具体断言类型或关键槽位（例如“有没有数据/有没有状态/大概有多少条”），先走 `AskOneQuestion` 澄清，不要直接在模板检查与普通页面检查之间自行选边。
+- 对“菜单是否完整/是否缺项/页面结构是否齐全”等结构完整性诉求，优先走普通页面检查，不要强套 `has_data/no_data/count_gte` 等模板。
+
 ## 状态门控说明
 
 - `AssessReadiness` 判定分支：
-  - 信息不足 -> `AskOneQuestion`（单轮只问一个关键问题）
-  - 存在多候选 -> `Recommend`（给出简洁推荐，用户确认后执行）
-  - 满足高置信门槛 -> `Execute`
+  - 信息不足或候选为空 -> `AskOneQuestion`（单轮只问一个关键问题；若澄清后仍无法形成候选则停止）
+  - 未达高置信直执行门槛且存在可确认候选 -> `Recommend`（给出候选或要求用户确认目标对象；包含多候选、候选分数接近、单候选但信号不足等情况）
+  - `Recommend` 后，只有在用户明确确认目标对象/候选后才允许进入 `Execute`
+  - 满足高置信直执行门槛 -> `Execute`
 - `OfferPublish` 仅在执行成功后出现；失败或未完成时不进入发布分支。
 
 ## 参考入口
@@ -65,3 +72,4 @@ description: Use when a user wants to run a Runlet page check or readonly templa
 - 用户拒绝候选推荐：停止本轮，不强制执行。
 - 执行成功：输出结果摘要，并可选询问是否发布。
 - 执行失败或超时：输出失败摘要后结束本轮。
+- 若失败证据指向登录页回退或认证态失效（例如最终 URL/标题落到登录页，且 `auth_status` 为 `reused` 后导航失败），后续动作优先提示“先去控制台刷新认证，再重试检查”，不要只给泛化失败结论。
