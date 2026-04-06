@@ -72,6 +72,7 @@ class AssetCompileJobHandler:
         await self._commit()
 
     async def _mark_failed(self, job: QueuedJob, *, message: str | None) -> None:
+        await self._rollback()
         job.status = QueuedJobStatus.FAILED.value
         job.started_at = job.started_at or utcnow()
         job.finished_at = utcnow()
@@ -88,6 +89,12 @@ class AssetCompileJobHandler:
             await self.session.commit()
             return
         self.session.commit()
+
+    async def _rollback(self) -> None:
+        if isinstance(self.session, AsyncSession):
+            await self.session.rollback()
+            return
+        self.session.rollback()
 
 
 def _serialize_compile_result(result) -> dict[str, object]:
@@ -125,4 +132,3 @@ def _json_safe(value):
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
     return value
-

@@ -20,6 +20,15 @@ json_type = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "pos
 
 class CrawlSnapshot(BaseModel, table=True):
     __tablename__ = "crawl_snapshots"
+    __table_args__ = (
+        sa.Index(
+            "uq_crawl_snapshots_system_id_active",
+            "system_id",
+            unique=True,
+            sqlite_where=sa.text("state = 'active'"),
+            postgresql_where=sa.text("state = 'active'"),
+        ),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)

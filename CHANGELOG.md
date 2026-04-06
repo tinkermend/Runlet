@@ -8,6 +8,7 @@
 - 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
 
 ### Added
+- 新增当前态语料切换门禁与单 active 约束：`asset_compiler` 引入 `current_state_switch`，在 `compile_snapshot()` 前先执行 `draft -> active/discarded` 判定，支持 `switch_outcome` 返回、无变化/低质量候选直接丢弃、仅归档 `crawl_snapshots_hist` 头记录；同时为 `crawl_snapshots` 增加“同系统最多一个 `active`”的 partial unique index，并补齐状态签名语义比较、job 失败回滚及相关 schema/编译回归测试。
 - 新增 crawler 当前态候选写入约束：`CrawlerService` 新建 `crawl_snapshots` 时显式持久化 `state="draft"`，并补齐回归测试锁定新采集默认不会直接激活、`activated_at` 保持为空。
 - 新增当前态语料语义差异纯函数：增加 `backend/src/app/domains/asset_compiler/current_state_diff.py`，提供页面语义指纹、关键元素具名描述以及 `active/draft` 的 `added_routes/deleted_routes/changed_routes` 比较，并补齐归一化、去重、无序输入、空路由/重复路由异常等回归测试。
 - 新增当前态语料 schema 基线：`crawl_snapshots` 增加 `state/activated_at/discarded_at` 当前态管理字段，并引入 `crawl_snapshots_hist/pages_hist/menu_nodes_hist/page_elements_hist` 冷历史表；同时补齐 revision 长度守卫与 PostgreSQL `warning_messages` JSONB 规范化迁移守卫。

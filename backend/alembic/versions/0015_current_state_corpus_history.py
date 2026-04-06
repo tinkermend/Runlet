@@ -33,6 +33,14 @@ def upgrade() -> None:
         )
         batch_op.add_column(sa.Column("activated_at", sa.DateTime(timezone=True), nullable=True))
         batch_op.add_column(sa.Column("discarded_at", sa.DateTime(timezone=True), nullable=True))
+    op.create_index(
+        "uq_crawl_snapshots_system_id_active",
+        "crawl_snapshots",
+        ["system_id"],
+        unique=True,
+        sqlite_where=sa.text("state = 'active'"),
+        postgresql_where=sa.text("state = 'active'"),
+    )
 
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
@@ -224,6 +232,7 @@ def downgrade() -> None:
         table_name="crawl_snapshots_hist",
     )
     op.drop_table("crawl_snapshots_hist")
+    op.drop_index("uq_crawl_snapshots_system_id_active", table_name="crawl_snapshots")
 
     with op.batch_alter_table("crawl_snapshots") as batch_op:
         batch_op.drop_column("discarded_at")

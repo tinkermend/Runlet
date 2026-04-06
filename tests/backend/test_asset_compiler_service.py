@@ -175,6 +175,7 @@ def seeded_crawl_snapshot(db_session, seeded_system):
         system_id=seeded_system.id,
         crawl_type="full",
         framework_detected=seeded_system.framework_type,
+        quality_score=0.95,
     )
     db_session.add(snapshot)
     db_session.flush()
@@ -245,6 +246,7 @@ def seeded_previous_snapshot(db_session, seeded_system):
         system_id=seeded_system.id,
         crawl_type="full",
         framework_detected=seeded_system.framework_type,
+        quality_score=0.95,
     )
     db_session.add(previous_snapshot)
     db_session.flush()
@@ -366,6 +368,7 @@ def seeded_previous_snapshot(db_session, seeded_system):
         system_id=seeded_system.id,
         crawl_type="full",
         framework_detected=seeded_system.framework_type,
+        quality_score=0.95,
     )
     db_session.add(current_snapshot)
     db_session.flush()
@@ -436,6 +439,7 @@ def seeded_stateful_crawl_snapshot(db_session, seeded_system):
         system_id=seeded_system.id,
         crawl_type="full",
         framework_detected=seeded_system.framework_type,
+        quality_score=0.95,
     )
     db_session.add(snapshot)
     db_session.flush()
@@ -518,6 +522,7 @@ def seeded_modal_stateful_crawl_snapshot(db_session, seeded_system):
         system_id=seeded_system.id,
         crawl_type="full",
         framework_detected=seeded_system.framework_type,
+        quality_score=0.95,
     )
     db_session.add(snapshot)
     db_session.flush()
@@ -820,6 +825,7 @@ async def test_compile_snapshot_preserves_navigation_metadata_from_real_crawl_re
         browser_factory=DummyBrowserFactory(),
         page_discovery_extractor=StaticExtractor(
             CrawlExtractionResult(
+                quality_score=0.95,
                 pages=[
                     PageCandidate(
                         route_path="/users",
@@ -835,11 +841,13 @@ async def test_compile_snapshot_preserves_navigation_metadata_from_real_crawl_re
         ),
         dom_menu_extractor=StaticExtractor(
             CrawlExtractionResult(
+                quality_score=0.95,
                 menus=[MenuCandidate(label="用户管理", route_path="/users", page_route_path="/users")]
             )
         ),
         state_probe_extractor=StaticExtractor(
             CrawlExtractionResult(
+                quality_score=0.95,
                 elements=[
                     ElementCandidate(
                         page_route_path="/users",
@@ -942,6 +950,7 @@ async def test_compile_snapshot_keeps_default_open_create_modal_active_without_m
 def test_compile_snapshot_result_exposes_reconciliation_counts():
     assert "assets_retired" in CompileSnapshotResult.__dataclass_fields__
     assert "checks_retired" in CompileSnapshotResult.__dataclass_fields__
+    assert "switch_outcome" in CompileSnapshotResult.__dataclass_fields__
     assert "alias_disable_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "alias_enable_decision_count" in CompileSnapshotResult.__dataclass_fields__
     assert "published_job_pause_decision_count" in CompileSnapshotResult.__dataclass_fields__
@@ -967,6 +976,7 @@ def _create_snapshot(
     crawl_type: str = "full",
     quality_score: float | None = 0.95,
     degraded: bool = False,
+    state: str = "draft",
 ) -> CrawlSnapshot:
     snapshot = CrawlSnapshot(
         system_id=seeded_system.id,
@@ -974,6 +984,7 @@ def _create_snapshot(
         framework_detected=seeded_system.framework_type,
         quality_score=quality_score,
         degraded=degraded,
+        state=state,
     )
     db_session.add(snapshot)
     db_session.flush()
@@ -991,6 +1002,9 @@ def _add_page_fact(
     menu_chain: list[str] | None = None,
     include_table: bool = True,
     include_button: bool = False,
+    table_text: str = "列表",
+    state_signature: str | None = None,
+    state_context: dict[str, object] | None = None,
 ) -> Page:
     page = Page(
         system_id=seeded_system.id,
@@ -1024,8 +1038,10 @@ def _add_page_fact(
                 page_id=page.id,
                 element_type="table",
                 element_role="table",
-                element_text="列表",
+                element_text=table_text,
                 playwright_locator="get_by_role('table', name='列表')",
+                state_signature=state_signature,
+                state_context=state_context,
                 usage_description="展示列表",
             )
         )
@@ -1045,6 +1061,310 @@ def _add_page_fact(
 
     db_session.flush()
     return page
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_discards_draft_when_semantics_match_active(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    baseline = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        baseline,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户列表",
+    )
+    db_session.commit()
+
+    baseline_result = await asset_compiler_service.compile_snapshot(snapshot_id=baseline.id)
+    assert baseline_result.switch_outcome == "promoted"
+
+    existing_asset = db_session.exec(
+        select(PageAsset).where(PageAsset.asset_key == _build_asset_key(seeded_system.code, "/users"))
+    ).one()
+
+    draft = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        draft,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户列表",
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=draft.id)
+    db_session.refresh(draft)
+    db_session.refresh(existing_asset)
+
+    assert result.switch_outcome == "discarded_no_change"
+    assert result.assets_created == 0
+    assert result.assets_updated == 0
+    assert result.checks_created == 0
+    assert result.checks_updated == 0
+    assert draft.state == "discarded"
+    assert draft.discarded_at is not None
+    assert existing_asset.compiled_from_snapshot_id == baseline.id
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_promotes_draft_and_archives_previous_active_on_change(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    from app.infrastructure.db.models.crawl_history import CrawlSnapshotHist
+
+    baseline = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        baseline,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户列表",
+    )
+    db_session.commit()
+
+    baseline_result = await asset_compiler_service.compile_snapshot(snapshot_id=baseline.id)
+    assert baseline_result.switch_outcome == "promoted"
+
+    draft = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        draft,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户清单",
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=draft.id)
+    db_session.refresh(baseline)
+    db_session.refresh(draft)
+
+    archive_rows = db_session.exec(select(CrawlSnapshotHist)).all()
+    asset = db_session.exec(
+        select(PageAsset).where(PageAsset.asset_key == _build_asset_key(seeded_system.code, "/users"))
+    ).one()
+
+    assert result.switch_outcome == "promoted"
+    assert baseline.state == "discarded"
+    assert draft.state == "active"
+    assert draft.activated_at is not None
+    assert len(archive_rows) == 1
+    assert archive_rows[0].snapshot_id == baseline.id
+    assert archive_rows[0].replaced_by_snapshot_id == draft.id
+    assert asset.compiled_from_snapshot_id == draft.id
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_promotes_when_only_state_signature_changes(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    baseline = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        baseline,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户列表",
+        state_signature="users:default",
+        state_context={"entry_type": "default"},
+    )
+    db_session.commit()
+
+    baseline_result = await asset_compiler_service.compile_snapshot(snapshot_id=baseline.id)
+    assert baseline_result.switch_outcome == "promoted"
+
+    draft = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        draft,
+        route_path="/users",
+        page_title="用户管理",
+        menu_chain=["系统管理", "用户管理"],
+        table_text="用户列表",
+        state_signature="users:tab=disabled",
+        state_context={"entry_type": "tab_switch", "active_tab": "disabled"},
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=draft.id)
+    db_session.refresh(draft)
+
+    asset = db_session.exec(
+        select(PageAsset).where(PageAsset.asset_key == _build_asset_key(seeded_system.code, "/users"))
+    ).one()
+
+    assert result.switch_outcome == "promoted"
+    assert draft.state == "active"
+    assert asset.compiled_from_snapshot_id == draft.id
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_discards_low_quality_draft_without_deleting_missing_active_page(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    baseline = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    active_page = _add_page_fact(
+        db_session,
+        seeded_system,
+        baseline,
+        route_path="/users",
+        page_title="用户管理",
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        baseline,
+        route_path="/roles",
+        page_title="角色管理",
+    )
+    db_session.commit()
+
+    baseline_result = await asset_compiler_service.compile_snapshot(snapshot_id=baseline.id)
+    assert baseline_result.switch_outcome == "promoted"
+
+    degraded_draft = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=True,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        degraded_draft,
+        route_path="/users",
+        page_title="用户管理",
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=degraded_draft.id)
+    db_session.refresh(degraded_draft)
+
+    users_asset = db_session.exec(
+        select(PageAsset).where(PageAsset.asset_key == _build_asset_key(seeded_system.code, "/users"))
+    ).one()
+    roles_asset = db_session.exec(
+        select(PageAsset).where(PageAsset.asset_key == _build_asset_key(seeded_system.code, "/roles"))
+    ).one()
+
+    assert result.switch_outcome == "discarded_low_quality"
+    assert result.assets_retired == 0
+    assert degraded_draft.state == "discarded"
+    assert degraded_draft.discarded_at is not None
+    assert db_session.get(Page, active_page.id) is not None
+    assert users_asset.lifecycle_status == AssetLifecycleStatus.ACTIVE
+    assert roles_asset.lifecycle_status == AssetLifecycleStatus.ACTIVE
+
+
+@pytest.mark.anyio
+async def test_compile_snapshot_discards_unscored_draft_when_semantics_change(
+    db_session,
+    asset_compiler_service,
+    seeded_system,
+):
+    baseline = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=0.95,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        baseline,
+        route_path="/users",
+        page_title="用户管理",
+        table_text="用户列表",
+    )
+    db_session.commit()
+
+    baseline_result = await asset_compiler_service.compile_snapshot(snapshot_id=baseline.id)
+    assert baseline_result.switch_outcome == "promoted"
+
+    unscored_draft = _create_snapshot(
+        db_session,
+        seeded_system,
+        quality_score=None,
+        degraded=False,
+    )
+    _add_page_fact(
+        db_session,
+        seeded_system,
+        unscored_draft,
+        route_path="/users",
+        page_title="用户管理",
+        table_text="用户清单",
+    )
+    db_session.commit()
+
+    result = await asset_compiler_service.compile_snapshot(snapshot_id=unscored_draft.id)
+    db_session.refresh(unscored_draft)
+
+    asset = db_session.exec(
+        select(PageAsset).where(PageAsset.asset_key == _build_asset_key(seeded_system.code, "/users"))
+    ).one()
+
+    assert result.switch_outcome == "discarded_low_quality"
+    assert result.assets_created == 0
+    assert result.assets_updated == 0
+    assert unscored_draft.state == "discarded"
+    assert asset.compiled_from_snapshot_id == baseline.id
 
 
 @pytest.mark.anyio

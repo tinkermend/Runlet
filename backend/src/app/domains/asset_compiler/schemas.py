@@ -46,6 +46,7 @@ class CompileSnapshotResult:
     assets_created: int
     checks_created: int
     drift_state: AssetStatus
+    switch_outcome: str = "promoted"
     assets_updated: int = 0
     assets_retired: int = 0
     checks_updated: int = 0

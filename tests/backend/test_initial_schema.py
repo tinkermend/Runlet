@@ -797,3 +797,25 @@ def test_crawl_snapshot_warning_messages_pg_normalization_guard():
     assert "ALTER COLUMN warning_messages TYPE json" in content
     assert "USING warning_messages::json" in content
     assert "ALTER COLUMN warning_messages SET DEFAULT '[]'::json" in content
+
+
+def test_initial_schema_exposes_single_active_snapshot_unique_index(db_engine):
+    inspector = inspect(db_engine)
+    indexes = inspector.get_indexes("crawl_snapshots")
+    active_index = next(
+        (index for index in indexes if index["name"] == "uq_crawl_snapshots_system_id_active"),
+        None,
+    )
+    assert active_index is not None
+    assert bool(active_index["unique"]) is True
+
+
+def test_crawl_snapshot_active_unique_index_guard():
+    project_root = Path(__file__).resolve().parents[2]
+    migration_path = (
+        project_root / "backend" / "alembic" / "versions" / "0015_current_state_corpus_history.py"
+    )
+    content = migration_path.read_text(encoding="utf-8")
+
+    assert "uq_crawl_snapshots_system_id_active" in content
+    assert "state = 'active'" in content

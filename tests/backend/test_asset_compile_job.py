@@ -1,5 +1,5 @@
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlmodel import select
@@ -24,6 +24,7 @@ def queued_compile_job(db_session, seeded_system):
         system_id=seeded_system.id,
         crawl_type="full",
         framework_detected=seeded_system.framework_type,
+        quality_score=0.95,
     )
     db_session.add(snapshot)
     db_session.flush()
@@ -338,3 +339,42 @@ async def test_asset_compile_job_applies_control_plane_recovery_cascades(
     assert intent_alias.disabled_reason is None
     assert seeded_published_job.state == "active"
     assert seeded_published_job.pause_reason is None
+
+
+@pytest.mark.anyio
+async def test_asset_compile_job_rolls_back_snapshot_switch_when_compile_raises(
+    db_session,
+    queued_compile_job,
+):
+    from app.jobs.asset_compile_job import AssetCompileJobHandler
+
+    snapshot_id = UUID(queued_compile_job.payload["snapshot_id"])
+
+    class FailingAssetCompilerService:
+        async def compile_snapshot(self, *, snapshot_id):
+            snapshot = db_session.get(CrawlSnapshot, snapshot_id)
+            assert snapshot is not None
+            snapshot.state = "active"
+            db_session.add(snapshot)
+            db_session.flush()
+            raise RuntimeError("compile failed after switch")
+
+    runner = WorkerRunner(
+        session=db_session,
+        handlers={
+            ASSET_COMPILE_JOB_TYPE: AssetCompileJobHandler(
+                session=db_session,
+                asset_compiler_service=FailingAssetCompilerService(),
+            )
+        },
+    )
+
+    await runner.run_once()
+
+    refreshed_job = db_session.get(QueuedJob, queued_compile_job.id)
+    refreshed_snapshot = db_session.get(CrawlSnapshot, snapshot_id)
+
+    assert refreshed_job is not None
+    assert refreshed_job.status == "failed"
+    assert refreshed_snapshot is not None
+    assert refreshed_snapshot.state == "draft"

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, select
 
 from app.domains.asset_compiler.check_templates import build_standard_checks
+from app.domains.asset_compiler.current_state_switch import apply_current_state_switch
 from app.domains.asset_compiler.fingerprints import build_page_fingerprint, compare_fingerprints
 from app.domains.asset_compiler.locator_bundles import build_locator_bundle
 from app.domains.asset_compiler.module_plan_builder import build_module_plan
@@ -49,6 +50,22 @@ class AssetCompilerService:
         system = await self._get(System, snapshot.system_id)
         if system is None:
             raise ValueError(f"system {snapshot.system_id} not found")
+
+        switch_result = await apply_current_state_switch(
+            session=self.session,
+            draft_snapshot_id=snapshot.id,
+        )
+        if switch_result.outcome != "promoted":
+            await self._commit()
+            return CompileSnapshotResult(
+                snapshot_id=snapshot.id,
+                status="success",
+                assets_created=0,
+                checks_created=0,
+                drift_state=AssetStatus.SAFE,
+                switch_outcome=switch_result.outcome,
+                message=f"snapshot {snapshot.id} {switch_result.outcome}",
+            )
 
         pages = await self._exec_all(
             select(Page)
@@ -462,6 +479,7 @@ class AssetCompilerService:
             checks_updated=checks_updated,
             checks_retired=len(retired_check_ids),
             drift_state=_max_drift_state(drift_states),
+            switch_outcome=switch_result.outcome,
             asset_ids=page_asset_ids,
             check_ids=page_check_ids,
             alias_disable_decision_count=len(alias_ids_to_disable),
