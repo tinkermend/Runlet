@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 对齐 `page_navigation_aliases.chain_complete` 的 schema 默认值定义：SQLModel metadata 现显式声明 `server_default=false`，与 `0015_page_navigation_aliases` 迁移保持一致，消除 `test_initial_schema_matches_sqlmodel_metadata` 中的 `modify_default` 漂移。
 - 修正 `GET /api/v1/check-requests/{request_id}/result` 在 `run_check` 仍处于进行中重试时提前暴露中间失败尝试的问题：当同一请求的队列任务状态尚未进入终态时，结果接口现在保持 `execution_summary=null`、`artifacts=[]`，避免与状态接口的进行中语义冲突。
 - 修复 `POST /api/v1/check-requests:candidates` 在真实 PostgreSQL 上的分组查询兼容性：候选排序继续按 `alias_confidence -> asset_version -> page_check_id` 执行，但 `SqlControlPlaneRepository.list_check_candidates` 现在把 `page_assets.asset_version` 一并纳入 `GROUP BY`，避免 asyncpg/PG 因 `ORDER BY` 非分组列抛出 `GroupingError`；同时补充回归测试锁定该 SQL 形态。
 - 修正控制台同步数据库会话对 PostgreSQL 运行时 URL 的转换逻辑，`/api/console/*` 不再把 `postgresql+asyncpg` 粗暴改成默认 `psycopg2` 方言，改为统一转换到已声明依赖的 `postgresql+psycopg`。

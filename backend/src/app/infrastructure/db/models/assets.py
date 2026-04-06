@@ -197,7 +197,10 @@ class PageNavigationAlias(BaseModel, table=True):
     alias_text: str = Field(max_length=512, index=True)
     leaf_text: str | None = Field(default=None, max_length=255)
     display_chain: str | None = Field(default=None, max_length=1024)
-    chain_complete: bool = Field(default=False)
+    chain_complete: bool = Field(
+        default=False,
+        sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
     source: str = Field(max_length=64)
     is_active: bool = Field(
         default=True,

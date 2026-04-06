@@ -539,6 +539,12 @@ def test_asset_lifecycle_datetime_columns_are_timezone_aware_in_metadata():
     assert all(column.type.timezone is True for column in lifecycle_columns)
 
 
+def test_page_navigation_alias_chain_complete_has_server_default_in_metadata():
+    chain_complete = BaseModel.metadata.tables["page_navigation_aliases"].c["chain_complete"]
+    assert chain_complete.server_default is not None
+    assert str(chain_complete.server_default.arg).lower() in {"false", "0"}
+
+
 def test_runtime_policy_tables_exist(inspector):
     table_names = set(inspector.get_table_names())
     assert "system_auth_policies" in table_names
