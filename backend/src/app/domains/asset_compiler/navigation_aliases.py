@@ -18,7 +18,7 @@ def build_navigation_aliases(
     *, page_title: str | None, route_path: str, menus: list[MenuNode]
 ) -> list[NavigationAliasDraft]:
     del route_path  # Kept for caller contract consistency.
-    normalized_chain = _derive_menu_chain(menus)
+    normalized_chain, chain_complete = _derive_menu_chain(menus)
 
     drafts: list[NavigationAliasDraft] = []
     if page_title:
@@ -28,7 +28,7 @@ def build_navigation_aliases(
                 alias_text=page_title,
                 leaf_text=normalized_chain[-1] if normalized_chain else page_title,
                 display_chain=_format_chain(normalized_chain),
-                chain_complete=bool(normalized_chain),
+                chain_complete=chain_complete,
             )
         )
 
@@ -39,7 +39,7 @@ def build_navigation_aliases(
                 alias_text=normalized_chain[-1],
                 leaf_text=normalized_chain[-1],
                 display_chain=_format_chain(normalized_chain),
-                chain_complete=len(normalized_chain) > 1,
+                chain_complete=chain_complete,
             )
         )
 
@@ -58,9 +58,9 @@ def build_navigation_aliases(
     return _dedupe_drafts(drafts)
 
 
-def _derive_menu_chain(menus: list[MenuNode]) -> list[str]:
+def _derive_menu_chain(menus: list[MenuNode]) -> tuple[list[str], bool]:
     if not menus:
-        return []
+        return [], False
 
     first_node_by_depth: dict[int, MenuNode] = {}
     for node in sorted(menus, key=lambda item: (item.depth, item.sort_order, item.label)):
@@ -71,7 +71,7 @@ def _derive_menu_chain(menus: list[MenuNode]) -> list[str]:
             first_node_by_depth[node.depth] = node
 
     if not first_node_by_depth:
-        return []
+        return [], False
 
     ordered_depths = sorted(first_node_by_depth)
     labels = [first_node_by_depth[depth].label.strip() for depth in ordered_depths]
@@ -80,9 +80,9 @@ def _derive_menu_chain(menus: list[MenuNode]) -> list[str]:
     has_gap = any(curr != prev + 1 for prev, curr in zip(ordered_depths, ordered_depths[1:]))
     starts_from_root = ordered_depths[0] == 0
     if has_gap or not starts_from_root:
-        return [labels[-1]]
+        return [labels[-1]], False
 
-    return labels
+    return labels, len(labels) > 1
 
 
 def _format_chain(chain: list[str]) -> str | None:

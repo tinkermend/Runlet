@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 修正导航别名编译器在“断链降级为叶子”场景下的 `chain_complete` 语义：`page_title/menu_leaf` 现在基于真实链完整性而非“是否存在任意链标签”判定，并新增 depth gap 回归测试锁定该行为。
 - 强化 `page_navigation_aliases.page_asset_id -> page_assets.id` 的删除语义：在 `0015_page_navigation_aliases` 迁移与 SQLModel metadata 中统一加上数据库级 `ON DELETE CASCADE`，确保 SQL/bulk delete 路径也能自动清理导航别名而不会触发 FK 阻塞。
 - 补齐系统 teardown 对 `page_navigation_aliases` 的收口：`SystemTeardownIds` 新增 `navigation_alias_ids`，`collect_system_teardown_ids`/`list_remaining_reference_tables` 纳入导航别名扫描，并将删除顺序调整为先删导航别名再删 `page_asset` 父链，避免 FK 约束导致 teardown 失败。
 - 为 `PageAsset` 补齐 `navigation_aliases` 双向 ORM 关系并启用 `delete-orphan` 级联，`PageNavigationAlias` 同步补齐 `page_asset` 反向关系，避免删除页面资产后遗留导航别名孤儿记录。

@@ -17,14 +17,22 @@ def test_build_navigation_aliases_emits_title_leaf_and_chain_when_chain_complete
     assert any(item.display_chain == "数据库 -> 配置管理 -> 指标管理" for item in aliases)
 
 
-def test_build_navigation_aliases_keeps_leaf_when_parent_chain_missing():
+def test_build_navigation_aliases_downgrades_to_leaf_when_parent_chain_is_broken():
     aliases = build_navigation_aliases(
         page_title="指标管理",
         route_path="/front/database/configManage/indicesManage",
-        menus=[MenuNode(label="指标管理", depth=0, sort_order=11)],
+        menus=[
+            MenuNode(label="数据库", depth=0, sort_order=1),
+            MenuNode(label="指标管理", depth=2, sort_order=11),
+        ],
     )
 
-    assert any(item.alias_type == "menu_leaf" and item.chain_complete is False for item in aliases)
+    page_title_alias = next(item for item in aliases if item.alias_type == "page_title")
+    leaf_alias = next(item for item in aliases if item.alias_type == "menu_leaf")
+
+    assert page_title_alias.display_chain == "指标管理"
+    assert page_title_alias.chain_complete is False
+    assert leaf_alias.chain_complete is False
     assert not any(item.alias_type == "menu_chain" for item in aliases)
 
 
