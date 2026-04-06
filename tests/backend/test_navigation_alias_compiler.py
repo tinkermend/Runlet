@@ -151,7 +151,7 @@ def test_build_navigation_aliases_mixed_topology_keeps_target_leaf_without_menu_
         menu_topology=[
             MenuNode(id=root_b, label="根B", depth=0, sort_order=1, parent_id=None),
             MenuNode(id=child_b, label="子B", depth=1, sort_order=1, parent_id=root_b, route_path="/b"),
-            MenuNode(id=root_a, label="根A", depth=0, sort_order=2, parent_id=None, route_path="/a"),
+            MenuNode(id=root_a, label="根A", depth=0, sort_order=2, parent_id=None),
             MenuNode(id=leaf_a, label="叶A", depth=1, sort_order=2, parent_id=uuid4(), route_path="/a"),
         ],
     )
@@ -258,3 +258,45 @@ def test_build_navigation_aliases_reconstructs_chain_from_full_topology_with_sep
 
     assert any(item.alias_type == "menu_leaf" and item.alias_text == "指标管理" for item in aliases)
     assert any(item.alias_type == "menu_chain" and item.alias_text == "数据库 -> 配置管理 -> 指标管理" for item in aliases)
+
+
+def test_build_navigation_aliases_prefers_route_matched_non_leaf_over_deeper_child():
+    root_id = uuid4()
+    users_id = uuid4()
+    roles_id = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="用户管理",
+        route_path="/users",
+        menu_topology=[
+            MenuNode(id=root_id, label="系统管理", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=users_id, label="用户管理", depth=1, sort_order=1, parent_id=root_id, route_path="/users"),
+            MenuNode(id=roles_id, label="角色权限", depth=2, sort_order=1, parent_id=users_id, route_path="/roles"),
+        ],
+    )
+
+    assert any(item.alias_type == "menu_leaf" and item.alias_text == "用户管理" for item in aliases)
+    assert any(item.alias_type == "menu_chain" and item.alias_text == "系统管理 -> 用户管理" for item in aliases)
+    assert not any(item.alias_text == "角色权限" for item in aliases)
+
+
+def test_build_navigation_aliases_keeps_only_page_title_when_route_matched_candidates_are_ambiguous():
+    root_a = uuid4()
+    users_a = uuid4()
+    root_b = uuid4()
+    users_b = uuid4()
+
+    aliases = build_navigation_aliases(
+        page_title="用户管理",
+        route_path="/users",
+        menu_topology=[
+            MenuNode(id=root_a, label="系统管理A", depth=0, sort_order=1, parent_id=None),
+            MenuNode(id=users_a, label="用户管理", depth=1, sort_order=1, parent_id=root_a, route_path="/users"),
+            MenuNode(id=root_b, label="系统管理B", depth=0, sort_order=2, parent_id=None),
+            MenuNode(id=users_b, label="用户列表", depth=1, sort_order=1, parent_id=root_b, route_path="/users"),
+        ],
+    )
+
+    assert [item.alias_type for item in aliases] == ["page_title"]
+    assert aliases[0].leaf_text is None
+    assert aliases[0].display_chain is None

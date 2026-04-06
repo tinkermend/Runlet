@@ -75,8 +75,22 @@ def _derive_menu_chain(menus: list[MenuNode], *, route_path: str) -> tuple[list[
         leaf_candidates = list(labeled_nodes)
 
     matching_route_candidates = [
-        node for node in leaf_candidates if _route_matches(node.route_path, route_path)
+        node for node in labeled_nodes if _route_matches(node.route_path, route_path)
     ]
+    if matching_route_candidates:
+        semantic_route_signatures: set[tuple[tuple[str, ...], bool]] = set()
+        for node in matching_route_candidates:
+            chain, chain_complete = _derive_chain_for_candidate(
+                node,
+                node_by_id=node_by_id,
+                nodes=labeled_nodes,
+                route_path=route_path,
+            )
+            if chain:
+                semantic_route_signatures.add((tuple(chain), chain_complete))
+        if len(semantic_route_signatures) > 1:
+            return [], False
+
     if not matching_route_candidates:
         semantic_candidate_signatures: set[tuple[str, tuple[str, ...], bool]] = set()
         for node in leaf_candidates:
@@ -91,8 +105,9 @@ def _derive_menu_chain(menus: list[MenuNode], *, route_path: str) -> tuple[list[
         if len(semantic_candidate_signatures) > 1:
             return [], False
 
+    candidate_pool = matching_route_candidates if matching_route_candidates else leaf_candidates
     ordered_candidates = sorted(
-        leaf_candidates,
+        candidate_pool,
         key=lambda node: (
             0 if _route_matches(node.route_path, route_path) else 1,
             -node.depth,
