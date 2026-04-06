@@ -200,7 +200,14 @@ class PageNavigationAlias(BaseModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     system_id: UUID = Field(foreign_key="systems.id", index=True)
-    page_asset_id: UUID = Field(foreign_key="page_assets.id", index=True)
+    page_asset_id: UUID = Field(
+        sa_column=sa.Column(
+            sa.Uuid(),
+            sa.ForeignKey("page_assets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
     alias_type: str = Field(max_length=32, index=True)
     alias_text: str = Field(max_length=512, index=True)
     leaf_text: str | None = Field(default=None, max_length=255)

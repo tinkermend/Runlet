@@ -134,8 +134,11 @@ def test_page_asset_delete_cascades_navigation_aliases(db_engine):
         )
 
         session.add(system)
+        session.flush()
         session.add(page)
+        session.flush()
         session.add(page_asset)
+        session.flush()
         session.add(navigation_alias)
         session.commit()
 
@@ -143,6 +146,53 @@ def test_page_asset_delete_cascades_navigation_aliases(db_engine):
         session.delete(page_asset)
         session.commit()
 
+        assert session.get(assets.PageNavigationAlias, navigation_alias_id) is None
+
+
+def test_page_asset_bulk_delete_cascades_navigation_aliases(db_engine):
+    with Session(db_engine) as session:
+        pragma_result = session.connection().exec_driver_sql("PRAGMA foreign_keys = ON")
+        pragma_result.close()
+        fk_enabled = session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one()
+        assert fk_enabled == 1
+
+        system = systems.System(
+            code=f"sys-{uuid4().hex[:8]}",
+            name="Test System",
+            base_url="https://example.com",
+            framework_type="react",
+        )
+        page = crawl.Page(system_id=system.id, route_path="/dashboard")
+        page_asset = assets.PageAsset(
+            system_id=system.id,
+            page_id=page.id,
+            asset_key="dashboard",
+            asset_version="v1",
+        )
+        navigation_alias = assets.PageNavigationAlias(
+            system_id=system.id,
+            page_asset_id=page_asset.id,
+            alias_type="leaf",
+            alias_text="仪表盘",
+            source="crawl",
+        )
+
+        session.add(system)
+        session.flush()
+        session.add(page)
+        session.flush()
+        session.add(page_asset)
+        session.flush()
+        session.add(navigation_alias)
+        session.commit()
+
+        page_asset_id = page_asset.id
+        navigation_alias_id = navigation_alias.id
+
+        session.exec(sa.delete(assets.PageAsset).where(assets.PageAsset.id == page_asset_id))
+        session.commit()
+
+        assert session.get(assets.PageAsset, page_asset_id) is None
         assert session.get(assets.PageNavigationAlias, navigation_alias_id) is None
 
 

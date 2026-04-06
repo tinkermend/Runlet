@@ -34,7 +34,7 @@ def upgrade() -> None:
         sa.Column("disabled_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("disabled_by_snapshot_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["system_id"], ["systems.id"]),
-        sa.ForeignKeyConstraint(["page_asset_id"], ["page_assets.id"]),
+        sa.ForeignKeyConstraint(["page_asset_id"], ["page_assets.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["disabled_by_snapshot_id"], ["crawl_snapshots.id"]),
     )
     op.create_index(
