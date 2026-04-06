@@ -11,6 +11,8 @@
 - `browser-use`
 - `Cypress`
 - `agent-browser`
+- `https://github.com/browserbase/stagehand`
+- `https://github.com/Skyvern-AI/skyvern`
 
 本文重点不是比较“谁更强”，而是比较：
 

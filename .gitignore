@@ -106,3 +106,7 @@ worktrees/
 # database data
 
 docker/db_data/
+
+## docs
+
+docs/
