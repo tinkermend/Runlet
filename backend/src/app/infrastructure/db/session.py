@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config.settings import settings
+from app.infrastructure.db import models as _models  # noqa: F401
 
 
 _default_engine: AsyncEngine | None = None

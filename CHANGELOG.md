@@ -1,5 +1,10 @@
 ## [Unreleased] - 2026-04-05
 
+### Fixed
+- 修正控制台同步数据库会话对 PostgreSQL 运行时 URL 的转换逻辑，`/api/console/*` 不再把 `postgresql+asyncpg` 粗暴改成默认 `psycopg2` 方言，改为统一转换到已声明依赖的 `postgresql+psycopg`。
+- 修正 API 请求中间件在下游抛异常时错误访问未初始化 `response` 的问题，避免把真实异常统一掩盖成 `UnboundLocalError`。
+- 补齐数据库 model 预加载，避免 `scheduler/worker` 启动时因为 `PublishedJob -> PageCheck` 等关系类未注册而触发 mapper 初始化失败。
+
 ### Added
 - 新增 AI Chat 检查编排 skill 实施计划：`docs/superpowers/plans/2026-04-06-chat-check-orchestration-skill-plan.md`，把项目级 `skills/chat-check-orchestrator/` 的实现拆分为包骨架、主 `SKILL.md` 状态机、PAT/API references、决策/模板/结果 references、`agents/openai.yaml` 与压力场景验证六个可独立提交的任务。
 - 新增 AI Chat 检查编排 skill 设计文档：`docs/superpowers/specs/2026-04-06-chat-check-orchestration-skill-design.md`，明确该 skill 作为“检查型对话编排层”统一覆盖普通页面检查与模板化只读检查，采用 `RUNLET_PAT` 强前置校验、单问题补问、高置信推荐直执行、统一 `check-requests*` API 编排，以及“执行成功后才可选发布”的后置流程。
