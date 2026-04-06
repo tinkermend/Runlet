@@ -1,4 +1,4 @@
 display_name: Chat Check Orchestrator
-short_description: Placeholder metadata for the chat check orchestration agent.
+short_description: Coordinate chat-based check workflows and runtime triggers.
 default_prompt: |
-  Placeholder prompt for orchestrating chat-based checks.
+  Coordinate chat-based checks in line with the orchestrator scaffold guidelines.

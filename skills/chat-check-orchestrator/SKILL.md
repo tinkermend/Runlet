@@ -1,6 +1,6 @@
 ---
-name: Chat Check Orchestrator
-description: Skeleton documentation for the chat check orchestrator skill package.
+name: chat-check-orchestrator
+description: Use when outlining the chat check orchestrator skill structure.
 ---
 
 ## 概要
