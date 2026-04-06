@@ -1,6 +1,7 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 修复导航别名链路推导在多分支菜单上的语义偏差：`navigation_aliases` 现优先按 `parent_id` 回溯祖先链并在缺失拓扑时才回退深度推导，避免跨分支合成假完整链；同时将单根 `depth=0` 节点视为完整链，并将 `menus=[]` 时 `page_title.leaf_text` 收敛为 `None`。
 - 修正导航别名编译器在“断链降级为叶子”场景下的 `chain_complete` 语义：`page_title/menu_leaf` 现在基于真实链完整性而非“是否存在任意链标签”判定，并新增 depth gap 回归测试锁定该行为。
 - 强化 `page_navigation_aliases.page_asset_id -> page_assets.id` 的删除语义：在 `0015_page_navigation_aliases` 迁移与 SQLModel metadata 中统一加上数据库级 `ON DELETE CASCADE`，确保 SQL/bulk delete 路径也能自动清理导航别名而不会触发 FK 阻塞。
 - 补齐系统 teardown 对 `page_navigation_aliases` 的收口：`SystemTeardownIds` 新增 `navigation_alias_ids`，`collect_system_teardown_ids`/`list_remaining_reference_tables` 纳入导航别名扫描，并将删除顺序调整为先删导航别名再删 `page_asset` 父链，避免 FK 约束导致 teardown 失败。

@@ -26,7 +26,7 @@ def build_navigation_aliases(
             NavigationAliasDraft(
                 alias_type="page_title",
                 alias_text=page_title,
-                leaf_text=normalized_chain[-1] if normalized_chain else page_title,
+                leaf_text=normalized_chain[-1] if normalized_chain else None,
                 display_chain=_format_chain(normalized_chain),
                 chain_complete=chain_complete,
             )
@@ -59,30 +59,66 @@ def build_navigation_aliases(
 
 
 def _derive_menu_chain(menus: list[MenuNode]) -> tuple[list[str], bool]:
-    if not menus:
+    labeled_nodes = [node for node in menus if (node.label or "").strip()]
+    if not labeled_nodes:
         return [], False
 
-    first_node_by_depth: dict[int, MenuNode] = {}
-    for node in sorted(menus, key=lambda item: (item.depth, item.sort_order, item.label)):
-        label = (node.label or "").strip()
-        if not label:
+    node_by_id = {node.id: node for node in labeled_nodes}
+    has_topology_links = any(
+        node.parent_id is not None and node.parent_id in node_by_id for node in labeled_nodes
+    )
+    if not has_topology_links:
+        return _derive_chain_from_depth_fallback(labeled_nodes)
+
+    child_count_by_parent_id: dict[object, int] = {}
+    for node in labeled_nodes:
+        if node.parent_id is None:
             continue
+        child_count_by_parent_id[node.parent_id] = child_count_by_parent_id.get(node.parent_id, 0) + 1
+
+    leaf_candidates = [node for node in labeled_nodes if child_count_by_parent_id.get(node.id, 0) == 0]
+    if not leaf_candidates:
+        leaf_candidates = list(labeled_nodes)
+
+    candidate = min(
+        leaf_candidates,
+        key=lambda node: (-node.depth, node.sort_order, node.label.strip(), str(node.id)),
+    )
+
+    lineage: list[MenuNode] = [candidate]
+    visited = {candidate.id}
+    current = candidate
+    while current.parent_id is not None:
+        parent = node_by_id.get(current.parent_id)
+        if parent is None or parent.id in visited:
+            return [candidate.label.strip()], False
+        lineage.insert(0, parent)
+        visited.add(parent.id)
+        current = parent
+
+    depth_continuous = all(
+        child.depth == parent.depth + 1 for parent, child in zip(lineage, lineage[1:])
+    )
+    starts_from_root = lineage[0].depth == 0
+    if not starts_from_root or not depth_continuous:
+        return [candidate.label.strip()], False
+
+    return [node.label.strip() for node in lineage], True
+
+
+def _derive_chain_from_depth_fallback(nodes: list[MenuNode]) -> tuple[list[str], bool]:
+    first_node_by_depth: dict[int, MenuNode] = {}
+    for node in sorted(nodes, key=lambda item: (item.depth, item.sort_order, item.label.strip(), str(item.id))):
         if node.depth not in first_node_by_depth:
             first_node_by_depth[node.depth] = node
 
-    if not first_node_by_depth:
-        return [], False
-
     ordered_depths = sorted(first_node_by_depth)
     labels = [first_node_by_depth[depth].label.strip() for depth in ordered_depths]
-
-    # Chain is complete only when it starts from depth=0 and has no depth gaps.
     has_gap = any(curr != prev + 1 for prev, curr in zip(ordered_depths, ordered_depths[1:]))
     starts_from_root = ordered_depths[0] == 0
-    if has_gap or not starts_from_root:
+    if not starts_from_root or has_gap:
         return [labels[-1]], False
-
-    return labels, len(labels) > 1
+    return labels, True
 
 
 def _format_chain(chain: list[str]) -> str | None:
