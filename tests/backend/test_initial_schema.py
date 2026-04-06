@@ -63,6 +63,7 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "menu_nodes",
         "module_plans",
         "page_assets",
+        "page_navigation_aliases",
         "page_checks",
         "page_elements",
         "page_elements_hist",
@@ -80,6 +81,123 @@ def test_initial_schema_exposes_core_tables(db_engine):
         "user_sessions",
         "users",
     }
+
+
+def test_initial_schema_exposes_navigation_alias_columns(db_engine):
+    inspector = inspect(db_engine)
+    columns = {column["name"] for column in inspector.get_columns("page_navigation_aliases")}
+    assert {
+        "system_id",
+        "page_asset_id",
+        "alias_type",
+        "alias_text",
+        "leaf_text",
+        "display_chain",
+        "chain_complete",
+        "source",
+        "is_active",
+        "disabled_reason",
+        "disabled_at",
+        "disabled_by_snapshot_id",
+    } <= columns
+
+
+def test_initial_schema_exposes_navigation_alias_indexes(db_engine):
+    inspector = inspect(db_engine)
+    indexes = inspector.get_indexes("page_navigation_aliases")
+    indexed_columns = {tuple(index["column_names"]) for index in indexes}
+    assert {
+        ("system_id",),
+        ("page_asset_id",),
+        ("alias_type",),
+        ("alias_text",),
+    } <= indexed_columns
+
+
+def test_page_asset_delete_cascades_navigation_aliases(db_engine):
+    with Session(db_engine) as session:
+        system = systems.System(
+            code=f"sys-{uuid4().hex[:8]}",
+            name="Test System",
+            base_url="https://example.com",
+            framework_type="react",
+        )
+        page = crawl.Page(system_id=system.id, route_path="/dashboard")
+        page_asset = assets.PageAsset(
+            system_id=system.id,
+            page_id=page.id,
+            asset_key="dashboard",
+            asset_version="v1",
+        )
+        navigation_alias = assets.PageNavigationAlias(
+            system_id=system.id,
+            page_asset_id=page_asset.id,
+            alias_type="leaf",
+            alias_text="仪表盘",
+            source="crawl",
+        )
+
+        session.add(system)
+        session.flush()
+        session.add(page)
+        session.flush()
+        session.add(page_asset)
+        session.flush()
+        session.add(navigation_alias)
+        session.commit()
+
+        navigation_alias_id = navigation_alias.id
+        session.delete(page_asset)
+        session.commit()
+
+        assert session.get(assets.PageNavigationAlias, navigation_alias_id) is None
+
+
+def test_page_asset_bulk_delete_cascades_navigation_aliases(db_engine):
+    with Session(db_engine) as session:
+        pragma_result = session.connection().exec_driver_sql("PRAGMA foreign_keys = ON")
+        pragma_result.close()
+        fk_enabled = session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one()
+        assert fk_enabled == 1
+
+        system = systems.System(
+            code=f"sys-{uuid4().hex[:8]}",
+            name="Test System",
+            base_url="https://example.com",
+            framework_type="react",
+        )
+        page = crawl.Page(system_id=system.id, route_path="/dashboard")
+        page_asset = assets.PageAsset(
+            system_id=system.id,
+            page_id=page.id,
+            asset_key="dashboard",
+            asset_version="v1",
+        )
+        navigation_alias = assets.PageNavigationAlias(
+            system_id=system.id,
+            page_asset_id=page_asset.id,
+            alias_type="leaf",
+            alias_text="仪表盘",
+            source="crawl",
+        )
+
+        session.add(system)
+        session.flush()
+        session.add(page)
+        session.flush()
+        session.add(page_asset)
+        session.flush()
+        session.add(navigation_alias)
+        session.commit()
+
+        page_asset_id = page_asset.id
+        navigation_alias_id = navigation_alias.id
+
+        session.exec(sa.delete(assets.PageAsset).where(assets.PageAsset.id == page_asset_id))
+        session.commit()
+
+        assert session.get(assets.PageAsset, page_asset_id) is None
+        assert session.get(assets.PageNavigationAlias, navigation_alias_id) is None
 
 
 def test_settings_expose_session_and_pat_controls():
@@ -554,6 +672,12 @@ def test_asset_lifecycle_datetime_columns_are_timezone_aware_in_metadata():
     ]
 
     assert all(column.type.timezone is True for column in lifecycle_columns)
+
+
+def test_page_navigation_alias_chain_complete_has_server_default_in_metadata():
+    chain_complete = BaseModel.metadata.tables["page_navigation_aliases"].c["chain_complete"]
+    assert chain_complete.server_default is not None
+    assert str(chain_complete.server_default.arg).lower() in {"false", "0"}
 
 
 def test_runtime_policy_tables_exist(inspector):

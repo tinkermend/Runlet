@@ -14,6 +14,7 @@ from app.infrastructure.db.models.assets import (
     IntentAlias,
     ModulePlan,
     PageAsset,
+    PageNavigationAlias,
     PageCheck,
 )
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
@@ -44,6 +45,7 @@ class SystemTeardownIds:
     published_job_ids: list[UUID]
     page_check_ids: list[UUID]
     page_asset_ids: list[UUID]
+    navigation_alias_ids: list[UUID]
     intent_alias_ids: list[UUID]
     module_plan_ids: list[UUID]
     asset_snapshot_ids: list[UUID]
@@ -242,6 +244,16 @@ class SqlSystemAdminRepository:
         page_asset_ids = await self._select_ids(
             select(PageAsset.id).where(PageAsset.system_id == system_id).order_by(PageAsset.id)
         )
+        navigation_alias_ids = await self._select_ids(
+            select(PageNavigationAlias.id)
+            .where(
+                or_(
+                    PageNavigationAlias.system_id == system_id,
+                    PageNavigationAlias.page_asset_id.in_(page_asset_ids),
+                )
+            )
+            .order_by(PageNavigationAlias.id)
+        )
         page_check_ids = await self._select_ids_for_column(
             PageCheck.id,
             PageCheck.page_asset_id,
@@ -390,6 +402,7 @@ class SqlSystemAdminRepository:
             published_job_ids=published_job_ids,
             page_check_ids=page_check_ids,
             page_asset_ids=page_asset_ids,
+            navigation_alias_ids=navigation_alias_ids,
             intent_alias_ids=intent_alias_ids,
             module_plan_ids=module_plan_ids,
             asset_snapshot_ids=asset_snapshot_ids,
@@ -430,6 +443,12 @@ class SqlSystemAdminRepository:
         system_id_text = str(system_id)
 
         page_asset_ids = select(PageAsset.id).where(PageAsset.system_id == system_id)
+        navigation_alias_ids = select(PageNavigationAlias.id).where(
+            or_(
+                PageNavigationAlias.system_id == system_id,
+                PageNavigationAlias.page_asset_id.in_(page_asset_ids),
+            )
+        )
         page_check_ids = (
             select(PageCheck.id)
             .join(PageAsset, PageCheck.page_asset_id == PageAsset.id)
@@ -594,6 +613,15 @@ class SqlSystemAdminRepository:
                         PageAsset.system_id == system_id,
                         IntentAlias.system_alias == system_code,
                         IntentAlias.id.in_(teardown_ids.intent_alias_ids),
+                    )
+                ),
+            ),
+            (
+                PageNavigationAlias.__tablename__,
+                select(PageNavigationAlias.id).where(
+                    or_(
+                        PageNavigationAlias.id.in_(navigation_alias_ids),
+                        PageNavigationAlias.id.in_(teardown_ids.navigation_alias_ids),
                     )
                 ),
             ),

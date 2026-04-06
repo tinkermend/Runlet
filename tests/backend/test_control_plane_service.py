@@ -7,13 +7,62 @@ from sqlmodel import select
 from app.domains.control_plane.repository import SqlControlPlaneRepository
 from app.domains.control_plane.service import ControlPlaneService
 from app.domains.runner_service.scheduler import PublishedJobService
-from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck
+from app.infrastructure.db.models.assets import IntentAlias, PageAsset, PageCheck, PageNavigationAlias
 from app.infrastructure.db.models.crawl import Page
 from app.infrastructure.db.models.execution import ExecutionPlan, ExecutionRequest, ExecutionRun
 from app.infrastructure.db.models.jobs import PublishedJob, QueuedJob
 from app.infrastructure.db.models.systems import System
 from app.infrastructure.queue.dispatcher import SqlQueueDispatcher
 from app.shared.enums import AssetLifecycleStatus, AssetStatus
+
+
+def _seed_navigation_leaf_alias_target(
+    db_session,
+    *,
+    system: System,
+    route_path: str,
+    page_title: str,
+    asset_key: str,
+    display_chain: str,
+) -> tuple[PageAsset, PageCheck]:
+    page = Page(system_id=system.id, route_path=route_path, page_title=page_title)
+    db_session.add(page)
+    db_session.flush()
+
+    asset = PageAsset(
+        system_id=system.id,
+        page_id=page.id,
+        asset_key=asset_key,
+        asset_version="2026.04.06",
+        status=AssetStatus.SAFE,
+        lifecycle_status=AssetLifecycleStatus.ACTIVE,
+    )
+    db_session.add(asset)
+    db_session.flush()
+
+    check = PageCheck(
+        page_asset_id=asset.id,
+        check_code="table_render",
+        goal="table_render",
+    )
+    db_session.add(check)
+    db_session.flush()
+
+    db_session.add(
+        PageNavigationAlias(
+            system_id=system.id,
+            page_asset_id=asset.id,
+            alias_type="menu_leaf",
+            alias_text="指标管理",
+            leaf_text="指标管理",
+            display_chain=display_chain,
+            chain_complete=True,
+            source="seed",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    return asset, check
 
 
 @pytest.mark.anyio
@@ -57,6 +106,70 @@ async def test_submit_check_request_creates_request_plan_and_job(
     assert result.auth_policy == "server_injected"
     assert result.page_check_id is not None
     assert result.job_id is not None
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_auto_resolves_unique_navigation_leaf_alias(
+    control_plane_service,
+    db_session,
+    seeded_system,
+):
+    asset, check = _seed_navigation_leaf_alias_target(
+        db_session,
+        system=seeded_system,
+        route_path="/front/database/configManage/indicesManage",
+        page_title="指标管理页",
+        asset_key="erp.database.indices_manage",
+        display_chain="数据库 -> 配置管理 -> 指标管理",
+    )
+
+    result = await control_plane_service.submit_check_request(
+        system_hint="ERP",
+        page_hint="指标管理",
+        check_goal="table_render",
+    )
+
+    plan = db_session.exec(select(ExecutionPlan).where(ExecutionPlan.id == result.plan_id)).one()
+    assert result.execution_track == "precompiled"
+    assert result.page_check_id == check.id
+    assert plan.resolved_page_asset_id == asset.id
+    assert plan.resolved_page_check_id == check.id
+
+
+@pytest.mark.anyio
+async def test_submit_check_request_keeps_ambiguous_navigation_leaf_alias_unresolved(
+    control_plane_service,
+    db_session,
+    seeded_system,
+):
+    _seed_navigation_leaf_alias_target(
+        db_session,
+        system=seeded_system,
+        route_path="/front/database/configManage/indicesManage",
+        page_title="指标管理页A",
+        asset_key="erp.database.indices_manage.a",
+        display_chain="数据库 -> 配置管理 -> 指标管理",
+    )
+    _seed_navigation_leaf_alias_target(
+        db_session,
+        system=seeded_system,
+        route_path="/front/database/report/indicesManage",
+        page_title="指标管理页B",
+        asset_key="erp.report.indices_manage",
+        display_chain="报表中心 -> 指标管理",
+    )
+
+    result = await control_plane_service.submit_check_request(
+        system_hint="ERP",
+        page_hint="指标管理",
+        check_goal="table_render",
+    )
+
+    plan = db_session.exec(select(ExecutionPlan).where(ExecutionPlan.id == result.plan_id)).one()
+    assert result.execution_track == "realtime_probe"
+    assert result.page_check_id is None
+    assert plan.resolved_page_asset_id is None
+    assert plan.resolved_page_check_id is None
 
 
 @pytest.mark.anyio

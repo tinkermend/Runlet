@@ -119,6 +119,14 @@ class PageAsset(BaseModel, table=True):
             cascade="all, delete-orphan",
         ),
     )
+    navigation_aliases: list["PageNavigationAlias"] = Relationship(
+        back_populates="page_asset",
+        sa_relationship=relationship(
+            "PageNavigationAlias",
+            back_populates="page_asset",
+            cascade="all, delete-orphan",
+        ),
+    )
 
 
 class PageCheck(BaseModel, table=True):
@@ -185,6 +193,45 @@ class IntentAlias(BaseModel, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
     disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
+
+
+class PageNavigationAlias(BaseModel, table=True):
+    __tablename__ = "page_navigation_aliases"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    system_id: UUID = Field(foreign_key="systems.id", index=True)
+    page_asset_id: UUID = Field(
+        sa_column=sa.Column(
+            sa.Uuid(),
+            sa.ForeignKey("page_assets.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    alias_type: str = Field(max_length=32, index=True)
+    alias_text: str = Field(max_length=512, index=True)
+    leaf_text: str | None = Field(default=None, max_length=255)
+    display_chain: str | None = Field(default=None, max_length=1024)
+    chain_complete: bool = Field(
+        default=False,
+        sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    source: str = Field(max_length=64)
+    is_active: bool = Field(
+        default=True,
+        sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
+    disabled_reason: str | None = Field(default=None, max_length=64)
+    disabled_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    disabled_by_snapshot_id: UUID | None = Field(default=None, foreign_key="crawl_snapshots.id")
+
+    page_asset: "PageAsset | None" = Relationship(
+        back_populates="navigation_aliases",
+        sa_relationship=relationship("PageAsset", back_populates="navigation_aliases"),
+    )
 
 
 class ModulePlan(BaseModel, table=True):

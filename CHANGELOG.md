@@ -1,6 +1,22 @@
 ## [Unreleased] - 2026-04-06
 
 ### Fixed
+- 完成 control plane 导航别名消费接入：`resolve_page_asset_and_check` 现优先从 active `page_navigation_aliases -> page_asset -> page_check` 解析页面，唯一叶子菜单可直接自动命中，重名叶子菜单不再静默选错而是保持未解析；同时候选 API 会消费导航别名并返回 `leaf_text/display_chain/chain_complete`，并对同一资产的多条 alias 行做去重。
+- 完成 `asset_compiler` 导航别名持久化接入：`compile_snapshot` 现调用 `build_navigation_aliases` 并写入 `page_navigation_aliases`，每次重编译会先停用同 `page_asset` 旧别名（`disabled_reason=recompiled`、`disabled_by_snapshot_id=当前快照`）再写入新别名；同时按“当前页菜单节点 + 祖先链”构建 `menu_topology`，支持祖先 `page_id=None` 的分行拓扑恢复 `menu_chain`，断链场景仅保留 `menu_leaf` 且 `chain_complete=false`。
+- 修复 `route_path` 命中候选偏差：导航别名编译不再只从叶节点挑选目标，`route_path` 命中非叶菜单节点时也可作为目标；同时对同一路由的多候选引入语义去重与歧义降级，避免静默排序选错并统一回退为仅 `page_title`。
+- 修复导航别名编译契约与真实拓扑不一致的问题：`build_navigation_aliases` 现显式要求输入全量相关 `menu_topology`，通过 `route_path` 选目标叶后沿 `parent_id` 回溯祖先链，可在“祖先与叶子分行持久化、同批次含无关分支”场景下稳定还原 `menu_chain`。
+- 修复完整单节点菜单链产出缺失：当链路完整且仅含根节点时，导航别名编译器现在也会生成 `menu_chain`，并与 `menu_leaf` 文本保持一致。
+- 修复导航别名歧义判定中的重复事实误报：候选去重不再依赖数据库行 `id`，改为基于候选链路语义签名判定；同时补齐“完整分支 + 断裂分支且均不匹配 `route_path`”歧义收口，统一仅输出 `page_title`。
+- 修复导航别名候选歧义收口：当存在多个完整叶分支且都不匹配目标 `route_path` 时，编译器不再任意选择并生成 `menu_leaf/menu_chain`，改为仅输出 `page_title`（`leaf_text/display_chain` 为空）。
+- 修复导航别名编译回归：在 `route_path` 感知选叶的同时，缺失/断裂 `parent_id` 拓扑时不再通过 depth 回退生成 `menu_chain`；depth 回退仅用于保留目标叶子语义（`chain_complete=false`）。
+- 修复导航别名编译在多分支菜单下的目标漂移：候选叶子选择新增 `route_path` 感知（优先命中 `menu.route_path == route_path`），避免被其他更深分支误选；同时移除全局拓扑开关，改为逐候选“拓扑回溯 + 局部 depth 回退”，保证 mixed snapshot 中无可用 `parent_id` 的匹配分支仍可保留目标叶子语义。
+- 修复导航别名链路推导在多分支菜单上的语义偏差：`navigation_aliases` 现优先按 `parent_id` 回溯祖先链并在缺失拓扑时才回退深度推导，避免跨分支合成假完整链；同时将单根 `depth=0` 节点视为完整链，并将 `menus=[]` 时 `page_title.leaf_text` 收敛为 `None`。
+- 修正导航别名编译器在“断链降级为叶子”场景下的 `chain_complete` 语义：`page_title/menu_leaf` 现在基于真实链完整性而非“是否存在任意链标签”判定，并新增 depth gap 回归测试锁定该行为。
+- 强化 `page_navigation_aliases.page_asset_id -> page_assets.id` 的删除语义：在 `0015_page_navigation_aliases` 迁移与 SQLModel metadata 中统一加上数据库级 `ON DELETE CASCADE`，确保 SQL/bulk delete 路径也能自动清理导航别名而不会触发 FK 阻塞。
+- 补齐系统 teardown 对 `page_navigation_aliases` 的收口：`SystemTeardownIds` 新增 `navigation_alias_ids`，`collect_system_teardown_ids`/`list_remaining_reference_tables` 纳入导航别名扫描，并将删除顺序调整为先删导航别名再删 `page_asset` 父链，避免 FK 约束导致 teardown 失败。
+- 为 `PageAsset` 补齐 `navigation_aliases` 双向 ORM 关系并启用 `delete-orphan` 级联，`PageNavigationAlias` 同步补齐 `page_asset` 反向关系，避免删除页面资产后遗留导航别名孤儿记录。
+- 收紧导航别名 schema 回归覆盖：`test_initial_schema` 现额外断言 `disabled_reason/disabled_at/disabled_by_snapshot_id` 列存在，并锁定 `system_id/page_asset_id/alias_type/alias_text` 四个索引。
+- 对齐 `page_navigation_aliases.chain_complete` 的 schema 默认值定义：SQLModel metadata 现显式声明 `server_default=false`，与 `0015_page_navigation_aliases` 迁移保持一致，消除 `test_initial_schema_matches_sqlmodel_metadata` 中的 `modify_default` 漂移。
 - 修正 `GET /api/v1/check-requests/{request_id}/result` 在 `run_check` 仍处于进行中重试时提前暴露中间失败尝试的问题：当同一请求的队列任务状态尚未进入终态时，结果接口现在保持 `execution_summary=null`、`artifacts=[]`，避免与状态接口的进行中语义冲突。
 - 修复 `POST /api/v1/check-requests:candidates` 在真实 PostgreSQL 上的分组查询兼容性：候选排序继续按 `alias_confidence -> asset_version -> page_check_id` 执行，但 `SqlControlPlaneRepository.list_check_candidates` 现在把 `page_assets.asset_version` 一并纳入 `GROUP BY`，避免 asyncpg/PG 因 `ORDER BY` 非分组列抛出 `GroupingError`；同时补充回归测试锁定该 SQL 形态。
 - 修正控制台同步数据库会话对 PostgreSQL 运行时 URL 的转换逻辑，`/api/console/*` 不再把 `postgresql+asyncpg` 粗暴改成默认 `psycopg2` 方言，改为统一转换到已声明依赖的 `postgresql+psycopg`。
@@ -14,6 +30,7 @@
 - 新增当前态语料 schema 基线：`crawl_snapshots` 增加 `state/activated_at/discarded_at` 当前态管理字段，并引入 `crawl_snapshots_hist/pages_hist/menu_nodes_hist/page_elements_hist` 冷历史表；同时补齐 revision 长度守卫与 PostgreSQL `warning_messages` JSONB 规范化迁移守卫。
 - 新增当前态语料切换实施计划：`docs/superpowers/plans/2026-04-06-current-state-corpus-switch-and-history-archive-plan.md`，把 `crawl_snapshots` 当前态状态字段、`*_hist` 冷归档表、页面语义指纹比较、`draft -> active` 原子切换、默认事实查询收口与 system teardown 清理拆成可独立执行的小任务。
 - 新增当前态语料切换与历史归档设计文档：`docs/superpowers/specs/2026-04-06-current-state-corpus-switch-and-history-archive-design.md`，明确采集事实层收敛为“正式区 + 候选区 + 冷历史区”三分模型，并规定“只有高质量且存在事实层有效变化时才归档旧正式集并原子切换；无变化或低质量候选直接丢弃，不做无意义 DML”。
+- 新增纯函数导航别名编译器 `asset_compiler/navigation_aliases.py`，按菜单事实生成 `page_title/menu_leaf/menu_chain` 草案并在父链缺失时仅保留叶子别名；同时新增 `test_navigation_alias_compiler.py` 回归用例，覆盖完整链生成、缺父链降级与重复菜单去重。
 - 新增资产层导航别名解析实施计划：`docs/superpowers/plans/2026-04-06-asset-navigation-alias-resolution-plan.md`，把 `page_navigation_aliases` schema、导航别名编译、控制面唯一叶子命中与候选链路解释、回归验证拆成可独立执行的小任务。
 - 新增资产层导航别名解析设计文档：`docs/superpowers/specs/2026-04-06-asset-navigation-alias-resolution-design.md`，明确在不改变 `page_asset/page_check` 执行主模型的前提下，引入 `page_navigation_aliases` 作为资产层导航语义表，支持“叶子菜单唯一自动命中、重名返回候选确认、完整菜单链仅作消歧与解释信息”的页面解析规则。
 - 补齐 `chat-check-orchestrator` 轮询终止语义：在 `SKILL.md`、`references/api-contract.md` 与 `references/result-format.md` 中明确 `GET /api/v1/check-requests/{request_id}` 仅返回队列态，`completed/failed/retryable_failed/skipped` 都属于终态；命中终态后必须转查 `/result`，避免把 `completed` 误判为“仍在运行”。

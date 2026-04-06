@@ -12,6 +12,9 @@ class CheckCandidateStats:
     asset_key: str
     check_code: str
     goal: str
+    leaf_text: str | None
+    display_chain: str | None
+    chain_complete: bool
     alias_confidence: float
     success_rate: float | None
     last_run_at: datetime | None
@@ -25,6 +28,9 @@ class RankedCheckCandidate:
     asset_key: str
     check_code: str
     goal: str
+    leaf_text: str | None
+    display_chain: str | None
+    chain_complete: bool
     alias_confidence: float
     success_rate: float
     sample_count: int
@@ -95,6 +101,9 @@ def rank_candidates(
                 asset_key=item.asset_key,
                 check_code=item.check_code,
                 goal=item.goal,
+                leaf_text=item.leaf_text,
+                display_chain=item.display_chain,
+                chain_complete=item.chain_complete,
                 alias_confidence=alias_confidence,
                 success_rate=success_rate,
                 sample_count=item.sample_count,

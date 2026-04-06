@@ -32,6 +32,7 @@ from app.infrastructure.db.models.assets import (
     IntentAlias,
     ModulePlan,
     PageAsset,
+    PageNavigationAlias,
     PageCheck,
 )
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
@@ -935,6 +936,7 @@ async def test_teardown_system_removes_related_rows_and_scheduler_jobs(
         AssetSnapshot,
         ModulePlan,
         IntentAlias,
+        PageNavigationAlias,
         PageCheck,
         PageAsset,
         PageElement,
@@ -990,6 +992,41 @@ async def test_teardown_system_respects_fk_safe_delete_order_for_script_render_a
     )
 
     _assert_models_empty(db_session, ScriptRender, ExecutionArtifact)
+
+
+@pytest.mark.anyio
+async def test_teardown_system_respects_fk_safe_delete_order_for_page_navigation_alias(
+    onboarded_system,
+    system_admin_service,
+    db_session,
+):
+    pragma_result = db_session.connection().exec_driver_sql("PRAGMA foreign_keys = ON")
+    pragma_result.close()
+    fk_enabled = db_session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one()
+    assert fk_enabled == 1
+
+    system = db_session.exec(
+        select(System).where(System.code == onboarded_system.system_code)
+    ).one()
+    page_asset = db_session.exec(
+        select(PageAsset).where(PageAsset.system_id == system.id).order_by(PageAsset.id)
+    ).first()
+    assert page_asset is not None
+
+    db_session.add(
+        PageNavigationAlias(
+            system_id=system.id,
+            page_asset_id=page_asset.id,
+            alias_type="leaf",
+            alias_text="用户列表",
+            source="teardown_test",
+        )
+    )
+    db_session.commit()
+
+    await system_admin_service.teardown_system(system_code=onboarded_system.system_code)
+
+    _assert_models_empty(db_session, PageNavigationAlias, PageAsset)
 
 
 @pytest.mark.anyio
@@ -1088,6 +1125,7 @@ async def test_teardown_system_residue_scan_requeries_system_links_without_preco
             published_job_ids=[],
             page_check_ids=[],
             page_asset_ids=[],
+            navigation_alias_ids=[],
             intent_alias_ids=[],
             module_plan_ids=[],
             asset_snapshot_ids=[],
@@ -1175,6 +1213,7 @@ async def test_teardown_system_residue_scan_reports_orphaned_precollected_intent
             published_job_ids=[],
             page_check_ids=[],
             page_asset_ids=[],
+            navigation_alias_ids=[],
             intent_alias_ids=[alias.id],
             module_plan_ids=[],
             asset_snapshot_ids=[],

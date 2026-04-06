@@ -28,6 +28,7 @@ from app.infrastructure.db.models.assets import (
     IntentAlias,
     ModulePlan,
     PageAsset,
+    PageNavigationAlias,
     PageCheck,
 )
 from app.infrastructure.db.models.crawl import CrawlSnapshot, MenuNode, Page, PageElement
@@ -208,6 +209,7 @@ class SystemAdminService:
                 (AssetSnapshot, teardown_ids.asset_snapshot_ids),
                 (ModulePlan, teardown_ids.module_plan_ids),
                 (IntentAlias, teardown_ids.intent_alias_ids),
+                (PageNavigationAlias, teardown_ids.navigation_alias_ids),
                 (PageCheck, teardown_ids.page_check_ids),
                 (PageAsset, teardown_ids.page_asset_ids),
                 (PageElement, teardown_ids.page_element_ids),
