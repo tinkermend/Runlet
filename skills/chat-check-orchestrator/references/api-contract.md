@@ -1,6 +1,6 @@
 # 接口契约
 
-Skill 在检查编排主链只使用以下五类接口：
+检查编排主链只使用以下五类接口：
 
 - `POST /api/v1/check-requests:candidates`
 - `POST /api/v1/check-requests`
